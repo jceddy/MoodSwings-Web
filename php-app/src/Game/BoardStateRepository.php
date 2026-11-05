@@ -155,6 +155,8 @@ final class BoardStateRepository
 
         $state = new BoardState($catalog, $this->registry, $playerIds, $hands, $deck, $discard, $hasSeparateDecks, $discardOwners, $catalogCardIdFor, $teamIdByPlayer, $resignedPlayerIds, $bankedExtraPlays, $chaosCatalog, $this->chaosRegistry, $chaosEffectIdFor);
 
+        $state->setRoundWins($this->roundWins($gameId));
+
         foreach ($inPlayRows as $row) {
             $state->restoreMoodInPlay(
                 (int) $row['id'],
@@ -166,7 +168,7 @@ final class BoardStateRepository
         }
 
         $roundStmt = $pdo->prepare(
-            "SELECT current_turn_game_player_id, first_game_player_id, team_turn_1_game_player_id, plays_remaining, pending_play_grants, loop_state_signature_counts, chaos_loop_state, round_number, discarded_this_round, skip_scoring, skip_scoring_first_player_game_player_id, skip_scoring_source_card_id, skip_scoring_owner_game_player_id, awards_extra_win, awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id FROM game_rounds
+            "SELECT current_turn_game_player_id, first_game_player_id, team_turn_1_game_player_id, plays_remaining, pending_play_grants, loop_state_signature_counts, chaos_loop_state, round_number, discarded_this_round, skip_scoring, skip_scoring_first_player_game_player_id, skip_scoring_source_card_id, skip_scoring_owner_game_player_id, awards_extra_win, awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id, round_value_bonuses, turn_discards FROM game_rounds
              WHERE game_id = :game_id AND status = 'in_progress'
              ORDER BY round_number DESC LIMIT 1"
         );
@@ -206,6 +208,8 @@ final class BoardStateRepository
                 ? (int) $roundRow['team_turn_1_game_player_id']
                 : (int) $roundRow['first_game_player_id'];
 
+            $state->restoreTurnDiscards($roundRow['turn_discards'] !== null ? json_decode((string) $roundRow['turn_discards'], true) : []);
+            $state->restoreRoundColorBonuses($roundRow['round_value_bonuses'] !== null ? json_decode((string) $roundRow['round_value_bonuses'], true) : []);
             $state->restoreTurnState(
                 $roundRow['current_turn_game_player_id'] !== null ? (int) $roundRow['current_turn_game_player_id'] : null,
                 $playGrants,
@@ -229,6 +233,44 @@ final class BoardStateRepository
         }
 
         return $state;
+    }
+
+    /**
+     * Rounds won so far by each seated player, keyed by game_player_id: the sum of wins_awarded over the
+     * game's scored rounds they won -- or, in a team format, their whole team's (winner_team_id), so
+     * teammates always show the same count. Counts nothing for a round nobody won (Awe's skipped one).
+     *
+     * @return array<int, int>
+     */
+    public function roundWins(int $gameId): array
+    {
+        $pdo = Connection::get();
+
+        $playersStmt = $pdo->prepare('SELECT id, team_id FROM game_players WHERE game_id = :game_id');
+        $playersStmt->execute(['game_id' => $gameId]);
+        $players = $playersStmt->fetchAll();
+
+        $roundsStmt = $pdo->prepare(
+            "SELECT winner_game_player_id, winner_team_id, wins_awarded FROM game_rounds WHERE game_id = :game_id AND status = 'scored'"
+        );
+        $roundsStmt->execute(['game_id' => $gameId]);
+        $rounds = $roundsStmt->fetchAll();
+
+        $wins = [];
+        foreach ($players as $player) {
+            $playerId = (int) $player['id'];
+            $wins[$playerId] = 0;
+            foreach ($rounds as $round) {
+                $won = $player['team_id'] !== null
+                    ? $round['winner_team_id'] !== null && (int) $round['winner_team_id'] === (int) $player['team_id']
+                    : $round['winner_game_player_id'] !== null && (int) $round['winner_game_player_id'] === $playerId;
+                if ($won) {
+                    $wins[$playerId] += (int) $round['wins_awarded'];
+                }
+            }
+        }
+
+        return $wins;
     }
 
     public function save(int $gameId, BoardState $state): void
@@ -343,6 +385,15 @@ final class BoardStateRepository
             );
         }
 
+        // Vitality's round-long color bonuses and the turn's hand-discarders live on the live round's row (a no-op once the round is
+        // scored: the end-of-round clear has already emptied the list by then).
+        $pdo->prepare("UPDATE game_rounds SET round_value_bonuses = :bonuses, turn_discards = :discarders WHERE game_id = :game_id AND status = 'in_progress'")
+            ->execute([
+                'bonuses' => $state->roundColorBonuses() === [] ? null : json_encode($state->roundColorBonuses()),
+                'discarders' => $state->playersWhoDiscardedThisTurn() === [] ? null : json_encode($state->playersWhoDiscardedThisTurn()),
+                'game_id' => $gameId,
+            ]);
+
         // Same "always rewrite every row" convention as the game_cards
         // updates above, one UPDATE per seat regardless of whether that
         // player's own banked plays actually changed this request -- see
@@ -412,6 +463,8 @@ final class BoardStateRepository
             // BoardState::turnStateSignatureCoarse()'s own "drop spawned
             // tokens before hashing" normalization.
             'isToken' => (bool) $row['is_token'],
+            // The folder under web-static/img/cards/ this card's art lives in ('MSW', or a custom set's code) -- see migration 0496.
+            'artSetCode' => $row['art_set_code'],
             // Migration 0143 -- the same curated draft-worthiness ranking
             // CardCatalog::load() already exposes for draft picking (see
             // BotPlayerService::draftCardScore()), now also available

@@ -43,7 +43,7 @@ final class CuriosityEffect extends AbstractMoodEffect
         $revealedColor = $state->colorOf($revealedCardId);
 
         foreach ($state->moodsInPlay() as $mood) {
-            if ($state->colorOf($mood->cardId) === $revealedColor) {
+            if ($revealedColor !== 'colorless' && $state->colorOf($mood->cardId) === $revealedColor) {
                 $state->setValueOverride($cardId, self::BOOSTED_VALUE);
 
                 return;

@@ -57,7 +57,7 @@ final class LeagueService
     private const RANKING_POINTS = ['win' => 3, 'loss' => -2];
 
     /** The card-list order every other collection/pool view uses. */
-    private const COLOR_ORDER = ['white', 'blue', 'black', 'red', 'green'];
+    private const COLOR_ORDER = ['white', 'blue', 'black', 'red', 'green', 'colorless'];
     private const RARITY_ORDER = ['common', 'uncommon', 'rare', 'mythic'];
 
     public function __construct(

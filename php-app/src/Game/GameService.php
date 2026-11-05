@@ -18,11 +18,13 @@ use MoodSwings\Repository\BotSearchJobRepository;
 use MoodSwings\Repository\GameChatRepository;
 use MoodSwings\Repository\GameNoteRepository;
 use MoodSwings\Repository\SessionRepository;
+use MoodSwings\Rules\AfterScoringTriggerEffect;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
 use MoodSwings\Rules\ChaosCardChoiceSchema;
 use MoodSwings\Rules\ChaosEffectRegistry;
 use MoodSwings\Rules\ChaosLoopShortcut;
+use MoodSwings\Rules\Effects\Custom\ResilienceEffect;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\MoodInPlay;
 use MoodSwings\Rules\MoodPlayService;
@@ -30,6 +32,8 @@ use MoodSwings\Rules\PendingDecisionRequest;
 use MoodSwings\Rules\PlayerChoices;
 use MoodSwings\Rules\PlayResult;
 use MoodSwings\Rules\RoundScorer;
+use MoodSwings\Rules\RoundWinEffect;
+use MoodSwings\Rules\TurnStartEffect;
 use MoodSwings\Stats\CardStatsService;
 use MoodSwings\Tournament\TournamentMatchObserver;
 use PDO;
@@ -67,7 +71,6 @@ use Throwable;
 final class GameService
 {
     private const STARTING_HAND_SIZE = 5;
-    private const TOTAL_CARDS = 133;
     private const MIN_PLAYERS = 2;
     private const MAX_PLAYERS = 4;
 
@@ -404,6 +407,13 @@ final class GameService
     private const AFTER_SCORING_ORDER_DECISION_TYPE = 'after_scoring_order';
 
     /**
+     * The decision type every "at the start of each of your turns" trigger asks its questions under
+     * (see TurnStartEffect and runTurnStartTriggers()). Not a scoring decision: answering one never
+     * re-enters scoring, it resumes the remaining turn-start triggers instead.
+     */
+    private const TURN_START_DECISION_TYPE = 'turn_start_trigger';
+
+    /**
      * Quick Draft (issue #88, format 'draft' only; multiplayer 2-4 player
      * support added for issue #189): a shared pool of quickDraftPoolTargetSize()
      * cards, drafted over quickDraftRounds() rounds. Each round, every
@@ -726,9 +736,9 @@ final class GameService
      * already supports, but there's no picker for any of them right now --
      * every Sealed Deck game gets a structure-deck-style pool.
      */
-    private function buildSealedDeckPlayerPool(): array
+    private function buildSealedDeckPlayerPool(?array $setCodes = null): array
     {
-        return $this->buildStructureDeckCardIds();
+        return $this->buildStructureDeckCardIds($setCodes);
     }
 
     /**
@@ -866,17 +876,15 @@ final class GameService
      */
     private function buildPeriodicSealedPoolCardIds(): array
     {
-        $pdo = Connection::get();
+        // Always the original set -- a Daily/Weekly Sealed Pool is the same pool for
+        // every player, whether or not they opted into custom content, so a custom
+        // set's cards never go into one.
         $cardIds = [];
         foreach (self::PERIODIC_SEALED_POOL_RARITY_COUNTS as $rarity => $count) {
-            $stmt = $pdo->prepare('SELECT id FROM cards WHERE rarity = :rarity AND is_token = 0');
-            $stmt->execute(['rarity' => $rarity]);
-            $rarityCardIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
-
-            $chosenKeys = (array) array_rand($rarityCardIds, $count);
-            foreach ($chosenKeys as $key) {
-                $cardIds[] = $rarityCardIds[$key];
-            }
+            $cardIds = [
+                ...$cardIds,
+                ...$this->pickDistinctRandom($this->poolCardIds([CardCatalog::ORIGINAL_SET_CODE], rarity: $rarity), $count, "{$rarity} card"),
+            ];
         }
 
         return $cardIds;
@@ -1752,6 +1760,15 @@ final class GameService
         // own narrow scope" convention $perSeatAllowedCardIds above
         // already follows.
         ?array $fixedCustomDeckCardIds = null,
+        // Which card set(s) -- by code -- this game's RANDOM pools (Structure,
+        // Power, jceddy's 75, One of Each, the draft pool sources, Sealed Deck,
+        // ...) are built from. NULL/empty means the original set only. A custom
+        // set needs the creator's, and every seated player's, custom-content
+        // opt-in (see usersWithoutCustomContentOptIn()). Ignored (stored as the
+        // original set) wherever no random pool is built from the catalog:
+        // custom decklists, and the Daily/Weekly Sealed Pools, which are always
+        // original-set only.
+        ?array $cardSetCodes = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -1981,6 +1998,23 @@ final class GameService
             }
         }
 
+        // Card sets (migration 0496): which sets this game's random pools draw
+        // from. The Daily/Weekly Sealed Pools are the same pool for every player
+        // whether or not they opted in, and custom decklists name their cards
+        // outright, so both always stay original-set only.
+        $poolSetCodes = CardCatalog::normalizeSetCodes(
+            array_key_exists($deckType, self::PERIODIC_SEALED_POOL_DECK_TYPES) || in_array($deckType, ['custom', 'custom_duel'], true) ? null : $cardSetCodes,
+            $this->userAllowsCustomContent($createdByUserId),
+        );
+        if (CardCatalog::includesCustomSet($poolSetCodes)) {
+            $missingOptIn = $this->usersWithoutCustomContentOptIn($userIds);
+            if ($missingOptIn !== []) {
+                throw new GameStateException(
+                    'A custom card set is in use -- every seated player must opt in first via Settings > "Allow custom card/effect formats" (missing: ' . implode(', ', $missingOptIn) . ')'
+                );
+            }
+        }
+
         if ($deckType === 'custom') {
             if ($format === 'duel') {
                 throw new GameStateException('Custom decklists are not supported for duel games -- use deck_type "custom_duel" instead');
@@ -2009,6 +2043,11 @@ final class GameService
             $duelEvenColorDistributionRarities = $rules->evenColorDistributionRarities;
         }
 
+        // A custom decklist naming cards from a custom set needs every seated human opted in too.
+        if ($customDeckCardIds !== null) {
+            $this->assertCustomCardsAllowed($customDeckCardIds, $userIds);
+        }
+
         // Built once here (buildTieredRotisserieDraftTierPools() draws
         // randomly for 'rarity' mode, so it must not be called twice) --
         // $draftPoolCardIds below just flattens it into the same "whole
@@ -2017,7 +2056,7 @@ final class GameService
         // per-tier state lives in draft_tiered_rotisserie_state.tiers
         // instead (see initializeTieredRotisserieDraft()).
         $tieredRotisserieDraftTierPools = $deckType === 'tiered_rotisserie_draft'
-            ? $this->buildTieredRotisserieDraftTierPools((string) $tieredRotisserieDraftMode, $tieredRotisserieDraftTiers, $createdByUserId, count($userIds))
+            ? $this->buildTieredRotisserieDraftTierPools((string) $tieredRotisserieDraftMode, $tieredRotisserieDraftTiers, $createdByUserId, count($userIds), $poolSetCodes)
             : null;
 
         // Sealed Deck (issue #392): one buildSealedDeckPlayerPool() call
@@ -2040,7 +2079,7 @@ final class GameService
             ? $this->getOrCreatePeriodicSealedPool(self::PERIODIC_SEALED_POOL_DECK_TYPES[$deckType])
             : null;
         $sealedDeckPlayerPools = match (true) {
-            $deckType === 'sealed_deck' => array_map(fn (): array => $this->buildSealedDeckPlayerPool(), $userIds),
+            $deckType === 'sealed_deck' => array_map(fn (): array => $this->buildSealedDeckPlayerPool($poolSetCodes), $userIds),
             $periodicSealedPool !== null => array_fill(0, count($userIds), $periodicSealedPool['pool_card_ids']),
             default => null,
         };
@@ -2072,10 +2111,10 @@ final class GameService
             default => null,
         };
         $draftPoolCardIds = match ($deckType) {
-            'quick_draft', 'chaos_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
-            'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
-            'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
-            'rotisserie_draft' => $this->buildRotisserieDraftPool((string) $rotisserieDraftPoolSource, $rotisserieDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $rotisserieDraftCutoffCount, $rotisserieDraftRandomizePool, $rotisserieDraftRandomizeSampleSize),
+            'quick_draft', 'chaos_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $poolSetCodes),
+            'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $poolSetCodes),
+            'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $poolSetCodes),
+            'rotisserie_draft' => $this->buildRotisserieDraftPool((string) $rotisserieDraftPoolSource, $rotisserieDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $rotisserieDraftCutoffCount, $rotisserieDraftRandomizePool, $rotisserieDraftRandomizeSampleSize, $poolSetCodes),
             'tiered_rotisserie_draft' => array_merge(...array_map(static fn (array $tier): array => $tier['pool_card_ids'], $tieredRotisserieDraftTierPools)),
             // The flattened union of every player's own individual pool --
             // draftMatchPoolView()'s own undraftedCardIds computation
@@ -2093,6 +2132,10 @@ final class GameService
             'sealed_deck', 'sealed_pool_of_the_day', 'weekly_sealed_pool' => array_merge(...$sealedDeckPlayerPools),
             default => null,
         };
+        // A pool pasted/saved as custom text can name custom-set cards too.
+        if ($draftPoolCardIds !== null) {
+            $this->assertCustomCardsAllowed($draftPoolCardIds, $userIds);
+        }
 
         // Issue #90: Duel/Open Team Play/Closed Team Play/Traditional's own
         // best-of-three match wrapper (game_matches, migration 0223) -- the
@@ -2207,13 +2250,13 @@ final class GameService
                     custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                     custom_duel_even_color_distribution_rarities, draft_match_id, game_match_id, match_game_number,
                     status, created_by_user_id, wins_needed, default_selections_mode, bot_goes_first, diagnostic_mode,
-                    timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode
+                    timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode, card_set_codes
                  ) VALUES (
                     :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                     :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                     :duel_even_color_distribution_rarities, :draft_match_id, :game_match_id, :match_game_number,
                     'waiting', :created_by, :wins_needed, :default_selections_mode, :bot_goes_first, :diagnostic_mode,
-                    :timeout_minutes, :timeout_action, :total_time_limit_minutes, :synchronous_mode
+                    :timeout_minutes, :timeout_action, :total_time_limit_minutes, :synchronous_mode, :card_set_codes
                  )"
             );
             $insertGame->execute([
@@ -2238,6 +2281,7 @@ final class GameService
                 'timeout_action' => $timeoutActionForGame,
                 'total_time_limit_minutes' => $totalTimeLimitMinutesForGame,
                 'synchronous_mode' => $synchronousMode ? 1 : 0,
+                'card_set_codes' => CardCatalog::encodeSetCodes($poolSetCodes),
             ]);
             $gameId = (int) $pdo->lastInsertId();
 
@@ -2620,6 +2664,44 @@ final class GameService
         $stmt->execute(array_values($userIds));
 
         return $stmt->fetchColumn() !== false;
+    }
+
+    /** Whether $userId has opted into custom content (users.allow_custom_content, Settings). Unknown users read as not. */
+    private function userAllowsCustomContent(int $userId): bool
+    {
+        $stmt = Connection::get()->prepare('SELECT allow_custom_content FROM users WHERE id = :id');
+        $stmt->execute(['id' => $userId]);
+
+        return (bool) $stmt->fetchColumn();
+    }
+
+    /**
+     * Cards that belong only to a custom set may only be used in a game whose
+     * every seated human opted into custom content -- the same rule a custom set
+     * as the pool source follows (see createGame()). A decklist that names such
+     * a card, or a pool built from custom text, hits this too; the message names
+     * who is missing so they can opt in.
+     *
+     * @param int[] $cardIds
+     * @param int[] $userIds
+     */
+    private function assertCustomCardsAllowed(array $cardIds, array $userIds): void
+    {
+        if ($cardIds === []) {
+            return;
+        }
+
+        $customOnly = array_flip(CardCatalog::customOnlyCardIds());
+        if ($customOnly === [] || array_intersect_key($customOnly, array_flip($cardIds)) === []) {
+            return;
+        }
+
+        $missingOptIn = $this->usersWithoutCustomContentOptIn($userIds);
+        if ($missingOptIn !== []) {
+            throw new GameStateException(
+                'That deck uses cards from a custom card set -- every seated player must opt in first via Settings > "Allow custom card/effect formats" (missing: ' . implode(', ', $missingOptIn) . ')'
+            );
+        }
     }
 
     /**
@@ -3031,6 +3113,11 @@ final class GameService
         if ($allowedCardIds !== null) {
             $this->assertWithinAllowedCardPool($isLeagueMatch ? [...$mainCardIds, ...$sideboardCardIds] : $mainCardIds, $allowedCardIds);
         }
+
+        // A deck naming custom-set cards is only legal when every seated human opted into custom content.
+        $seatedStmt = Connection::get()->prepare('SELECT user_id FROM game_players WHERE game_id = :game_id');
+        $seatedStmt->execute(['game_id' => $gameId]);
+        $this->assertCustomCardsAllowed([...$mainCardIds, ...$sideboardCardIds], array_map(intval(...), $seatedStmt->fetchAll(PDO::FETCH_COLUMN)));
 
         $update = Connection::get()->prepare(
             'UPDATE game_players SET custom_deck_name = :name, custom_deck_card_ids = :card_ids, custom_deck_sideboard_card_ids = :sideboard_card_ids WHERE id = :id'
@@ -4808,9 +4895,9 @@ final class GameService
     private function deckCardIdsFor(array $game): array
     {
         return match ($game['deck_type']) {
-            'structure' => $this->buildStructureDeckCardIds(),
-            'power' => $this->buildPowerDeckCardIds(),
-            'jceddys_75' => $this->buildJceddys75DeckCardIds(),
+            'structure' => $this->buildStructureDeckCardIds(CardCatalog::setCodesOfGame($game)),
+            'power' => $this->buildPowerDeckCardIds(CardCatalog::setCodesOfGame($game)),
+            'jceddys_75' => $this->buildJceddys75DeckCardIds(CardCatalog::setCodesOfGame($game)),
             'custom' => $this->customDeckCardIds($game),
             // Each 'custom_duel' player's own deck lives on their
             // game_players row, not the games row this method reads --
@@ -4847,7 +4934,7 @@ final class GameService
             // Draft's own per-player deck lives on
             // draft_match_players.deck_card_ids too.
             'tiered_rotisserie_draft' => throw new \LogicException('deckCardIdsFor() cannot build a "tiered_rotisserie_draft" deck -- each duel player\'s own deck must be read via requireDraftDecksSubmitted()'),
-            default => range(1, self::TOTAL_CARDS), // 'one_of_each'
+            default => $this->poolCardIds(CardCatalog::setCodesOfGame($game)), // 'one_of_each'
         };
     }
 
@@ -4898,23 +4985,68 @@ final class GameService
      *
      * @return int[]
      */
-    private function buildStructureDeckCardIds(): array
+    private function buildStructureDeckCardIds(?array $setCodes = null): array
     {
-        $pdo = Connection::get();
-
         $cardIds = [];
         foreach (self::STRUCTURE_DECK_RARITY_COUNTS as $rarity => $count) {
-            $stmt = $pdo->prepare('SELECT id FROM cards WHERE rarity = :rarity AND is_token = 0');
-            $stmt->execute(['rarity' => $rarity]);
-            $rarityCardIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
-
-            $chosenKeys = (array) array_rand($rarityCardIds, $count);
-            foreach ($chosenKeys as $key) {
-                $cardIds[] = $rarityCardIds[$key];
-            }
+            $cardIds = [...$cardIds, ...$this->pickDistinctRandom($this->poolCardIds($setCodes, rarity: $rarity), $count, "{$rarity} card")];
         }
 
         return $cardIds;
+    }
+
+    /**
+     * The real (non-token) card ids a random pool may draw from: every card in
+     * any of $setCodes' sets (NULL = the original set only, which is what every
+     * flow that never chooses a set gets), optionally narrowed to one rarity,
+     * one color, or everything but Mythics. A card in several of the sets (a
+     * custom set's reprint of an original) is only listed once.
+     *
+     * @param string[]|null $setCodes
+     * @return int[]
+     */
+    private function poolCardIds(?array $setCodes, ?string $rarity = null, ?string $color = null, bool $excludeMythic = false): array
+    {
+        $codes = $setCodes ?? [CardCatalog::ORIGINAL_SET_CODE];
+        $placeholders = implode(',', array_fill(0, count($codes), '?'));
+        $sql = "SELECT DISTINCT c.id FROM cards c JOIN card_sets cs ON cs.card_id = c.id JOIN sets s ON s.id = cs.set_id WHERE c.is_token = 0 AND s.code IN ({$placeholders})";
+        $params = array_values($codes);
+        if ($rarity !== null) {
+            $sql .= ' AND c.rarity = ?';
+            $params[] = $rarity;
+        }
+        if ($color !== null) {
+            $sql .= ' AND c.color = ?';
+            $params[] = $color;
+        }
+        if ($excludeMythic) {
+            $sql .= " AND c.rarity != 'mythic'";
+        }
+        $stmt = Connection::get()->prepare($sql . ' ORDER BY c.id');
+        $stmt->execute($params);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * $count distinct ids chosen uniformly at random from $candidateIds, or a
+     * GameStateException (rather than array_rand()'s ValueError) when the
+     * chosen set(s) don't have that many -- e.g. a custom set that is still
+     * missing most of its cards.
+     *
+     * @param int[] $candidateIds
+     * @return int[]
+     */
+    private function pickDistinctRandom(array $candidateIds, int $count, string $label): array
+    {
+        if (count($candidateIds) < $count) {
+            throw new GameStateException("The selected card set(s) don't have enough cards to build that pool (need {$count} {$label}s, have " . count($candidateIds) . ')');
+        }
+        if ($count === 0) {
+            return [];
+        }
+
+        return array_map(fn (int $key): int => $candidateIds[$key], (array) array_rand($candidateIds, $count));
     }
 
     /**
@@ -4928,25 +5060,12 @@ final class GameService
      *
      * @return int[]
      */
-    private function buildPowerDeckCardIds(): array
+    private function buildPowerDeckCardIds(?array $setCodes = null): array
     {
-        $pdo = Connection::get();
-
-        $mythicStmt = $pdo->prepare('SELECT id FROM cards WHERE rarity = :rarity AND is_token = 0');
-        $mythicStmt->execute(['rarity' => 'mythic']);
-        $mythicCardIds = array_map(intval(...), $mythicStmt->fetchAll(PDO::FETCH_COLUMN));
-        $cardIds = [$mythicCardIds[array_rand($mythicCardIds)]];
-
-        $nonMythicStmt = $pdo->prepare("SELECT id FROM cards WHERE rarity != 'mythic' AND is_token = 0");
-        $nonMythicStmt->execute();
-        $nonMythicCardIds = array_map(intval(...), $nonMythicStmt->fetchAll(PDO::FETCH_COLUMN));
-
-        $chosenKeys = (array) array_rand($nonMythicCardIds, self::POWER_DECK_NON_MYTHIC_COUNT);
-        foreach ($chosenKeys as $key) {
-            $cardIds[] = $nonMythicCardIds[$key];
-        }
-
-        return $cardIds;
+        return [
+            ...$this->pickDistinctRandom($this->poolCardIds($setCodes, rarity: 'mythic'), 1, 'Mythic card'),
+            ...$this->pickDistinctRandom($this->poolCardIds($setCodes, excludeMythic: true), self::POWER_DECK_NON_MYTHIC_COUNT, 'non-Mythic card'),
+        ];
     }
 
     /**
@@ -4962,16 +5081,15 @@ final class GameService
      *
      * @return int[]
      */
-    private function buildJceddys75DeckCardIds(): array
+    private function buildJceddys75DeckCardIds(?array $setCodes = null): array
     {
-        $pdo = Connection::get();
-
         $cardIds = [];
+        $copiesUsed = [];
         foreach (self::JCEDDYS_75_DECK_COLORS as $color) {
             foreach (self::JCEDDYS_75_DECK_RARITY_SPEC as $rarity => $spec) {
                 $cardIds = [
                     ...$cardIds,
-                    ...$this->randomCardIdsWithCopyLimit($pdo, $color, $rarity, $spec['count'], $spec['max_copies']),
+                    ...$this->randomCardIdsWithCopyLimit($setCodes, $color, $rarity, $spec['count'], $spec['max_copies'], $copiesUsed),
                 ];
             }
         }
@@ -4992,16 +5110,15 @@ final class GameService
      *
      * @return int[]
      */
-    private function buildJceddys150DeckCardIds(): array
+    private function buildJceddys150DeckCardIds(?array $setCodes = null): array
     {
-        $pdo = Connection::get();
-
         $cardIds = [];
+        $copiesUsed = [];
         foreach (self::JCEDDYS_75_DECK_COLORS as $color) {
             foreach (self::JCEDDYS_150_DECK_RARITY_SPEC as $rarity => $spec) {
                 $cardIds = [
                     ...$cardIds,
-                    ...$this->randomCardIdsWithCopyLimit($pdo, $color, $rarity, $spec['count'], $spec['max_copies']),
+                    ...$this->randomCardIdsWithCopyLimit($setCodes, $color, $rarity, $spec['count'], $spec['max_copies'], $copiesUsed),
                 ];
             }
         }
@@ -5010,26 +5127,52 @@ final class GameService
     }
 
     /**
-     * $count random card ids matching $color/$rarity, allowing up to
-     * $maxCopies repeats of any single id -- built by expanding that
-     * color/rarity's own card pool into $maxCopies copies of each id,
-     * shuffling, then taking the first $count, so no id can ever appear
-     * more than $maxCopies times while every id still has an equal chance
-     * of being picked. $maxCopies=1 (jceddys_75's Mythic/Rare slots)
-     * degenerates to an ordinary without-replacement draw.
+     * $count random card ids matching $color/$rarity, allowing up to $maxCopies repeats of any single id --
+     * each id is put in the draw $maxCopies times (less whatever the deck already holds, see below), the
+     * copies are drawn without replacement, so no id can ever appear more than $maxCopies times while every id
+     * still has an equal chance of being picked. $maxCopies=1 (jceddys_75's Mythic/Rare slots) degenerates to
+     * an ordinary without-replacement draw.
      *
+     * A colorless card can fill ANY color's slot, so it is also a candidate here -- but it is a candidate in
+     * all five colors' draws, so each of its copies counts for only 1/5 (one over the number of colors): across the
+     * deck's five slots a colorless card is then as likely to be picked as a card of a single color.
+     * $copiesUsed is shared by the whole deck build: no card may appear more than $maxCopies times in the
+     * deck, so copies taken for earlier colors come off what a colorless card has left. The weighted draw is
+     * the Efraimidis-Spirakis one (sort by log(u) / weight), which is a plain uniform shuffle when every
+     * weight is 1.
+     *
+     * @param array<int, int> $copiesUsed card id => copies already taken by this deck build
      * @return int[]
      */
-    private function randomCardIdsWithCopyLimit(PDO $pdo, string $color, string $rarity, int $count, int $maxCopies): array
+    private function randomCardIdsWithCopyLimit(?array $setCodes, string $color, string $rarity, int $count, int $maxCopies, array &$copiesUsed = []): array
     {
-        $stmt = $pdo->prepare('SELECT id FROM cards WHERE color = :color AND rarity = :rarity AND is_token = 0');
-        $stmt->execute(['color' => $color, 'rarity' => $rarity]);
-        $poolCardIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+        $candidates = [];
+        foreach ($this->poolCardIds($setCodes, rarity: $rarity, color: $color) as $cardId) {
+            $candidates[$cardId] = 1.0;
+        }
+        foreach ($this->poolCardIds($setCodes, rarity: $rarity, color: 'colorless') as $cardId) {
+            $candidates[$cardId] = 1.0 / count(self::JCEDDYS_75_DECK_COLORS);
+        }
 
-        $expandedPool = array_merge(...array_fill(0, $maxCopies, $poolCardIds));
-        shuffle($expandedPool);
+        $draw = [];
+        foreach ($candidates as $cardId => $weight) {
+            for ($copy = $maxCopies - ($copiesUsed[$cardId] ?? 0); $copy > 0; $copy--) {
+                // lcg_value() is in (0, 1), so log() is finite and negative; dividing by the weight makes a
+                // lighter copy's key more negative, i.e. less likely to be among the highest.
+                $draw[] = ['id' => $cardId, 'key' => log(lcg_value()) / $weight];
+            }
+        }
+        if (count($draw) < $count) {
+            throw new GameStateException("The selected card set(s) don't have enough {$color} {$rarity} cards to build that pool");
+        }
 
-        return array_slice($expandedPool, 0, $count);
+        usort($draw, static fn (array $a, array $b): int => $b['key'] <=> $a['key']);
+        $picked = array_map(static fn (array $entry): int => $entry['id'], array_slice($draw, 0, $count));
+        foreach ($picked as $cardId) {
+            $copiesUsed[$cardId] = ($copiesUsed[$cardId] ?? 0) + 1;
+        }
+
+        return $picked;
     }
 
     // -- Quick Draft (issue #88) -------------------------------------------
@@ -5104,15 +5247,15 @@ final class GameService
      *        "a floor, not an exact match" pool-source convention -- see
      *        buildRotisserieDraftPool()).
      */
-    private function buildDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $targetSize, int $minCustomPoolSize, bool $doubleStructureForMultiplayer = false, bool $truncateToTarget = true): array
+    private function buildDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $targetSize, int $minCustomPoolSize, bool $doubleStructureForMultiplayer = false, bool $truncateToTarget = true, ?array $setCodes = null): array
     {
         $cardIds = match ($poolSource) {
-            'random_48' => $this->buildRandomDraftCardIds($targetSize),
+            'random_48' => $this->buildRandomDraftCardIds($targetSize, $setCodes),
             'structure' => $doubleStructureForMultiplayer
-                ? [...$this->buildStructureDeckCardIds(), ...$this->buildStructureDeckCardIds()]
-                : $this->buildStructureDeckCardIds(),
-            'jceddys_75' => $targetSize > self::JCEDDYS_75_DECK_SIZE ? $this->buildJceddys150DeckCardIds() : $this->buildJceddys75DeckCardIds(),
-            'one_of_each' => range(1, self::TOTAL_CARDS),
+                ? [...$this->buildStructureDeckCardIds($setCodes), ...$this->buildStructureDeckCardIds($setCodes)]
+                : $this->buildStructureDeckCardIds($setCodes),
+            'jceddys_75' => $targetSize > self::JCEDDYS_75_DECK_SIZE ? $this->buildJceddys150DeckCardIds($setCodes) : $this->buildJceddys75DeckCardIds($setCodes),
+            'one_of_each' => $this->poolCardIds($setCodes),
             'custom' => $this->parseDraftCustomPool($customPoolText, $minCustomPoolSize),
             'saved_deck' => $this->resolveSavedDeckDraftPool($requestingUserId, $savedDecklistId, $minCustomPoolSize),
             default => throw new GameStateException("Unknown pool source \"{$poolSource}\""),
@@ -5128,12 +5271,9 @@ final class GameService
     }
 
     /** @return int[] $targetSize distinct catalog card ids, chosen uniformly at random. */
-    private function buildRandomDraftCardIds(int $targetSize): array
+    private function buildRandomDraftCardIds(int $targetSize, ?array $setCodes = null): array
     {
-        $allCardIds = range(1, self::TOTAL_CARDS);
-        $chosenKeys = (array) array_rand($allCardIds, $targetSize);
-
-        return array_map(fn (int $key): int => $allCardIds[$key], $chosenKeys);
+        return $this->pickDistinctRandom($this->poolCardIds($setCodes), $targetSize, 'card');
     }
 
     /**
@@ -5215,7 +5355,7 @@ final class GameService
      *         JCEDDYS_75_DECK_SIZE (always true here), comfortably covering
      *         that target outright.
      */
-    private function buildQuickDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount): array
+    private function buildQuickDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, ?array $setCodes = null): array
     {
         return $this->buildDraftPool(
             $poolSource,
@@ -5225,11 +5365,12 @@ final class GameService
             self::quickDraftPoolTargetSize($playerCount),
             self::quickDraftMinCustomPoolSize($playerCount),
             doubleStructureForMultiplayer: $playerCount > 2,
+            setCodes: $setCodes,
         );
     }
 
     /** @return int[] Winston Draft's own winstonDraftPoolTargetSize($playerCount)-card pool -- see buildDraftPool(). */
-    private function buildWinstonDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount): array
+    private function buildWinstonDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, ?array $setCodes = null): array
     {
         return $this->buildDraftPool(
             $poolSource,
@@ -5239,6 +5380,7 @@ final class GameService
             self::winstonDraftPoolTargetSize($playerCount),
             self::winstonDraftMinCustomPoolSize($playerCount),
             doubleStructureForMultiplayer: $playerCount > 2,
+            setCodes: $setCodes,
         );
     }
 
@@ -5260,11 +5402,11 @@ final class GameService
      *         150-card 'jceddys_150' pool once its own 96-card target
      *         exceeds JCEDDYS_75_DECK_SIZE.
      */
-    private function buildGridDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount): array
+    private function buildGridDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, ?array $setCodes = null): array
     {
         $targetSize = self::gridDraftPoolTargetSize($playerCount);
 
-        $cardIds = $this->buildDraftPool($poolSource, $customPoolText, $savedDecklistId, $requestingUserId, $targetSize, self::gridDraftMinCustomPoolSize($playerCount));
+        $cardIds = $this->buildDraftPool($poolSource, $customPoolText, $savedDecklistId, $requestingUserId, $targetSize, self::gridDraftMinCustomPoolSize($playerCount), setCodes: $setCodes);
 
         if (count($cardIds) < $targetSize) {
             throw new GameStateException(
@@ -5327,7 +5469,7 @@ final class GameService
      *         whenever $randomizePool is false ($sampleSize just reduces
      *         to $minPoolSize, same as $targetSize always was previously).
      */
-    private function buildRotisserieDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, int $cutoffCount, bool $randomizePool = false, ?int $randomizeSampleSize = null): array
+    private function buildRotisserieDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, int $cutoffCount, bool $randomizePool = false, ?int $randomizeSampleSize = null, ?array $setCodes = null): array
     {
         $minPoolSize = self::rotisserieDraftMinPoolSize($cutoffCount, $playerCount);
 
@@ -5349,6 +5491,7 @@ final class GameService
             $minPoolSize,
             doubleStructureForMultiplayer: $sampleSize > 45,
             truncateToTarget: $randomizePool,
+            setCodes: $setCodes,
         );
 
         if (count($cardIds) < $minPoolSize) {
@@ -5377,10 +5520,10 @@ final class GameService
      *        buildTieredRotisserieDraftCustomTierPools()'s own docblock.
      * @return array<int, array{label: ?string, cutoff_count: int, pool_card_ids: int[]}>
      */
-    private function buildTieredRotisserieDraftTierPools(string $mode, ?array $customTiers, int $requestingUserId, int $playerCount): array
+    private function buildTieredRotisserieDraftTierPools(string $mode, ?array $customTiers, int $requestingUserId, int $playerCount, ?array $setCodes = null): array
     {
         return match ($mode) {
-            'rarity' => $this->buildTieredRotisserieDraftRarityTierPools($playerCount),
+            'rarity' => $this->buildTieredRotisserieDraftRarityTierPools($playerCount, $setCodes),
             'custom' => $this->buildTieredRotisserieDraftCustomTierPools($customTiers ?? [], $requestingUserId, $playerCount),
             default => throw new GameStateException('Tiered Rotisserie Draft requires a "rarity" or "custom" tiering mode'),
         };
@@ -5392,15 +5535,15 @@ final class GameService
      *
      * @return array<int, array{label: string, cutoff_count: int, pool_card_ids: int[]}>
      */
-    private function buildTieredRotisserieDraftRarityTierPools(int $playerCount): array
+    private function buildTieredRotisserieDraftRarityTierPools(int $playerCount, ?array $setCodes = null): array
     {
-        return array_map(function (array $tier) use ($playerCount): array {
+        return array_map(function (array $tier) use ($playerCount, $setCodes): array {
             $layoutSize = 2 * $playerCount * $tier['cutoff_count'];
 
             return [
                 'label' => $tier['label'],
                 'cutoff_count' => $tier['cutoff_count'],
-                'pool_card_ids' => $this->tieredRotisserieDraftRarityLayout($tier['label'], $layoutSize),
+                'pool_card_ids' => $this->tieredRotisserieDraftRarityLayout($tier['label'], $layoutSize, $setCodes),
             ];
         }, self::TIERED_ROTISSERIE_DRAFT_RARITY_TIERS);
     }
@@ -5425,10 +5568,9 @@ final class GameService
      *
      * @return int[]
      */
-    private function tieredRotisserieDraftRarityLayout(string $rarity, int $layoutSize): array
+    private function tieredRotisserieDraftRarityLayout(string $rarity, int $layoutSize, ?array $setCodes = null): array
     {
-        $rowsById = $this->loadCardCatalog()['rowsById'];
-        $distinctIds = array_keys(array_filter($rowsById, static fn (array $row): bool => $row['rarity'] === $rarity));
+        $distinctIds = $this->poolCardIds($setCodes, rarity: $rarity);
 
         if ($layoutSize <= count($distinctIds)) {
             $keys = (array) array_rand($distinctIds, $layoutSize);
@@ -9692,7 +9834,7 @@ final class GameService
         foreach ($stmt->fetchAll() as $row) {
             if ($row['event_type'] === 'pending_decision_resolved') {
                 $details = json_decode((string) $row['details'], true) ?? [];
-                if ($details['scoring_trigger'] ?? false) {
+                if (($details['scoring_trigger'] ?? false) || ($details['turn_start_trigger'] ?? false)) {
                     continue;
                 }
             }
@@ -10538,6 +10680,15 @@ final class GameService
 
                 $scoringDecisions = $this->resolvedScoringDecisionBonuses($state, $roundId);
                 $result = $this->finishScoringAndAdvance($gameId, $round, $turnOrder, $state, $scoringDecisions, $gamePlayerId);
+                $pdo->commit();
+
+                return $result;
+            }
+
+            if ($decisionRow['decision_type'] === self::TURN_START_DECISION_TYPE) {
+                // An "at the start of your turn" trigger (see runTurnStartTriggers()): apply it and carry on
+                // with the rest of the turn's triggers -- no MoodPlayService chain to resume.
+                $result = $this->resumeTurnStartTriggers($gameId, $roundId, $batchRow, $gamePlayerId, $choices);
                 $pdo->commit();
 
                 return $result;
@@ -13122,11 +13273,13 @@ final class GameService
         // paths below, since finishTeamScoringAndAdvance() reuses this same
         // $state.
         $state->clearEndOfRoundSuppressions();
+        $state->clearEndOfRoundValueBonuses();
+        $state->resetTurnDiscards();
 
         // A single source of truth for "who won" -- see its own docblock
         // for why the order-decision check below and whichever tail
         // actually runs must never derive this two different ways.
-        $outcome = $this->determineRoundWinner($gameId, $round, $scores, $turnOrder);
+        $outcome = $this->determineRoundWinner($gameId, $round, $scores, $turnOrder, $state);
 
         // Skip the pause entirely once this round is about to finish the
         // game -- see roundWouldCompleteGame()'s own docblock. Every
@@ -13169,6 +13322,7 @@ final class GameService
             "UPDATE game_rounds SET status = 'scored', winner_game_player_id = :winner, wins_awarded = :wins_awarded, scored_at = NOW() WHERE id = :round_id"
         );
         $updateRound->execute(['winner' => $winnerId, 'wins_awarded' => $winsAwarded, 'round_id' => $roundId]);
+        $state->setRoundWins($this->boardStates->roundWins($gameId));
 
         // Computed here, before losers draw, so a round that pushes the
         // winner to wins_needed can skip the draw entirely below -- no
@@ -13281,6 +13435,7 @@ final class GameService
         // first turn, Awe's skip-scoring round creation) always leaves it
         // at its default of false.
         $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer, $afterScoringHooksChangedTheBoard);
+        $this->runTurnStartTriggers($gameId, $newRoundId, $nextFirstPlayer, $state);
 
         return ['round_scored' => true, 'game_completed' => false];
     }
@@ -13349,8 +13504,8 @@ final class GameService
         $seats = $seatStmt->fetchAll();
 
         $insertGame = $pdo->prepare(
-            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode, timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode)
-             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode, :timeout_minutes, :timeout_action, :total_time_limit_minutes, :synchronous_mode)"
+            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode, timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode, card_set_codes)
+             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode, :timeout_minutes, :timeout_action, :total_time_limit_minutes, :synchronous_mode, :card_set_codes)"
         );
         $insertGame->execute([
             'format' => $game['format'],
@@ -13406,6 +13561,7 @@ final class GameService
             // ordinary startGame() hand-deal, which synchronous_mode's
             // own gate already covers generically.
             'synchronous_mode' => (int) $game['synchronous_mode'],
+            'card_set_codes' => $game['card_set_codes'],
         ]);
         $nextGameId = (int) $pdo->lastInsertId();
 
@@ -13576,13 +13732,13 @@ final class GameService
                 custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                 custom_duel_even_color_distribution_rarities, game_match_id, match_game_number,
                 status, created_by_user_id, wins_needed, default_selections_mode, diagnostic_mode,
-                timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode
+                timeout_minutes, timeout_action, total_time_limit_minutes, synchronous_mode, card_set_codes
              ) VALUES (
                 :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                 :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                 :duel_even_color_distribution_rarities, :game_match_id, :match_game_number,
                 'waiting', :created_by, :wins_needed, :default_selections_mode, :diagnostic_mode,
-                :timeout_minutes, :timeout_action, :total_time_limit_minutes, :synchronous_mode
+                :timeout_minutes, :timeout_action, :total_time_limit_minutes, :synchronous_mode, :card_set_codes
              )"
         );
         $insertGame->execute([
@@ -13629,6 +13785,7 @@ final class GameService
             // game_players rows means everyone's own ready_at resets to
             // NULL by that column's own default.
             'synchronous_mode' => (int) $game['synchronous_mode'],
+            'card_set_codes' => $game['card_set_codes'],
         ]);
         $nextGameId = (int) $pdo->lastInsertId();
 
@@ -13798,6 +13955,7 @@ final class GameService
             'wins_awarded' => $winsAwarded,
             'round_id' => $roundId,
         ]);
+        $state->setRoundWins($this->boardStates->roundWins($gameId));
 
         $totalWins = $this->totalWinsForTeam($gameId, $winningTeamId);
         $winsNeeded = (int) $this->fetchGame($gameId)['wins_needed'];
@@ -14440,6 +14598,20 @@ final class GameService
                 }
             }
         }
+
+        // Perpetual "while in play -- after scoring" abilities (Perseverance): they fire after every round
+        // that scores, once the winner -- and so everyone's round-win count -- is settled above. Always
+        // after the one-shot tags, in play order; none of them can depend on the order the players chose.
+        foreach ($state->moodsInPlay() as $mood) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            if (!$this->plays->registry()->has($effectKey)) {
+                continue;
+            }
+            $effect = $this->plays->registry()->for($effectKey);
+            if ($effect instanceof AfterScoringTriggerEffect) {
+                $effect->afterScoring($state, $mood->cardId, $mood->ownerId);
+            }
+        }
     }
 
     /**
@@ -14708,8 +14880,10 @@ final class GameService
      * @param int[] $turnOrder
      * @return array{winnerGamePlayerId:int, winnerTeamId:?int, winningGamePlayerIds:int[]}
      */
-    private function determineRoundWinner(int $gameId, array $round, array $scores, array $turnOrder): array
+    private function determineRoundWinner(int $gameId, array $round, array $scores, array $turnOrder, BoardState $state): array
     {
+        $outright = $this->playersWhoWinTheRoundOutright($state);
+
         if (self::isTeamFormat($this->fetchGame($gameId)['format'])) {
             $teamIdByPlayer = $this->teamIdByGamePlayer($gameId);
             $teamScores = [0 => 0, 1 => 0];
@@ -14721,6 +14895,13 @@ final class GameService
             $otherTeamId = $firstTeamId === 0 ? 1 : 0;
             // Ties go to whoever played first this round.
             $winningTeamId = $teamScores[$firstTeamId] >= $teamScores[$otherTeamId] ? $firstTeamId : $otherTeamId;
+            if ($outright !== []) {
+                // Unity: a team with a qualifying member wins outright; both qualifying -> the usual comparison.
+                $qualifyingTeams = array_values(array_unique(array_map(static fn (int $id): int => $teamIdByPlayer[$id], $outright)));
+                if (count($qualifyingTeams) === 1) {
+                    $winningTeamId = $qualifyingTeams[0];
+                }
+            }
 
             $winningTeamMembers = $this->teamMembers($gameId, $winningTeamId); // seat_order ASC
             // A representative teammate for winner_game_player_id's own FK/
@@ -14750,9 +14931,40 @@ final class GameService
         // the round's winner even if it happens to be the highest in
         // $scores.
         $activeScores = array_intersect_key($scores, array_flip($turnOrder));
+        if ($outright !== []) {
+            // Unity: only the players whose moods win the round outright can win it; the usual scores and
+            // turn-order tiebreak pick among them when more than one qualifies.
+            $qualifying = array_intersect_key($activeScores, array_flip($outright));
+            if ($qualifying !== []) {
+                $activeScores = $qualifying;
+                $turnOrder = array_values(array_filter($turnOrder, static fn (int $id): bool => isset($qualifying[$id])));
+            }
+        }
         $winnerId = $this->scorer->winner($activeScores, $turnOrder);
 
         return ['winnerGamePlayerId' => $winnerId, 'winnerTeamId' => null, 'winningGamePlayerIds' => [$winnerId]];
+    }
+
+    /**
+     * The owners of an in-play RoundWinEffect (Unity) whose condition holds right now, as game_player_ids.
+     *
+     * @return int[]
+     */
+    private function playersWhoWinTheRoundOutright(BoardState $state): array
+    {
+        $owners = [];
+        foreach ($state->moodsInPlay() as $mood) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            if (!$this->plays->registry()->has($effectKey)) {
+                continue;
+            }
+            $effect = $this->plays->registry()->for($effectKey);
+            if ($effect instanceof RoundWinEffect && $effect->winsRoundAfterScoring($state, $mood->cardId, $mood->ownerId)) {
+                $owners[$mood->ownerId] = $mood->ownerId;
+            }
+        }
+
+        return array_values($owners);
     }
 
     private function bottomOfDeckAndDraw(BoardState $state, int $cardId, int $ownerId): void
@@ -14843,6 +15055,10 @@ final class GameService
                 'sourceCardId' => $graceSourceCardId,
                 'requiresSourceInPlay' => true,
             ];
+        }
+
+        foreach ($this->effectiveSourceCardIds($state, $playerId, 'resilience') as $resilienceSourceCardId) {
+            $grants[] = [...ResilienceEffect::RESTRICTION, 'sourceCardId' => $resilienceSourceCardId];
         }
 
         if ($this->anotherPlayerHasMoreMoods($state, $playerId)) {
@@ -15040,6 +15256,8 @@ final class GameService
         // path does, or it would otherwise carry into the round Awe just
         // started.
         $state->clearEndOfRoundSuppressions();
+        $state->clearEndOfRoundValueBonuses();
+        $state->resetTurnDiscards();
 
         $format = $this->fetchGame($gameId)['format'];
         $isTeamFormat = self::isTeamFormat($format);
@@ -15111,6 +15329,7 @@ final class GameService
                 // go first -- see advancePuzzleTurn() -- so no notification.)
                 if ($turnPlayerId === null) {
                     $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer);
+                    $this->runTurnStartTriggers($gameId, $newRoundId, $nextFirstPlayer, $state);
                 }
             }
 
@@ -16381,6 +16600,7 @@ final class GameService
             'status' => $game['status'],
             'wins_needed' => (int) $game['wins_needed'],
             'default_selections_mode' => (bool) $game['default_selections_mode'],
+            'card_set_codes' => CardCatalog::setCodesOfGame($game),
             'created_at' => $game['created_at'],
             'started_at' => $game['started_at'],
             'last_move_at' => $game['last_move_at'],
@@ -18811,6 +19031,8 @@ final class GameService
                 // already carry a `default` key per field wherever one
                 // was computed, with no client-side re-derivation needed.
                 'default_selections_mode' => (bool) $game['default_selections_mode'],
+                // Which card set(s) this game's random pools were built from (migration 0496) -- the Rematch prefill and the board title read it.
+                'card_set_codes' => CardCatalog::setCodesOfGame($game),
                 // Issue #85's own opt-in turn/decision timeouts -- null
                 // for both when off (the default, and always true for
                 // Sealed Pool of the Day/Weekly Sealed Pool -- see
@@ -19267,6 +19489,40 @@ final class GameService
                 fn (int $cardId) => $this->serializeCard($state, $cardId, $names, $viewerGamePlayerId, (bool) $game['default_selections_mode']),
                 $state->hand($viewerGamePlayerId)
             );
+        }
+
+        // Candor: "your opponents play with their hands revealed". A reveal is always to ALL players (see the
+        // custom set repo's CLAUDE.md), so every opponent of a Candor's owner has a face-up hand that every
+        // other seated player can see: the owner sees all of them, and an opponent sees the other opponents'
+        // (but not the owner's own hand, which Candor doesn't reveal). Shown as you.revealed_hands -- one
+        // read-only hand per such player other than the viewer, like an Open Team Play teammate's hand.
+        if ($viewerGamePlayerId !== null) {
+            $revealedPlayerIds = [];
+            foreach ($state->moodsInPlay() as $mood) {
+                if ($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'] !== 'candor') {
+                    continue;
+                }
+                foreach ($state->activePlayerOrder() as $opponentId) {
+                    if ($opponentId !== $mood->ownerId && !$state->isTeammate($mood->ownerId, $opponentId)) {
+                        $revealedPlayerIds[$opponentId] = true;
+                    }
+                }
+            }
+            unset($revealedPlayerIds[$viewerGamePlayerId]);
+            if ($revealedPlayerIds !== []) {
+                $response['you']['revealed_hands'] = [];
+                foreach ($state->activePlayerOrder() as $revealedPlayerId) {
+                    if (isset($revealedPlayerIds[$revealedPlayerId])) {
+                        $response['you']['revealed_hands'][] = [
+                            'game_player_id' => $revealedPlayerId,
+                            'hand' => array_map(
+                                fn (int $cardId) => $this->serializeCard($state, $cardId, $names, $revealedPlayerId),
+                                $state->hand($revealedPlayerId)
+                            ),
+                        ];
+                    }
+                }
+            }
         }
 
         if (self::isTeamFormat($game['format'])) {
@@ -20027,6 +20283,8 @@ final class GameService
                 'total_time_limit_minutes' => $game['total_time_limit_minutes'] !== null ? (int) $game['total_time_limit_minutes'] : null,
                 'synchronous_mode' => (bool) $game['synchronous_mode'],
                 'default_selections_mode' => (bool) $game['default_selections_mode'],
+                // Which card set(s) this game's random pools were built from (migration 0496) -- the Rematch prefill and the board title read it.
+                'card_set_codes' => CardCatalog::setCodesOfGame($game),
                 'action_deadline_at' => null,
                 'action_deadline_game_player_id' => null,
                 'draft_pick_deadline_at' => null,
@@ -20375,6 +20633,8 @@ final class GameService
                 'total_time_limit_minutes' => $game['total_time_limit_minutes'] !== null ? (int) $game['total_time_limit_minutes'] : null,
                 'synchronous_mode' => (bool) $game['synchronous_mode'],
                 'default_selections_mode' => (bool) $game['default_selections_mode'],
+                // Which card set(s) this game's random pools were built from (migration 0496) -- the Rematch prefill and the board title read it.
+                'card_set_codes' => CardCatalog::setCodesOfGame($game),
                 'action_deadline_at' => null,
                 'action_deadline_game_player_id' => null,
                 'draft_pick_deadline_at' => null,
@@ -20770,6 +21030,8 @@ final class GameService
                 ? "{$actor} passed automatically (no legal play)"
                 : "{$actor} passed",
             $row['event_type'] === 'pending_decision_created' && ($details['scoring_trigger'] ?? false) => "{$cardName}'s scoring effect triggered, waiting on a response from {$actor}",
+            $row['event_type'] === 'pending_decision_created' && ($details['turn_start_trigger'] ?? false) => "{$cardName} triggered at the start of {$actor}'s turn, waiting on a response",
+            $row['event_type'] === 'turn_start_triggered' => "{$cardName} triggered at the start of {$actor}'s turn",
             $row['event_type'] === 'pending_decision_created' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}, waiting on a response",
             // Disillusionment's own per-player color pick (see
             // respondToDecision()'s own docblock comment) -- logged the
@@ -20836,7 +21098,8 @@ final class GameService
         $revealedCardIds = $details['revealed_card_ids'] ?? [];
         if ($revealedCardIds !== []) {
             $revealedNames = array_map(fn (int $id) => $cardNames[$id] ?? 'a card', $revealedCardIds);
-            $targetName = isset($details['target_player_id']) ? ($playerNames[(int) $details['target_player_id']] ?? 'a player') : 'a player';
+            // No target in the choices means the player revealed from their own hand (Honesty, Whimsy).
+            $targetName = isset($details['target_player_id']) ? ($playerNames[(int) $details['target_player_id']] ?? 'a player') : $actor;
             $description .= ', revealing ' . implode(', ', $revealedNames) . " from {$targetName}'s hand";
         }
 
@@ -21410,6 +21673,8 @@ final class GameService
             // matching name/rules_text's own switch just below, so the
             // art shown matches whatever mood is actually displayed.
             'catalog_card_id' => $state->catalogCardId($isCreativityCopy ? $effectiveCardId : $cardId),
+            // Which art folder that print lives in -- a custom set's own cards are not under MSW (see migration 0496).
+            'art_set_code' => $diceValueCatalog['artSetCode'] ?? 'MSW',
             'name' => $isCreativityCopy ? ($names[$effectiveCardId] ?? $diceValueCatalog['effectKey']) : ($names[$cardId] ?? $catalog['effectKey']),
             'color' => $color,
             // The printed color, ignoring Imagination's "while in play, all
@@ -22991,6 +23256,7 @@ final class GameService
             $state->resetTurnStateSignatureCounts();
             $state->resetCoarseTurnStateSignatureCounts();
             $state->resetDrawnThisTurnCardIds();
+            $state->resetTurnDiscards();
             $state->resetChaosEffectFireCounts();
             $state->resetChaosLoopShortcutOfferedThisTurn();
         } elseif ($previousRow !== false) {
@@ -23063,6 +23329,7 @@ final class GameService
 
         if ($previousPlayerId !== $playerId) {
             $this->notifyItsYourTurn($roundId, $playerId);
+            $this->runTurnStartTriggers($this->gameIdOfRound($roundId), $roundId, $playerId, $state);
         }
 
         return ['exactCount' => $occurrenceCount, 'chaosLoopAutoPass' => $chaosLoopAutoPass];
@@ -23227,6 +23494,136 @@ final class GameService
         }
     }
 
+    /**
+     * "At the start of each of your turns" (TurnStartEffect): runs every such mood $gamePlayerId owns,
+     * in the order they entered play, as a turn begins. An automatic trigger just applies; one that
+     * needs input writes a pending-decision batch and PAUSES the round (returns true) -- the player
+     * can't act until respondToDecision() has answered it and resumed the rest via
+     * resumeTurnStartTriggers(). The moods still waiting to fire are persisted on the round
+     * (game_rounds.turn_start_pending_card_ids) so a pause survives between requests.
+     *
+     * Called at each place a turn begins -- updateRoundTurnState() whenever the turn changes hands, and
+     * the two spots that open a fresh round (finishScoringAndAdvance(), skipScoringAndAdvance()). A
+     * game's very first turn needs no call: nothing is in play yet. Triggers fire in play order; the
+     * turn's owner doesn't get to choose the order. A mood that arrives mid-resolution (Covetousness
+     * taking one) does NOT fire this turn -- the list is fixed when the turn begins.
+     *
+     * @return bool whether the round is now paused on a turn-start decision
+     */
+    private function runTurnStartTriggers(int $gameId, int $roundId, int $gamePlayerId, BoardState $state, bool $turnBegins = true): bool
+    {
+        $pdo = Connection::get();
+
+        if ($turnBegins) {
+            $pending = [];
+            foreach ($state->moodsOwnedBy($gamePlayerId) as $mood) {
+                if ($this->turnStartEffectFor($state, $mood->cardId) !== null) {
+                    $pending[] = $mood->cardId;
+                }
+            }
+            if ($pending === []) {
+                return false;
+            }
+        } else {
+            $stmt = $pdo->prepare('SELECT turn_start_pending_card_ids FROM game_rounds WHERE id = :round_id');
+            $stmt->execute(['round_id' => $roundId]);
+            $stored = $stmt->fetchColumn();
+            $pending = $stored !== false && $stored !== null ? array_map(intval(...), json_decode((string) $stored, true)) : [];
+        }
+
+        $paused = false;
+        while ($pending !== []) {
+            $cardId = array_shift($pending);
+            // Gone, or no longer this player's, since the turn began (an earlier trigger discarded or took it).
+            if (!$state->isInPlay($cardId) || $state->ownerOf($cardId) !== $gamePlayerId) {
+                continue;
+            }
+            $effect = $this->turnStartEffectFor($state, $cardId);
+            if ($effect === null) {
+                continue;
+            }
+
+            $requests = $effect->turnStartRequests($state, $cardId, $gamePlayerId);
+            if ($requests === []) {
+                continue;
+            }
+            if ($requests === null) {
+                $requests = $effect->applyTurnStart($state, $cardId, $gamePlayerId, []);
+                $this->logEvent($gameId, $roundId, $gamePlayerId, 'turn_start_triggered', $cardId, [], $state);
+                if ($requests === []) {
+                    continue;
+                }
+            } else {
+                $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, ['turn_start_trigger' => true], $state);
+            }
+
+            $this->boardStates->save($gameId, $state);
+            $this->writePendingBatch($gameId, $roundId, $gamePlayerId, new PlayerChoices([]), new PlayerChoices([]), PlayResult::pending($requests, $cardId, 0, new PlayerChoices([]), 0));
+            $paused = true;
+            break;
+        }
+
+        $this->boardStates->save($gameId, $state);
+        $pdo->prepare('UPDATE game_rounds SET turn_start_pending_card_ids = :pending WHERE id = :round_id')
+            ->execute(['pending' => $pending === [] ? null : json_encode($pending), 'round_id' => $roundId]);
+
+        return $paused;
+    }
+
+    private function gameIdOfRound(int $roundId): int
+    {
+        $stmt = Connection::get()->prepare('SELECT game_id FROM game_rounds WHERE id = :round_id');
+        $stmt->execute(['round_id' => $roundId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /** The TurnStartEffect behind $cardId's effective (Creativity-copied, if any) effect key, or null. */
+    private function turnStartEffectFor(BoardState $state, int $cardId): ?TurnStartEffect
+    {
+        $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+        $registry = $this->plays->registry();
+
+        if (!$registry->has($effectKey)) {
+            return null;
+        }
+        $effect = $registry->for($effectKey);
+
+        return $effect instanceof TurnStartEffect ? $effect : null;
+    }
+
+    /**
+     * respondToDecision()'s branch for a fully-answered turn-start batch: applies the trigger, then
+     * either pauses again (the effect has a follow-up decision, or the next trigger needs input) or
+     * lets the turn proceed. Runs inside respondToDecisionLocked()'s own transaction.
+     *
+     * @param array<string, mixed> $choices the last responder's raw answer, for the log
+     * @return array{round_scored: bool, game_completed: bool, pending_decision?: bool}
+     */
+    private function resumeTurnStartTriggers(int $gameId, int $roundId, array $batchRow, int $responderGamePlayerId, array $choices): array
+    {
+        $cardId = (int) $batchRow['played_card_id'];
+        $turnPlayerId = (int) $batchRow['initiating_game_player_id'];
+        $state = $this->boardStates->load($gameId);
+
+        $effect = $this->turnStartEffectFor($state, $cardId);
+        $followUps = $effect === null ? [] : $effect->applyTurnStart($state, $cardId, $turnPlayerId, $this->collectAnswers((int) $batchRow['id']));
+
+        $this->logEvent($gameId, $roundId, $responderGamePlayerId, 'pending_decision_resolved', $cardId, [...$choices, 'turn_start_trigger' => true, 'initiating_game_player_id' => $turnPlayerId], $state);
+
+        if ($followUps !== []) {
+            $this->boardStates->save($gameId, $state);
+            $this->writePendingBatch($gameId, $roundId, $turnPlayerId, new PlayerChoices([]), new PlayerChoices([]), PlayResult::pending($followUps, $cardId, 0, new PlayerChoices([]), 0));
+            $this->logEvent($gameId, $roundId, $turnPlayerId, 'pending_decision_created', $cardId, ['turn_start_trigger' => true], $state);
+
+            return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+        }
+
+        $paused = $this->runTurnStartTriggers($gameId, $roundId, $turnPlayerId, $state, turnBegins: false);
+
+        return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => $paused];
+    }
+
     private function assertNoPendingDecision(int $roundId): void
     {
         $stmt = Connection::get()->prepare(
@@ -23369,6 +23766,20 @@ final class GameService
                 if ($decisionRow['decision_type'] === 'duplicity_repeat_offer') {
                     $field = $this->withDuplicityRepeatChoiceDefaults($state, $field, $playedCardId, $targetGamePlayerId);
                 }
+            }
+            if (($field['type'] ?? null) === 'revealed_card') {
+                // Cards the table has just seen revealed (an opponent's hand, the top of the deck) that sit in
+                // no zone the client lists: the exact candidates arrive as labelled options.
+                $revealedState = $state ?? $this->boardStates->load((int) $batchRow['game_id']);
+                $revealedNames = $this->cardNamesFor((int) $batchRow['game_id']);
+                $field['options'] = array_map(
+                    static fn (int $candidateId): array => [
+                        'value' => $candidateId,
+                        'label' => ($revealedNames[$candidateId] ?? 'a card')
+                            . ' (' . $revealedState->catalogRow($candidateId)['color'] . ', ' . $revealedState->catalogRow($candidateId)['baseValue'] . ')',
+                    ],
+                    array_map(intval(...), $field['candidate_card_ids'] ?? []),
+                );
             }
             $result['field'] = $field;
         }
@@ -23516,6 +23927,9 @@ final class GameService
                     : null,
                 'enthusiasm' => "{$ownerName} may score their highest-valued mood an extra time ({$cardName}).",
                 'passion' => "{$ownerName} may score one of an opponent's moods as their own ({$cardName}).",
+                'unity' => "{$ownerName}'s {$cardName} wins the round for them after scoring if they have five or more moods that share a color.",
+                'fulfillment' => "{$ownerName}'s {$cardName} scores each of their moods with a value of 6 or more an extra time.",
+                'gratitude' => "{$ownerName}'s {$cardName} scores each of their moods with a value of 2 or less an extra time.",
                 default => null,
             };
 

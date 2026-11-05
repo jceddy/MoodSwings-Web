@@ -158,7 +158,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, rotisserieDraftRandomizePool, rotisserieDraftRandomizeSampleSize, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode, botDecklists, timeoutMinutes, timeoutAction, totalTimeLimitMinutes, synchronousMode) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, rotisserieDraftRandomizePool, rotisserieDraftRandomizeSampleSize, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, bestOfThree, allowSideboarding, diagnosticMode, botDecklists, timeoutMinutes, timeoutAction, totalTimeLimitMinutes, synchronousMode, cardSetCodes) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -265,6 +265,10 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // total_time_limit_minutes above. See "Synchronous mode" in
             // web-static/README.md.
             synchronous_mode: synchronousMode,
+            // Which card set(s) the game's random pools are built from -- undefined
+            // (omitted) means the original set only. See "Card sets" in
+            // web-static/README.md.
+            card_set_codes: cardSetCodes,
         }),
     });
 }
@@ -338,6 +342,11 @@ function submitCustomDuelDeck(gameId, decklistText, savedDecklistId) {
 }
 
 // Every printed card (issue #93's deck builder) -- see GET /cards/catalog.
+// The card sets this player may pick from for a game's random pools -- see GET /cards/sets.
+function getCardSets() {
+    return apiRequest('/cards/sets');
+}
+
 function getCardCatalog() {
     return apiRequest('/cards/catalog');
 }

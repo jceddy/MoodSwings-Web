@@ -17,7 +17,9 @@ final class Chaos057Effect extends AbstractChaosMoodEffect
     {
         $counts = array_fill_keys(self::COLORS, 0);
         foreach ($state->moodsInPlay() as $mood) {
-            $counts[$state->colorOf($mood->cardId)]++;
+            if (isset($counts[$state->colorOf($mood->cardId)])) {
+                $counts[$state->colorOf($mood->cardId)]++;
+            }
         }
         $highest = max($counts);
         if ($highest === 0) {

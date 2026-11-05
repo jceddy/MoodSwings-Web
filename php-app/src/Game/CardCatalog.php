@@ -19,10 +19,161 @@ use MoodSwings\Game\Exceptions\GameStateException;
  */
 final class CardCatalog
 {
+    /** The original Mood Swings set -- what every random pool is built from unless a game says otherwise. */
+    public const ORIGINAL_SET_CODE = 'MSW';
+
     /**
+     * Every set, with how many real (non-token) cards it holds. A custom set
+     * (sets.is_custom) is only listed when $includeCustom -- i.e. for a player
+     * who opted into custom content. $nonEmptyOnly additionally drops a set that
+     * has no cards yet (what the New Game dialog offers).
+     *
+     * @return array<int, array{code: string, name: string, is_custom: bool, card_count: int}>
+     */
+    public static function sets(bool $includeCustom, bool $nonEmptyOnly = false): array
+    {
+        $stmt = Connection::get()->query(
+            'SELECT s.code, s.name, s.is_custom, COUNT(c.id) AS card_count
+             FROM sets s
+             LEFT JOIN card_sets cs ON cs.set_id = s.id
+             LEFT JOIN cards c ON c.id = cs.card_id AND c.is_token = 0
+             GROUP BY s.id, s.code, s.name, s.is_custom
+             ORDER BY s.is_custom, s.id'
+        );
+
+        $sets = [];
+        foreach ($stmt->fetchAll() as $row) {
+            if (((bool) $row['is_custom'] && !$includeCustom) || ($nonEmptyOnly && (int) $row['card_count'] === 0)) {
+                continue;
+            }
+            $sets[] = [
+                'code' => $row['code'],
+                'name' => $row['name'],
+                'is_custom' => (bool) $row['is_custom'],
+                'card_count' => (int) $row['card_count'],
+            ];
+        }
+
+        return $sets;
+    }
+
+    /**
+     * The set code list a request asked for, validated: null/empty means the
+     * original set only; codes are deduplicated and must name a real set; a
+     * custom set additionally needs $allowCustom (the viewer's own opt-in --
+     * a hidden set reads as unknown rather than admitting it exists).
+     *
+     * @param string[]|null $codes
+     * @return string[]
+     */
+    public static function normalizeSetCodes(?array $codes, bool $allowCustom): array
+    {
+        if ($codes === null || $codes === []) {
+            return [self::ORIGINAL_SET_CODE];
+        }
+
+        $known = [];
+        foreach (self::sets($allowCustom) as $set) {
+            $known[strtoupper($set['code'])] = $set['code'];
+        }
+
+        $normalized = [];
+        foreach ($codes as $code) {
+            $canonical = $known[strtoupper(trim((string) $code))] ?? throw new GameStateException('Unknown card set "' . $code . '"');
+            if (!in_array($canonical, $normalized, true)) {
+                $normalized[] = $canonical;
+            }
+        }
+
+        return $normalized;
+    }
+
+    /** games.card_set_codes as a list: NULL (every game before custom sets, or one that never chose) is the original set only. @return string[] */
+    public static function setCodesOfGame(array $gameRow): array
+    {
+        $stored = $gameRow['card_set_codes'] ?? null;
+        if ($stored === null || $stored === '') {
+            return [self::ORIGINAL_SET_CODE];
+        }
+
+        return array_values(array_filter(explode(',', (string) $stored), static fn (string $code): bool => $code !== ''));
+    }
+
+    /** The games.card_set_codes value to store: NULL when it is just the original set (so those games look exactly like they always did). @param string[] $codes */
+    public static function encodeSetCodes(array $codes): ?string
+    {
+        return $codes === [self::ORIGINAL_SET_CODE] ? null : implode(',', $codes);
+    }
+
+    /** Whether any of $codes is a custom set. @param string[] $codes */
+    public static function includesCustomSet(array $codes): bool
+    {
+        if ($codes === []) {
+            return false;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($codes), '?'));
+        $stmt = Connection::get()->prepare("SELECT 1 FROM sets WHERE code IN ({$placeholders}) AND is_custom = 1 LIMIT 1");
+        $stmt->execute(array_values($codes));
+
+        return $stmt->fetchColumn() !== false;
+    }
+
+    /**
+     * Ids of the real (non-token) cards in any of $codes' sets, ascending. A
+     * reprint that is in several of them appears once.
+     *
+     * @param string[] $codes
+     * @return int[]
+     */
+    public static function cardIdsInSets(array $codes): array
+    {
+        if ($codes === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($codes), '?'));
+        $stmt = Connection::get()->prepare(
+            "SELECT DISTINCT c.id
+             FROM cards c
+             JOIN card_sets cs ON cs.card_id = c.id
+             JOIN sets s ON s.id = cs.set_id
+             WHERE c.is_token = 0 AND s.code IN ({$placeholders})
+             ORDER BY c.id"
+        );
+        $stmt->execute(array_values($codes));
+
+        return array_map(intval(...), $stmt->fetchAll(\PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * Ids of the real cards that belong ONLY to custom sets -- the ones hidden
+     * from a player who hasn't opted into custom content. (A custom set's
+     * reprint of an original card is also in the original set, so it isn't.)
+     *
+     * @return int[]
+     */
+    public static function customOnlyCardIds(): array
+    {
+        $stmt = Connection::get()->query(
+            'SELECT c.id
+             FROM cards c
+             WHERE c.is_token = 0
+               AND EXISTS (SELECT 1 FROM card_sets cs JOIN sets s ON s.id = cs.set_id WHERE cs.card_id = c.id AND s.is_custom = 1)
+               AND NOT EXISTS (SELECT 1 FROM card_sets cs JOIN sets s ON s.id = cs.set_id WHERE cs.card_id = c.id AND s.is_custom = 0)
+             ORDER BY c.id'
+        );
+
+        return array_map(intval(...), $stmt->fetchAll(\PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * @param bool $includeCustom false drops the cards that are only in custom sets
+     *        -- what a player who hasn't opted into custom content may see or type
+     *        into a decklist. Engine-internal callers keep the default (true).
      * @return array{idsByName: array<string, int>, rowsById: array<int, array{name: string, rarity: string, color: string, draftPriorityScore: int}>}
      */
-    public static function load(): array
+    public static function load(bool $includeCustom = true): array
     {
         // is_token = 0 (migration 0183, Chaos Draft's own 5 conjured-token
         // cards, issue #405) -- a token only ever exists once a chaos
@@ -38,8 +189,12 @@ final class CardCatalog
         $stmt = Connection::get()->query('SELECT id, name, rarity, color, draft_priority_score FROM cards WHERE is_token = 0');
         $idsByName = [];
         $rowsById = [];
+        $hidden = $includeCustom ? [] : array_flip(self::customOnlyCardIds());
         foreach ($stmt->fetchAll() as $row) {
             $id = (int) $row['id'];
+            if (isset($hidden[$id])) {
+                continue;
+            }
             $idsByName[mb_strtolower($row['name'])] = $id;
             $rowsById[$id] = [
                 'name' => $row['name'],
@@ -163,6 +318,7 @@ final class CardCatalog
             return [
                 'card_id' => $cardId,
                 'catalog_card_id' => $cardId,
+                'art_set_code' => $row['art_set_code'],
                 'set_code' => $row['set_code'],
                 'collector_number' => $row['collector_number'] !== null ? (int) $row['collector_number'] : null,
                 'name' => $row['name'],

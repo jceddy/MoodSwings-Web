@@ -804,6 +804,73 @@ final class BotPlayerService
             }
         }
 
+        // Greed/Nosiness/Entitlement/Inspiration: pick from cards the table has just seen revealed. The best card
+        // (by draft priority, lowest id on a tie) is right every time -- taken for ourselves, or the one an
+        // opponent should lose.
+        if (($field['type'] ?? null) === 'revealed_card') {
+            $best = null;
+            foreach ($field['candidate_card_ids'] ?? [] as $candidateId) {
+                $score = $state->catalogRow($candidateId)['draftPriorityScore'];
+                if ($best === null || $score > $best['score']) {
+                    $best = ['id' => $candidateId, 'score' => $score];
+                }
+            }
+
+            return $best === null ? [] : [$field['key'] => $best['id']];
+        }
+
+        // Entitlement's "reveal your hand?" (asked of the opponent it targets): give up a card rather than a
+        // mood that's carrying real weight. Declining costs the highest value mood.
+        if ($decisionType === 'entitlement_reveal') {
+            $highest = 0;
+            foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+                $highest = max($highest, $state->valueOf($mood->cardId));
+            }
+
+            return $highest >= 3 ? [$field['key'] => true] : [];
+        }
+
+        // "At the start of each of your turns" moods (TurnStartEffect) whose optional choice is free or
+        // plainly worth taking -- the generic resolver below never fills an optional field. Anything not
+        // listed (Brooding, Martyrdom, Rumination, Wastefulness) is left declined, the conservative default.
+        if ($decisionType === 'turn_start_trigger' && $sourceCardId !== null && $state->isInPlay($sourceCardId)) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($sourceCardId))['effectKey'];
+            if ($effectKey === 'covetousness' && isset($field['candidate_card_ids'])) {
+                // Taking an opponent's mood costs nothing: take the one worth the most.
+                $best = null;
+                foreach ($field['candidate_card_ids'] as $candidateId) {
+                    if ($state->isInPlay($candidateId) && ($best === null || $state->valueOf($candidateId) > $state->valueOf($best))) {
+                        $best = $candidateId;
+                    }
+                }
+
+                return $best === null ? [] : [$field['key'] => $best];
+            }
+            if ($effectKey === 'vitality' && $field['key'] === 'color') {
+                // The color the bot has the most moods of (each gets +2).
+                $counts = [];
+                foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+                    $color = $state->colorOf($mood->cardId);
+                    $counts[$color] = ($counts[$color] ?? 0) + 1;
+                }
+                arsort($counts);
+
+                return [$field['key'] => $counts === [] ? $field['options'][0] : array_key_first($counts)];
+            }
+            if ($effectKey === 'fomo' && $field['type'] === 'hand_card') {
+                // Keep FOMO (a 7) by discarding the least useful card in hand.
+                $worst = null;
+                foreach ($state->hand($botGamePlayerId) as $handCardId) {
+                    $score = $state->catalogRow($state->effectiveCardId($handCardId))['draftPriorityScore'];
+                    if ($worst === null || $score < $worst['score']) {
+                        $worst = ['id' => $handCardId, 'score' => $score];
+                    }
+                }
+
+                return $worst === null ? [] : [$field['key'] => $worst['id']];
+            }
+        }
+
         $value = $this->resolver->resolve($state, $field, $botGamePlayerId, 0, '');
 
         return $value === null ? [] : [$field['key'] => $value];
@@ -1120,12 +1187,16 @@ final class BotPlayerService
     {
         $counts = array_fill_keys(self::DISILLUSIONMENT_COLORS, 0);
         foreach ($state->moodsInPlay() as $mood) {
-            $counts[$state->colorOf($mood->cardId)]++;
+            if (isset($counts[$state->colorOf($mood->cardId)])) {
+                $counts[$state->colorOf($mood->cardId)]++;
+            }
         }
         foreach ($state->discardPile() as $discardedCardId) {
-            $counts[$state->colorOf($discardedCardId)]++;
+            if (isset($counts[$state->colorOf($discardedCardId)])) {
+                $counts[$state->colorOf($discardedCardId)]++;
+            }
         }
-        if (!$state->isInPlay($cardId)) {
+        if (!$state->isInPlay($cardId) && isset($counts[$state->colorOf($cardId)])) {
             $counts[$state->colorOf($cardId)]++;
         }
 

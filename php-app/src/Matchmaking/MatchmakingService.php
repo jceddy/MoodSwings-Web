@@ -6,6 +6,7 @@ namespace MoodSwings\Matchmaking;
 
 use MoodSwings\Database\Connection;
 use MoodSwings\Game\Exceptions\GameStateException;
+use MoodSwings\Game\CardCatalog;
 use MoodSwings\Game\GameService;
 use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\OpenGameListingRepository;
@@ -82,6 +83,13 @@ final class MatchmakingService
             );
         }
 
+        // A custom card set in the pool needs the same opt-in (see GameService::createGame()).
+        if ($this->usesCustomCardSet($createGameParams) && !(bool) $user['allow_custom_content']) {
+            throw new GameStateException(
+                'That game uses a custom card set -- opt in first via Settings > "Allow custom card/effect formats" before posting one to the open lobby.'
+            );
+        }
+
         $targetPlayerCount = match (true) {
             $format === 'duel' => 2,
             $format === 'team' || $format === 'closed_team' => 4,
@@ -116,8 +124,17 @@ final class MatchmakingService
 
         return array_values(array_filter(
             $listings,
-            static fn (array $listing): bool => ($listing['create_game_params']['deck_type'] ?? null) !== 'chaos_draft'
+            fn (array $listing): bool => ($listing['create_game_params']['deck_type'] ?? null) !== 'chaos_draft'
+                && !$this->usesCustomCardSet($listing['create_game_params'])
         ));
+    }
+
+    /** Whether an open listing's create_game_params pick a custom card set for the game's random pools. */
+    private function usesCustomCardSet(array $createGameParams): bool
+    {
+        $codes = $createGameParams['card_set_codes'] ?? null;
+
+        return is_array($codes) && $codes !== [] && CardCatalog::includesCustomSet(array_map('strval', $codes));
     }
 
     public function listMyOpenGames(int $userId): array
@@ -210,6 +227,15 @@ final class MatchmakingService
                 }
             }
 
+            if ($this->usesCustomCardSet($listing['create_game_params'])) {
+                $joiningUser = $this->users->findById($joiningUserId);
+                if ($joiningUser === null || !(bool) $joiningUser['allow_custom_content']) {
+                    throw new GameStateException(
+                        'That game uses a custom card set -- opt in first via Settings > "Allow custom card/effect formats" before joining one.'
+                    );
+                }
+            }
+
             $joinedUserIds = $this->listings->joinedUserIds($listingId);
 
             if (in_array($joiningUserId, $joinedUserIds, true)) {
@@ -279,6 +305,7 @@ final class MatchmakingService
                     isset($params['timeout_action']) ? (string) $params['timeout_action'] : null,
                     isset($params['total_time_limit_minutes']) ? (int) $params['total_time_limit_minutes'] : null,
                     (bool) ($params['synchronous_mode'] ?? false),
+                    cardSetCodes: isset($params['card_set_codes']) && is_array($params['card_set_codes']) ? array_map('strval', $params['card_set_codes']) : null,
                 );
             } catch (GameStateException $e) {
                 // The creator's own choices turned out not to be valid

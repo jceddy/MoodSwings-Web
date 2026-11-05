@@ -21,6 +21,9 @@ final class BitternessEffect extends AbstractMoodEffect
         $counts = [];
         foreach ($state->moodsInPlay() as $mood) {
             $color = $state->colorOf($mood->cardId);
+            if ($color === 'colorless') {
+                continue; // no color to be the most common
+            }
             $counts[$color] = ($counts[$color] ?? 0) + 1;
         }
         if ($counts === []) {

@@ -119,6 +119,58 @@ use MoodSwings\Rules\Effects\WonderEffect;
 use MoodSwings\Rules\Effects\WorryEffect;
 use MoodSwings\Rules\Effects\WrathEffect;
 use MoodSwings\Rules\Effects\ZealEffect;
+use MoodSwings\Rules\Effects\Custom\AtonementEffect;
+use MoodSwings\Rules\Effects\Custom\BulkMoodMoveEffect;
+use MoodSwings\Rules\Effects\Custom\ConditionalExtraPlayEffect;
+use MoodSwings\Rules\Effects\Custom\CustomConditionalValueEffect;
+use MoodSwings\Rules\Effects\Custom\DiscardToDeckBottomEffect;
+use MoodSwings\Rules\Effects\Custom\FrenzyEffect;
+use MoodSwings\Rules\Effects\Custom\ImpartialityEffect;
+use MoodSwings\Rules\Effects\Custom\IntuitionEffect;
+use MoodSwings\Rules\Effects\Custom\LargesseEffect;
+use MoodSwings\Rules\Effects\Custom\LevityEffect;
+use MoodSwings\Rules\Effects\Custom\PairedColorTargetEffect;
+use MoodSwings\Rules\Effects\Custom\RashnessEffect;
+use MoodSwings\Rules\Effects\Custom\SolidarityEffect;
+use MoodSwings\Rules\Effects\Custom\WarmthEffect;
+use MoodSwings\Rules\Effects\Custom\YearningEffect;
+use MoodSwings\Rules\Effects\Custom\BroodingEffect;
+use MoodSwings\Rules\Effects\Custom\CovetousnessEffect;
+use MoodSwings\Rules\Effects\Custom\FairnessEffect;
+use MoodSwings\Rules\Effects\Custom\FomoEffect;
+use MoodSwings\Rules\Effects\Custom\JealousyEffect;
+use MoodSwings\Rules\Effects\Custom\MartyrdomEffect;
+use MoodSwings\Rules\Effects\Custom\MaturityEffect;
+use MoodSwings\Rules\Effects\Custom\NeglectEffect;
+use MoodSwings\Rules\Effects\Custom\ResilienceEffect;
+use MoodSwings\Rules\Effects\Custom\RuminationEffect;
+use MoodSwings\Rules\Effects\Custom\VolatilityEffect;
+use MoodSwings\Rules\Effects\Custom\WastefulnessEffect;
+use MoodSwings\Rules\Effects\Custom\ArdorEffect;
+use MoodSwings\Rules\Effects\Custom\CompetitivenessEffect;
+use MoodSwings\Rules\Effects\Custom\HumilityEffect;
+use MoodSwings\Rules\Effects\Custom\KinshipEffect;
+use MoodSwings\Rules\Effects\Custom\OrderlinessEffect;
+use MoodSwings\Rules\Effects\Custom\VerveEffect;
+use MoodSwings\Rules\Effects\Custom\VitalityEffect;
+use MoodSwings\Rules\Effects\Custom\PerseveranceEffect;
+use MoodSwings\Rules\Effects\Custom\VindicationEffect;
+use MoodSwings\Rules\Effects\Custom\FulfillmentEffect;
+use MoodSwings\Rules\Effects\Custom\GratitudeEffect;
+use MoodSwings\Rules\Effects\Custom\CandorEffect;
+use MoodSwings\Rules\Effects\Custom\CarelessnessEffect;
+use MoodSwings\Rules\Effects\Custom\DiscernmentEffect;
+use MoodSwings\Rules\Effects\Custom\HonestyEffect;
+use MoodSwings\Rules\Effects\Custom\TurmoilEffect;
+use MoodSwings\Rules\Effects\Custom\WhimsyEffect;
+use MoodSwings\Rules\Effects\Custom\EntitlementEffect;
+use MoodSwings\Rules\Effects\Custom\InspirationEffect;
+use MoodSwings\Rules\Effects\Custom\RevealHandPickEffect;
+use MoodSwings\Rules\Effects\Custom\SchadenfreudeEffect;
+use MoodSwings\Rules\Effects\Custom\ColorGatedPlayEffect;
+use MoodSwings\Rules\Effects\Custom\EmptinessEffect;
+use MoodSwings\Rules\Effects\Custom\NeutralityEffect;
+use MoodSwings\Rules\Effects\Custom\UnityEffect;
 
 /**
  * Wires up every MoodEffect for the full 133-card pool -- every card with
@@ -387,6 +439,100 @@ final class DefaultEffectRegistry
         $registry->register('enjoyment', new PairedColorThresholdEffect('red', 'white'));
         $registry->register('pity', new PairedColorThresholdEffect('blue', 'red'));
         $registry->register('excitement', new PairedColorThresholdEffect('black', 'green'));
+
+        // Community set "Emotional Baggage" (XEMB) -- see Effects/Custom.
+        $registry->register('anticipation', new CustomConditionalValueEffect(CustomConditionalValueEffect::OWN_HAND_AT_LEAST, 4));
+        $registry->register('composure', new CustomConditionalValueEffect(CustomConditionalValueEffect::OWN_HAND_MORE_THAN_EACH_OTHER));
+        $registry->register('equanimity', new CustomConditionalValueEffect(CustomConditionalValueEffect::EVEN_NUMBERED_MOODS_AT_LEAST, 4));
+        $registry->register('exuberance', new CustomConditionalValueEffect(CustomConditionalValueEffect::OTHER_OWN_RED_MOODS_AT_LEAST, 2));
+        $registry->register('hellbent', new CustomConditionalValueEffect(CustomConditionalValueEffect::OWN_HAND_EMPTY));
+        $registry->register('possessiveness', new CustomConditionalValueEffect(CustomConditionalValueEffect::DISCARD_PILE_AT_LEAST, 5));
+        $registry->register('ruthlessness', new CustomConditionalValueEffect(CustomConditionalValueEffect::ANY_OPPONENT_HAND_EMPTY));
+        $registry->register('temperance', new CustomConditionalValueEffect(CustomConditionalValueEffect::OWN_HAND_FEWER_THAN_EACH_OTHER));
+        $registry->register('solidarity', new SolidarityEffect());
+
+        $registry->register('confidence', new ConditionalExtraPlayEffect(restriction: ['type' => 'base_value_in', 'values' => [4, 5, 6]]));
+        $registry->register('modesty', new ConditionalExtraPlayEffect(restriction: ['type' => 'base_value_in', 'values' => [0, 1, 2, 3]]));
+        $registry->register('thrift', new ConditionalExtraPlayEffect(restriction: ['type' => 'base_value_in', 'values' => [0, 1, 2, 3], 'source' => 'discard']));
+        $registry->register('desperation', new ConditionalExtraPlayEffect('own_hand_fewer_than_each_other'));
+        $registry->register('camaraderie', new ConditionalExtraPlayEffect('color_pair', ['green', 'blue']));
+        $registry->register('fervor', new ConditionalExtraPlayEffect('color_pair', ['black', 'green'], onUseEffectState: [
+            'afterScoring' => ['action' => 'discard', 'condition' => 'always'],
+        ]));
+        $registry->register('rashness', new RashnessEffect());
+        $registry->register('frenzy', new FrenzyEffect());
+        $registry->register('largesse', new LargesseEffect());
+        $registry->register('belligerence', new BulkMoodMoveEffect('discard_qualifying_moods', true, true, 2, 'discard'));
+        $registry->register('chagrin', new BulkMoodMoveEffect('return_qualifying_moods', false, false, 4, 'hand'));
+        $registry->register('atonement', new AtonementEffect());
+        $registry->register('intuition', new IntuitionEffect());
+        $registry->register('impartiality', new ImpartialityEffect());
+        $registry->register('reminiscence', new DiscardToDeckBottomEffect());
+        $registry->register('remorse', new DiscardToDeckBottomEffect(true));
+        $registry->register('levity', new LevityEffect());
+        $registry->register('distrust', new PairedColorTargetEffect('red', 'green', 'hand'));
+        $registry->register('disdain', new PairedColorTargetEffect('white', 'green', 'discard'));
+        $registry->register('indignation', new PairedColorTargetEffect('white', 'blue', 'discard', 4));
+        $registry->register('vigilance', new PairedColorTargetEffect('black', 'red', 'suppress'));
+        $registry->register('warmth', new WarmthEffect());
+        $registry->register('yearning', new YearningEffect());
+
+        // Turn-start triggers (TurnStartEffect) and Resilience.
+        $registry->register('brooding', new BroodingEffect());
+        $registry->register('covetousness', new CovetousnessEffect());
+        $registry->register('fairness', new FairnessEffect());
+        $registry->register('fomo', new FomoEffect());
+        $registry->register('jealousy', new JealousyEffect());
+        $registry->register('martyrdom', new MartyrdomEffect());
+        $registry->register('maturity', new MaturityEffect());
+        $registry->register('neglect', new NeglectEffect());
+        $registry->register('resilience', new ResilienceEffect());
+        $registry->register('rumination', new RuminationEffect());
+        $registry->register('volatility', new VolatilityEffect());
+        $registry->register('wastefulness', new WastefulnessEffect());
+
+        // Static value modifiers (ValueModifyingEffect), Competitiveness, and Vitality's turn-start trigger.
+        $registry->register('ardor', new ArdorEffect());
+        $registry->register('competitiveness', new CompetitivenessEffect());
+        $registry->register('humility', new HumilityEffect());
+        $registry->register('kinship', new KinshipEffect());
+        $registry->register('orderliness', new OrderlinessEffect());
+        $registry->register('verve', new VerveEffect());
+        $registry->register('vitality', new VitalityEffect());
+
+        // Round-win counts.
+        $registry->register('resolve', new CustomConditionalValueEffect(CustomConditionalValueEffect::OWN_ROUND_WINS_FEWER_THAN_EACH_OTHER));
+        $registry->register('vindication', new VindicationEffect());
+        $registry->register('perseverance', new PerseveranceEffect());
+
+        // Extra scoring (ScoringBonusEffect).
+        $registry->register('fulfillment', new FulfillmentEffect());
+        $registry->register('gratitude', new GratitudeEffect());
+
+        // Deck-top moves and hand reveals.
+        $registry->register('candor', new CandorEffect());
+        $registry->register('carelessness', new CarelessnessEffect());
+        $registry->register('discernment', new DiscernmentEffect());
+        $registry->register('honesty', new HonestyEffect());
+        $registry->register('turmoil', new TurmoilEffect());
+        $registry->register('whimsy', new WhimsyEffect());
+
+        // Reveals followed by a pick from the revealed cards ('revealed_card' decision field).
+        $registry->register('greed', new RevealHandPickEffect(RevealHandPickEffect::TAKE_AND_REDRAW, 'Greed'));
+        $registry->register('nosiness', new RevealHandPickEffect(RevealHandPickEffect::DISCARD, 'Nosiness'));
+        $registry->register('entitlement', new EntitlementEffect());
+        $registry->register('inspiration', new InspirationEffect());
+        $registry->register('schadenfreude', new SchadenfreudeEffect());
+
+        // Colorless cards.
+        $registry->register('reverence', new ColorGatedPlayEffect('white'));
+        $registry->register('detachment', new ColorGatedPlayEffect('blue'));
+        $registry->register('resentment', new ColorGatedPlayEffect('black'));
+        $registry->register('impatience', new ColorGatedPlayEffect('red'));
+        $registry->register('contentment', new ColorGatedPlayEffect('green'));
+        $registry->register('emptiness', new EmptinessEffect());
+        $registry->register('neutrality', new NeutralityEffect());
+        $registry->register('unity', new UnityEffect());
 
         return $registry;
     }

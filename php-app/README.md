@@ -9194,6 +9194,181 @@ selected with one click, no typing required; each just calls the same
 differing only in where the message text comes from (a button's own
 `data-quick-chat-text` rather than `#game-chat-input`'s value).
 
+### Card sets and custom sets
+
+`sets` (code, name, `is_custom`) and `card_sets` (card, set, collector number) say which set(s) a card
+belongs to. The original set is `MSW`; a **custom set** (`sets.is_custom`, migration 0496) is a
+community-designed set the game ships alongside it, first **Emotional Baggage (`XEMB`)** from
+`jceddy/mood-swings-custom`. A custom set's reprints of original cards are just the same card rows
+also listed in `card_sets` under the custom set, so a reprint is never hidden; a card that is *only*
+in custom sets is.
+
+- **Visibility.** Custom cards need the custom-content opt-in (`users.allow_custom_content`, Settings >
+  "Show custom content"). `CardCatalog::customOnlyCardIds()` lists the hidden ones;
+  `CardCatalog::load(includeCustom: false)` drops them (the default, `true`, is what the engine itself
+  uses). `GET /cards/catalog` and `GET /stats/cards` take it from the viewer, a decklist (typed, uploaded
+  or saved -- `UserDecklistService`) can't name them without it, and another player's shared saved deck
+  that uses them can't be opened without it. `GET /cards/sets` lists the sets the viewer may pick
+  (`code`, `name`, `is_custom`, `card_count`): the original set, plus custom ones once they opted in --
+  a set that has no cards yet is left out.
+- **Choosing the pool's sets.** `POST /games` (and `POST /open-games`) take `card_set_codes`, a list of set
+  codes (default / empty: the original set only). It decides where every *random* pool comes from --
+  Structure, Power, jceddy's 75/150, One of Each, the Quick/Winston/Grid/Rotisserie draft pool sources
+  (`random_48`, `structure`, `jceddys_75`, `one_of_each`), Tiered Rotisserie's rarity tiers, Chaos Draft's
+  pool and Sealed Deck -- via `GameService::poolCardIds()`, which also dedupes a reprint that's in several
+  chosen sets. It's stored on `games.card_set_codes` (comma-separated, NULL = original set only), carried
+  into game 2/3 of a best-of-three match, and exposed as `game.card_set_codes` (the Rematch prefill reads
+  it). A pool the chosen sets can't fill (say a custom set that's still missing cards) fails with a clear
+  `GameStateException` ("don't have enough cards") instead of a crash. Ignored -- stored as the original
+  set -- for `custom`/`custom_duel` (decklists name their own cards) and the Daily/Weekly Sealed Pools,
+  which always use the original set only (`buildPeriodicSealedPoolCardIds()`). League starter decks and
+  tournaments never choose, so they stay original-set only too.
+- **Opt-in rules.** A custom set in `card_set_codes` is refused (as an unknown set) unless the creator opted
+  in, and `createGame()` also requires every seated *human* to have opted in
+  (`usersWithoutCustomContentOptIn()`, the same rule Chaos Draft uses); open-game listings that pick one are
+  hidden from, and can't be posted or joined by, anyone who hasn't. Decks that name custom-only cards
+  (`assertCustomCardsAllowed()`: custom decklists, custom draft pools, `custom_duel` submissions) need every
+  seated human opted in as well.
+- **Art.** `cards.art_set_code` is the folder under `web-static/img/cards/` a card's art lives in (`MSW`, or
+  the custom set's code for its own cards); it's exposed as `art_set_code` on every serialized card.
+- **Emotional Baggage's cards (migrations 0497+).** Added in batches, cheapest effects first. Each card's
+  `effect_key` is its lower-cased name (UNIQUE across all sets), its `cards.id` follows collector order
+  (ids 139+), and its art is `web-static/img/cards/XEMB/<id>-<slug>.webp`. The set's 11 reprints
+  (Compulsion, Determination, Fear, Hate, Joy, Nostalgia, Pacifism, Panic, Shock, Suspicion, Zeal) are
+  linked to XEMB by `card_sets` rows only. Effect classes live in `Rules/Effects/Custom/` -- batch 1
+  (migration 0497, 32 cards) is the effects that need no new engine hook: `CustomConditionalValueEffect`
+  (Anticipation, Composure, Equanimity, Exuberance, Hellbent, Possessiveness, Ruthlessness, Temperance:
+  alt value while a board/hand condition holds), `SolidarityEffect`, `ConditionalExtraPlayEffect`
+  (Confidence, Modesty, Thrift, Desperation, Camaraderie, Fervor), `RashnessEffect`, `FrenzyEffect`,
+  `LargesseEffect`, `BulkMoodMoveEffect` (Belligerence, Chagrin), `AtonementEffect`, `IntuitionEffect`,
+  `ImpartialityEffect`, `DiscardToDeckBottomEffect` (Reminiscence, Remorse), `LevityEffect`,
+  `PairedColorTargetEffect` (Distrust, Disdain, Indignation, Vigilance), `WarmthEffect`, `YearningEffect`.
+  Batch 2 (migration 0498, 12 cards) adds the **turn-start triggers** and Resilience; batch 3 (migration
+  0499, 7 cards) adds the **static value modifiers**, batch 4 (migration 0500, 3 cards) the **round-win
+  count** cards and batch 5 (migration 0502, 2 cards) the **extra scoring** cards and batch 6 (migration 0503,
+  6 cards) Carelessness and the **hand-reveal** cards, and batch 7 (migration 0504, 4 cards) the
+  **reveal-then-pick** cards, batch 8 (migration 0505) Schadenfreude and batch 9 (migration 0506) the
+  **colorless** cards (all below). The later batches still need new hooks (Grudge's chosen-opponent play
+  grant); Levelheadedness, Forgetfulness and Compassion are tier 2 and aren't implemented yet; until a card is in the
+  `cards` table it simply doesn't exist in the game.
+- **"At the start of each of your turns" (`TurnStartEffect`).** Brooding, Covetousness, Fairness, FOMO,
+  Jealousy, Martyrdom, Maturity, Neglect, Rumination, Volatility and Wastefulness implement
+  `Rules/TurnStartEffect` (`turnStartRequests()` -- null = automatic, `[]` = nothing to decide, otherwise
+  the `PendingDecisionRequest`s to ask; `applyTurnStart()` -- applies the answers and may return follow-up
+  decisions, e.g. Brooding's discard once the card is in hand). `GameService::runTurnStartTriggers()` runs
+  a player's triggers in play order whenever a turn begins -- from `updateRoundTurnState()` whenever the
+  turn changes hands, and from the two places that open a new round (`finishScoringAndAdvance()`,
+  `skipScoringAndAdvance()`); a game's very first turn has nothing in play to trigger. A trigger that needs
+  input pauses the round like any other pending decision (decision type `turn_start_trigger`, so nobody can
+  play or pass until it's answered) and `respondToDecision()` resumes the rest through
+  `resumeTurnStartTriggers()`; the moods still waiting to fire are kept in
+  `game_rounds.turn_start_pending_card_ids`. The list is fixed when the turn begins (a mood that arrives
+  mid-resolution doesn't fire until next turn), and the turn's owner doesn't choose the order. Decisions can
+  belong to other players (Jealousy/Neglect ask the affected opponent; Martyrdom asks each opponent for a
+  discard). Mood choices carry a server-computed `candidate_card_ids`, so the client and bots only offer
+  legal moods. Fairness only asks when several moods tie for highest; Maturity uses the permanent value delta
+  (`adjustChaosValueDelta()`); Wastefulness uses the new `BoardState::moveDeckTopToDiscard()` (a
+  `deck`-to-`discard` card move, which `ReplayStateBuilder` replays). Bots decline the optional triggers,
+  except that they take Covetousness's best target and keep FOMO by discarding their weakest card.
+- **Resilience** is Hope-shaped: the same-turn play is granted by `MoodPlayService` and every later turn's by
+  `computeFreshGrants()`, both from `ResilienceEffect::RESTRICTION` (a 0-3 mood from the discard pile, lost
+  if Resilience leaves play first).
+- **Static value modifiers (`ValueModifyingEffect`).** Ardor, Humility, Kinship, Orderliness and Verve change
+  other moods' values while in play. `BoardState::valueOf()` now adds `valueModifierFor()` from every
+  in-play mood that implements `Rules/ValueModifyingEffect` (memoized per effect key) on top of
+  everything else it computes, so a modifier stacks with a one-time "value becomes N", a conditional alt value
+  or a chaos delta rather than replacing it. A modifier must read only colors, printed numbers and effect
+  state -- never `valueOf()` -- or modifiers would recurse into each other. "Printed number" is the card's
+  base value through any Creativity copy; Verve reuses Patience/Glee's `playedInRound`/`playedByPlayerId`
+  tag; Orderliness remembers its choice as `orderlinessParity`. Competitiveness (1 more than the highest
+  opposing mood *that doesn't have this ability*, or 1 with none) is a plain `computeValue()`; leaving out
+  opposing Competitiveness moods (and Creativity copies of one) is what stops two of them reading each other.
+  Vitality is a turn-start trigger whose chosen color becomes a round-long (player, color, +2) entry on the
+  board (`BoardState::addRoundColorBonus()`, persisted on the live round as `game_rounds.round_value_bonuses`,
+  migration 0501, and dropped by `clearEndOfRoundValueBonuses()` wherever end-of-round suppressions are
+  lifted). `valueOf()` adds it to every mood that player currently owns of that color -- whenever it was
+  played (the card says so: "includes moods you play later this round"), and even after Vitality leaves play;
+  a mood that changes hands stops counting for the old owner.
+- **Round-win counts.** Resolve (6 while you've won fewer rounds than each other player), Vindication
+  (+2 per round you've won) and Perseverance (after scoring, +2 permanently while you've won fewer rounds
+  than each other player). Round wins aren't a stored counter -- they're derived from the scored
+  `game_rounds` rows -- so `BoardStateRepository::roundWins()` sums `wins_awarded` per player (per *team*
+  in a team format, so teammates share a count and "fewer than each other player" is never true between
+  them) and `load()` hands it to `BoardState::setRoundWins()`/`roundWinsOf()`. A round that awards two wins
+  (Corruption) counts twice. `finishScoringAndAdvance()`/`finishTeamScoringAndAdvance()` refresh the counts
+  right after recording the round's winner, so after-scoring effects see the new standings.
+  Perseverance is the first perpetual after-scoring ability: it implements `Rules/AfterScoringTriggerEffect`
+  and `applyAfterScoringHooks()` calls it, after the one-shot 'afterScoring' tags, for every
+  in-play mood that does -- it reads the standings *including* the round just decided, and uses the permanent
+  value delta Maturity does. A replayed board has no round wins loaded, so a replay shows these three at
+  their printed values.
+- **Extra scoring (`ScoringBonusEffect`).** Fulfillment (each of your moods worth 6 or more scores an extra
+  time) and Gratitude (each worth 2 or less) implement `Rules/ScoringBonusEffect::scoringBonus()` -- the
+  points to add on top of the plain sum of values -- and `RoundScorer::score()` adds
+  `BoardState::scoringBonusOf()` for every mood in play (so the live scoring preview and the scoring summary
+  include them; two Fulfillments each add a time). They read current values, so conditional/boosted/suppressed
+  moods are judged as they stand when the round scores. Suppression only zeroes a mood's own value in this
+  engine -- a suppressed Fulfillment (value 0) still grants its extra scoring, like every other while-in-play
+  ability here, so the value modifiers and Perseverance also keep working while suppressed.
+- **Hand reveals and deck-top moves (batch 6).** Carelessness uses `BoardState::moveDeckTopToDiscard()` twice.
+  A reveal is `BoardState::recordRevealedCard()`, which puts the card in the play's log entry ("revealing X
+  from Y's hand" -- the actor's own hand when the choices name no target): Honesty reveals its whole hand
+  (then locks its value to 6 if every card shares a color with one of your moods -- Honesty counts as one,
+  an empty hand qualifies, colorless doesn't), Whimsy reveals a random hand card and grants an extra play of
+  only that card, Discernment and Turmoil (odd/even cycling, optional cards for Discernment, forced on a
+  chosen player for Turmoil) reveal what they cycle. Candor adds no engine rule: a reveal is always to *all* players (the custom set repo's CLAUDE.md), so
+  `buildGameState()` gives every seated player `you.revealed_hands` -- the hand of each non-teammate
+  opponent of a Candor's owner other than the viewer, shown by the client like a teammate's (the owner sees
+  all of them, an opponent sees the other opponents', nobody sees the owner's hand through it).
+- **Reveal, then pick (`revealed_card` decisions).** Greed, Nosiness, Entitlement and Inspiration reveal cards to
+  the whole table (the log names them, via `recordRevealedCard()`) and then someone picks one of them. The
+  cards sit in no zone the client lists (an opponent's hand, the top of the deck), so the decision field type
+  is `revealed_card`: the effect supplies `candidate_card_ids` (`CustomEffectSupport::revealedCardRequest()`)
+  and `serializePendingDecision()` turns them into labelled `options` ("Apathy (black, 4)") that the client
+  renders as an ordinary select. All four are `RequiresOpponentDecision` effects; the pick is asked of the
+  *player who played the card* (a decision aimed at the acting player is already supported). Greed takes the
+  chosen card and the opponent draws one; Nosiness makes them discard it; Inspiration moves the chosen top-three
+  deck card into hand (`BoardState::moveDeckCardToHand()`/`moveDeckCardToBottom()` -- real `deck` card moves,
+  so the log and replay show them), shuffles the other two to the bottom and grants an extra play of only that
+  card. Entitlement (the restricted printing) runs up to three steps told apart by answer key: the target's
+  reveal-or-not choice, then either the owner's pick (with a play of only that card) or the target's choice
+  among their tied-highest moods (automatic when one is strictly highest). Bots always pick the highest
+  draft-priority card, and answer Entitlement's reveal by revealing while their best mood is worth 3 or more.
+- **Schadenfreude and the turn's discards.** "If another player discarded a card or had a mood put into the
+  discard pile this turn" needs a turn-scoped record of who lost a card to the discard pile:
+  `BoardState` notes a player in `playersWhoDiscardedThisTurn()` when they discard from hand
+  (`moveHandToDiscard()`) or one of their moods is put into the discard pile (`moveInPlayToDiscard()`, by the
+  mood's owner at that moment). Any player other than the one playing Schadenfreude counts, a teammate
+  included, however it happened and whenever earlier in the turn -- Martyrdom/Jealousy at the start of the turn,
+  an earlier play -- but a mood bounced to a hand or the deck, and a card moved from the deck to the discard
+  pile (Carelessness), don't. It is persisted on the live round (`game_rounds.turn_discards`, migration 0505)
+  and reset whenever a turn begins (`updateRoundTurnState()` on a change of player) or a round ends. The value
+  is locked to 6 once, like Dignity.
+- **Colorless (batch 9).** `cards.color` gained a sixth value, `colorless` (migration 0506): Reverence,
+  Detachment, Resentment, Impatience and Contentment (5-point moods that can only be played if *you* have a
+  white/blue/black/red/green mood -- `ColorGatedPlayEffect::canPayToPlayCost()`, so the playability checks and
+  bots honor it; a suppressed mood still counts), Emptiness (+1 per color among all moods), Neutrality (+2
+  per other colorless mood) and Unity. `BoardState::colorOf()` is unchanged -- a colorless mood simply has
+  `'colorless'` -- but a colorless mood has **no color to share or count**, so the places that compare or tally
+  colors skip it: color-sharing play grants (`sharesColorWithOwnMoods`), Scorn, Denial/Rejection, Shame,
+  Curiosity, Celebration, Fickleness/Bitterness, Bliss, Kinship, Honesty and the Chaos color counters; under
+  Imagination every mood (colorless included) is the declared color. Anything keyed by the five colors guards
+  the new bucket (Even Color Distribution deck rules can never be met by a deck holding one; league and stats
+  sorts put it last; the deck builder's color filter lists it). Structure and Power decks (the generators and the `structure`/`power` duel presets) never look at color,
+  so they include colorless cards -- a colorless mythic can be a Power deck's one Mythic -- like any other. jceddy's 75/150 decks keep their per-color quota, but a
+  colorless card is a **wildcard** that can stand in for any color's share: the generator
+  (`randomCardIdsWithCopyLimit()`) offers a rarity's colorless cards as candidates for every color's slot,
+  weighting each colorless copy at 1/5 (it is a candidate in all five draws) so a colorless card is picked
+  about as often as a card of one color, tracking copies deck-wide so it never exceeds its rarity's copy cap, and
+  `DuelDeckRules::validate()`'s even-color-distribution check counts a colorless card toward the rarity's
+  total (which must still divide by five) while only requiring that no color exceed its share -- the same
+  rule applies to a user-defined duel's even-distribution rarities.
+  Unity is the first **`RoundWinEffect`**: `determineRoundWinner()` asks every in-play one after scoring (and
+  after the score swaps) and, if any owner qualifies, the winner is chosen among the qualifying owners --
+  or their team -- by the usual scores and tiebreak instead of among everyone. It counts only your own
+  moods that share a color (colorless ones, itself included, share none).
+
+
 ### Default selections mode (issue #274)
 
 A per-game setting (`games.default_selections_mode`, migration `0087`), NOT

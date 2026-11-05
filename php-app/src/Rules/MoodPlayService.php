@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace MoodSwings\Rules;
 
+use MoodSwings\Rules\Effects\Custom\ResilienceEffect;
 use MoodSwings\Rules\Exceptions\IllegalPlayException;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 
@@ -208,6 +209,8 @@ final class MoodPlayService
             $state->grantExtraPlay(1, ['requiresSourceInPlay' => true], $cardId);
         } elseif ($effectiveEffectKey === 'grace') {
             $state->grantExtraPlay(1, ['type' => 'shares_color_with_your_moods', 'source' => 'discard', 'requiresSourceInPlay' => true], $cardId);
+        } elseif ($effectiveEffectKey === 'resilience') {
+            $state->grantExtraPlay(1, ResilienceEffect::RESTRICTION, $cardId);
         }
 
         return $this->resolveAfterPlayingChain($state, $cardId, $playerId, $choices, $choices, 0);
@@ -303,6 +306,12 @@ final class MoodPlayService
         }
 
         return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationChoices, $invocationSeq, $eligibleSources, $reactorCandidateCardIds);
+    }
+
+    /** The effect registry this service dispatches to (GameService looks up TurnStartEffect triggers through it). */
+    public function registry(): EffectRegistry
+    {
+        return $this->registry;
     }
 
     /**

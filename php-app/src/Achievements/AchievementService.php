@@ -600,7 +600,9 @@ final class AchievementService
             $colorCounts = ['white' => 0, 'blue' => 0, 'black' => 0, 'red' => 0, 'green' => 0];
             $onlyCommonUncommon = true;
             foreach ($board as $row) {
-                $colorCounts[$row['color']]++;
+                if (isset($colorCounts[$row['color']])) {
+                    $colorCounts[$row['color']]++;
+                }
                 if (!in_array($row['rarity'], ['common', 'uncommon'], true)) {
                     $onlyCommonUncommon = false;
                 }

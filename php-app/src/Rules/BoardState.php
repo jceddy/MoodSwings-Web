@@ -114,6 +114,22 @@ final class BoardState
     /** Whoever took the first turn of the current round (e.g. for Chivalry/Triumph) -- distinct from currentPlayerId, which changes every turn. */
     private ?int $roundFirstPlayerId = null;
 
+    /**
+     * @var array<int, true> playerId => true for every player who, since the current turn began, discarded a
+     * card from their hand OR had one of their moods put into the discard pile from play (Schadenfreude: "if
+     * another player discarded a card or had a mood put into the discard pile this turn"). A mood that went to
+     * a hand, the deck or anywhere else doesn't count, and neither does a card moved from the deck (Carelessness).
+     * Persisted on the live round (BoardStateRepository, game_rounds.turn_discards) and emptied whenever a turn
+     * begins -- see resetTurnDiscards().
+     */
+    private array $turnDiscards = [];
+
+    /** @var list<array{playerId: int, color: string, amount: int}> Vitality's round-long color bonuses -- see addRoundColorBonus(). */
+    private array $roundColorBonuses = [];
+
+    /** @var array<int, int> playerId => rounds that player (their team, in a team format) has won so far -- see setRoundWins(). */
+    private array $roundWins = [];
+
     /** The current round's number (game_rounds.round_number), used to stamp newly-played moods with when they were played -- see moveHandToInPlay()/moveDiscardToInPlay() and the 'playedInRound' effectState key (Patience, Glee, Doubt). */
     private ?int $currentRoundNumber = null;
 
@@ -1063,6 +1079,7 @@ final class BoardState
     public function moveInPlayToDiscard(int $cardId): void
     {
         $ownerId = $this->moodInPlay($cardId)->ownerId;
+        $this->turnDiscards[$ownerId] = true;
         $value = $this->valueOf($cardId);
         $this->discardOwners[$cardId] = $ownerId;
         unset($this->moodsInPlay[$cardId]);
@@ -1153,7 +1170,57 @@ final class BoardState
         $this->discard[] = $cardId;
         $this->discardOwners[$cardId] = $playerId;
         $this->discardedThisRound = true;
+        $this->turnDiscards[$playerId] = true;
         $this->recordMove($cardId, 'hand', 'discard', fromPlayerId: $playerId);
+    }
+
+    /**
+     * "Put the top card of the deck into the discard pile" (Wastefulness, Carelessness): moves the top
+     * card of $playerId's deck -- the shared deck, or that player's own in a 'duel' game -- straight to
+     * the discard pile without it ever being drawn. Returns the card, or null when that deck is empty.
+     */
+    public function moveDeckTopToDiscard(int $playerId): ?int
+    {
+        $key = $this->deckKeyFor($playerId);
+        $cardId = isset($this->decks[$key]) ? array_shift($this->decks[$key]) : null;
+        if ($cardId === null) {
+            return null;
+        }
+        $this->discard[] = $cardId;
+        $this->discardOwners[$cardId] = $playerId;
+        $this->discardedThisRound = true;
+        $this->recordMove($cardId, 'deck', 'discard', fromPlayerId: $playerId);
+
+        return $cardId;
+    }
+
+    /**
+     * Inspiration: takes a chosen card out of $playerId's deck -- wherever it sits -- into their hand,
+     * without drawing it. A real card move (deck to hand), so the log and replay show it.
+     */
+    public function moveDeckCardToHand(int $playerId, int $cardId): void
+    {
+        $key = $this->deckKeyFor($playerId);
+        $index = array_search($cardId, $this->decks[$key] ?? [], true);
+        if ($index === false) {
+            throw new InvalidArgumentException("Card {$cardId} is not in player {$playerId}'s deck");
+        }
+        array_splice($this->decks[$key], $index, 1);
+        $this->hands[$playerId][] = $cardId;
+        $this->recordMove($cardId, 'deck', 'hand', fromPlayerId: $playerId, toPlayerId: $playerId);
+    }
+
+    /** Inspiration: moves a card already in $playerId's deck to the bottom of that deck. */
+    public function moveDeckCardToBottom(int $playerId, int $cardId): void
+    {
+        $key = $this->deckKeyFor($playerId);
+        $index = array_search($cardId, $this->decks[$key] ?? [], true);
+        if ($index === false) {
+            throw new InvalidArgumentException("Card {$cardId} is not in player {$playerId}'s deck");
+        }
+        array_splice($this->decks[$key], $index, 1);
+        $this->decks[$key][] = $cardId;
+        $this->recordMove($cardId, 'deck', 'deck', fromPlayerId: $playerId);
     }
 
     public function moveHandToBottomOfDeck(int $playerId, int $cardId): void
@@ -1919,7 +1986,88 @@ final class BoardState
             return 0;
         }
 
-        return $this->applyChaosValuePipeline($cardId, $this->printedValueOf($cardId, $mood)) + $this->chaosValueDeltaOf($cardId);
+        return $this->applyChaosValuePipeline($cardId, $this->printedValueOf($cardId, $mood))
+            + $this->chaosValueDeltaOf($cardId)
+            + $this->staticValueModifiersFor($cardId, $mood)
+            + $this->roundColorBonusFor($cardId, $mood);
+    }
+
+    /**
+     * Whether an effect_key's effect is a ValueModifyingEffect -- memoized, since valueOf() asks about
+     * every mood in play each time it runs (the registry lookup is the only non-trivial part).
+     *
+     * @var array<string, bool>
+     */
+    private array $valueModifierEffectKeys = [];
+
+    /**
+     * What every other mood in play adds to $cardId's value through a "while in play -- each of your moods
+     * that ... has its value increased" ability (ValueModifyingEffect): Ardor, Humility, Kinship, Verve,
+     * Orderliness. Applied on top of everything else valueOf() computes, so it stacks with a one-time
+     * "value becomes N" or a conditional alt value rather than replacing them. Suppression only zeroes a
+     * mood's own value -- like every other "while in play" ability in the engine, a suppressed source
+     * keeps applying.
+     */
+    private function staticValueModifiersFor(int $cardId, MoodInPlay $mood): int
+    {
+        $total = 0;
+        foreach ($this->moodsInPlay as $sourceCardId => $source) {
+            $effectKey = $this->catalogRow($this->effectiveCardId($sourceCardId))['effectKey'];
+            if (!($this->valueModifierEffectKeys[$effectKey] ??= $this->registry->has($effectKey) && $this->registry->for($effectKey) instanceof ValueModifyingEffect)) {
+                continue;
+            }
+            $total += $this->registry->for($effectKey)->valueModifierFor($this, $sourceCardId, $cardId);
+        }
+
+        return $total;
+    }
+
+    /**
+     * Vitality: "until the end of this round, each of your moods of that color has its value increased by
+     * N" -- remembered as a round-long (player, color, amount) entry rather than stamped on moods, so it
+     * reaches every mood that player owns of that color for the rest of the round, whenever it was played
+     * and whatever happens to the mood that created the bonus. Entries stack. Persisted on the round
+     * (BoardStateRepository, game_rounds.round_value_bonuses) and dropped by clearEndOfRoundValueBonuses().
+     */
+    public function addRoundColorBonus(int $playerId, string $color, int $amount): void
+    {
+        $this->roundColorBonuses[] = ['playerId' => $playerId, 'color' => $color, 'amount' => $amount];
+    }
+
+    /** @return list<array{playerId: int, color: string, amount: int}> */
+    public function roundColorBonuses(): array
+    {
+        return $this->roundColorBonuses;
+    }
+
+    /** @param list<array{playerId: int, color: string, amount: int}> $bonuses */
+    public function restoreRoundColorBonuses(array $bonuses): void
+    {
+        $this->roundColorBonuses = array_values($bonuses);
+    }
+
+    /** What the round's color bonuses add to $cardId right now: those for its CURRENT owner and CURRENT color. */
+    private function roundColorBonusFor(int $cardId, MoodInPlay $mood): int
+    {
+        if ($this->roundColorBonuses === []) {
+            return 0;
+        }
+
+        $color = $this->colorOf($cardId);
+        $total = 0;
+        foreach ($this->roundColorBonuses as $bonus) {
+            if ($bonus['playerId'] === $mood->ownerId && $bonus['color'] === $color) {
+                $total += $bonus['amount'];
+            }
+        }
+
+        return $total;
+    }
+
+    /** Drops every addRoundColorBonus() entry -- called wherever the round's end-of-round suppressions are lifted. */
+    public function clearEndOfRoundValueBonuses(): void
+    {
+        $this->roundColorBonuses = [];
     }
 
     /**
@@ -2385,6 +2533,59 @@ final class BoardState
     {
         $this->roundFirstPlayerId = $playerId;
         $this->currentRoundNumber = $roundNumber;
+    }
+
+    /**
+     * The rounds each player has won so far (their team's, in a team format), loaded alongside the board
+     * -- see BoardStateRepository::roundWins(). Round wins aren't a stored counter anywhere (they're
+     * derived from the 'scored' game_rounds rows), so GameService refreshes this right after it records
+     * a round's winner, before the after-scoring effects that read it run. Empty (everyone at 0) for a
+     * hand-built board or a replayed one.
+     *
+     * @param array<int, int> $winsByPlayerId
+     */
+    public function setRoundWins(array $winsByPlayerId): void
+    {
+        $this->roundWins = $winsByPlayerId;
+    }
+
+    /** Rounds $playerId has won so far (Vindication, Resolve, Perseverance). */
+    public function roundWinsOf(int $playerId): int
+    {
+        return $this->roundWins[$playerId] ?? 0;
+    }
+
+    /**
+     * What $cardId's own "while scoring" ability adds to its owner's round score on top of the plain sum of
+     * values -- 0 unless its effect is a ScoringBonusEffect (Fulfillment, Gratitude).
+     */
+    public function scoringBonusOf(int $cardId): int
+    {
+        $effectKey = $this->catalogRow($this->effectiveCardId($cardId))['effectKey'];
+        if (!$this->registry->has($effectKey)) {
+            return 0;
+        }
+        $effect = $this->registry->for($effectKey);
+
+        return $effect instanceof ScoringBonusEffect ? $effect->scoringBonus($this, $cardId, $this->ownerOf($cardId)) : 0;
+    }
+
+    /** @return int[] the players who have discarded a card from hand or had a mood put into the discard pile during the current turn */
+    public function playersWhoDiscardedThisTurn(): array
+    {
+        return array_keys($this->turnDiscards);
+    }
+
+    /** @param int[] $playerIds */
+    public function restoreTurnDiscards(array $playerIds): void
+    {
+        $this->turnDiscards = array_fill_keys(array_map(intval(...), $playerIds), true);
+    }
+
+    /** A turn (or round) begins: nobody has discarded from hand yet this turn. */
+    public function resetTurnDiscards(): void
+    {
+        $this->turnDiscards = [];
     }
 
     public function currentRoundNumber(): ?int
@@ -2943,6 +3144,10 @@ final class BoardState
     private function sharesColorWithOwnMoods(int $cardId, int $playerId): bool
     {
         $color = $this->colorOf($cardId);
+        // A colorless card has no color to share (and no color-sharing grant covers one).
+        if ($color === 'colorless') {
+            return false;
+        }
         foreach ($this->moodsOwnedBy($playerId) as $mood) {
             if ($this->colorOf($mood->cardId) === $color) {
                 return true;

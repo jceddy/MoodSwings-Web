@@ -33,7 +33,7 @@ final class RejectionEffect extends AbstractMoodEffect
             }
         }
         if (
-            $state->colorOf($firstCardId) !== $state->colorOf($secondCardId)
+            ($state->colorOf($firstCardId) !== $state->colorOf($secondCardId) || $state->colorOf($firstCardId) === 'colorless')
             && $state->valueOf($firstCardId) !== $state->valueOf($secondCardId)
         ) {
             throw new InvalidChoiceException('The two chosen moods must share a color or have the same value');

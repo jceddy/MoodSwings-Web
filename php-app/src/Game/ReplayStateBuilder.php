@@ -446,6 +446,10 @@ final class ReplayStateBuilder
             $originOwner = $discardOwners[$cardId] ?? null;
             $discard = self::without($discard, $cardId);
             unset($discardOwners[$cardId]);
+        } elseif ($move['from_zone'] === 'deck') {
+            // Straight off the top of a deck (moveDeckTopToDiscard()) without being drawn.
+            $originOwner = $move['from_player_id'];
+            $decks = self::withoutFromAnyDeck($decks, $cardId);
         }
 
         if ($move['to_zone'] === 'discard') {
@@ -572,6 +576,9 @@ final class ReplayStateBuilder
             $hands[$move['from_player_id']][] = $cardId;
         } elseif ($move['from_zone'] === 'discard') {
             $discard[] = $cardId;
+        } elseif ($move['from_zone'] === 'deck') {
+            $key = $hasSeparateDecks && $move['from_player_id'] !== null ? $move['from_player_id'] : BoardState::SHARED_DECK_KEY;
+            array_unshift($decks[$key], $cardId);
         }
     }
 
@@ -707,6 +714,7 @@ final class ReplayStateBuilder
                 'hasWhileInPlay' => (bool) $row['has_while_in_play_ability'],
                 'hasAfterPlaying' => (bool) $row['has_after_playing_ability'],
                 'rulesText' => $row['rules_text'],
+                'artSetCode' => $row['art_set_code'],
             ];
         }
 

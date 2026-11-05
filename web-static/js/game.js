@@ -1228,8 +1228,11 @@
     // same reference DuelDeckRules/GameService::RARITIES already use),
     // rather than plain alphabetical, since neither color nor rarity
     // names sort alphabetically into a meaningful order.
+    // JCEDDYS_75_DECK_COLORS' order with colorless last (an unknown color would otherwise sort first, at -1).
+    const DECK_BUILDER_COLOR_ORDER = ['white', 'blue', 'black', 'red', 'green', 'colorless'];
+
     const DECK_BUILDER_SORT_COMPARATORS = {
-        color: (a, b) => JCEDDYS_75_DECK_COLORS.indexOf(a.color) - JCEDDYS_75_DECK_COLORS.indexOf(b.color),
+        color: (a, b) => DECK_BUILDER_COLOR_ORDER.indexOf(a.color) - DECK_BUILDER_COLOR_ORDER.indexOf(b.color),
         rarity: (a, b) => RARITIES.indexOf(a.rarity) - RARITIES.indexOf(b.rarity),
         name: (a, b) => a.name.localeCompare(b.name),
     };
@@ -2106,7 +2109,7 @@
     const DECK_TYPE_DESCRIPTIONS = {
         structure: 'A 45-card deck matching a new physical box’s printed rarity mix: 23 common, 14 uncommon, 6 rare, and 2 mythic moods.',
         power: 'A fast 15-card deck: 1 random mythic mood plus 14 other random moods.',
-        jceddys_75: 'A 75-card deck: for each color, 1 random mythic, 2 different random rares, 4 random uncommons (up to 2 copies of any one), and 8 random commons (up to 3 copies of any one).',
+        jceddys_75: 'A 75-card deck: for each color, 1 random mythic, 2 different random rares, 4 random uncommons (up to 2 copies of any one), and 8 random commons (up to 3 copies of any one). A colorless card can fill any color\'s slot.',
         custom: 'Upload or paste your own decklist: at least 15 cards, plus 15 more per player beyond the first two.',
         custom_duel: 'Each player uploads/pastes their own decklist, validated against deck-building rules you choose below.',
         quick_draft: '2-4 players each draft their own deck live from a shared card pool (16 cards for 2 or 4 players, 18 for 3), trim it down to at least 12. A 2-player draft plays a best-of-three match, sideboarding freely between games; a 3-4 player draft plays a single game.',
@@ -2420,7 +2423,7 @@
     const DUEL_RULES_PRESET_SUMMARIES = {
         structure: 'Exactly 45 cards: 23 common, 14 uncommon, 6 rare, 2 mythic. No duplicate cards.',
         power: 'At least 15 cards, at most 1 mythic. No duplicate cards.',
-        jceddys_75: 'Exactly 75 cards: 40 common (up to 3 copies of any one), 20 uncommon (up to 2 copies of any one), 10 rare, 5 mythic. No duplicate rare or mythic cards. Every rarity split evenly across all 5 colors.',
+        jceddys_75: 'Exactly 75 cards: 40 common (up to 3 copies of any one), 20 uncommon (up to 2 copies of any one), 10 rare, 5 mythic. No duplicate rare or mythic cards. Every rarity split evenly across all 5 colors (a colorless card can stand in for any color).',
     };
 
     function updateDeckTypeDescription() {
@@ -2927,6 +2930,7 @@
             // per the issue's own "visible to the players playing it (at
             // least in the lobby)" requirement.
             formatEl.textContent = formatAndDeckDescription +
+                cardSetsDescription(game.card_set_codes) +
                 (game.default_selections_mode ? ', default selections' : '');
             infoEl.appendChild(formatEl);
         }
@@ -3818,6 +3822,7 @@
     document.getElementById('new-game-format').addEventListener('change', updateBestOfThreeFieldVisibility);
     document.getElementById('new-game-random-teams').addEventListener('change', updateTeamFields);
     document.getElementById('new-game-deck-type').addEventListener('change', updateDeckTypeDescription);
+    document.getElementById('new-game-deck-type').addEventListener('change', updateCardSetsFieldVisibility);
     document.getElementById('new-game-deck-type').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-deck-type').addEventListener('change', updateBotCheckboxAvailability);
     document.getElementById('new-game-deck-type').addEventListener('change', updateBestOfThreeFieldVisibility);
@@ -4005,6 +4010,58 @@
     // freely editable before submitting -- this only changes the dialog's
     // OWN starting values, the same way the default_selections_mode
     // checkbox already gets overridden from a personal preference below.
+    // -- Card sets for random pools --------------------------------------
+    //
+    // GET /cards/sets lists the sets this player may use: the original set, plus any custom set once they
+    // opted into custom content (Settings). The field only shows up when there is a real choice (2+ sets),
+    // and only for deck types whose pool is generated from the catalog -- a custom decklist names its own
+    // cards, and the Daily/Weekly Sealed Pools are always original-set only (the server ignores the choice
+    // for those anyway, this just doesn't offer it).
+    const CARD_SET_DECK_TYPES_WITHOUT_A_RANDOM_POOL = ['custom', 'custom_duel', 'sealed_pool_of_the_day', 'weekly_sealed_pool'];
+    const ORIGINAL_CARD_SET_CODE = 'MSW';
+    let availableCardSets = [];
+
+    // ", sets: MSW + XEMB" for a game whose random pools use anything but the original set alone; '' otherwise.
+    function cardSetsDescription(codes) {
+        return codes && !(codes.length === 1 && codes[0] === ORIGINAL_CARD_SET_CODE) ? ', sets: ' + codes.join(' + ') : '';
+    }
+
+    async function loadCardSetOptions(selectedCodes) {
+        const { ok, body } = await getCardSets();
+        availableCardSets = ok ? body.sets : [];
+
+        const container = document.getElementById('new-game-card-sets-options');
+        container.innerHTML = '';
+        const selected = selectedCodes && selectedCodes.length > 0 ? selectedCodes : [ORIGINAL_CARD_SET_CODE];
+        for (const set of availableCardSets) {
+            const label = document.createElement('label');
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = set.code;
+            checkbox.checked = selected.includes(set.code);
+            label.appendChild(checkbox);
+            label.append(' ' + set.name + ' (' + set.code + ', ' + set.card_count + ' cards' + (set.is_custom ? ', custom' : '') + ')');
+            container.appendChild(label);
+        }
+        updateCardSetsFieldVisibility();
+    }
+
+    function updateCardSetsFieldVisibility() {
+        const deckType = document.getElementById('new-game-deck-type').value;
+        document.getElementById('new-game-card-sets-field').hidden =
+            availableCardSets.length < 2 || CARD_SET_DECK_TYPES_WITHOUT_A_RANDOM_POOL.includes(deckType);
+    }
+
+    // The set codes to send: undefined (omitted) for "just the original set", which is what the server
+    // assumes -- including when the field is hidden, or the player unticked everything.
+    function selectedCardSetCodes() {
+        if (document.getElementById('new-game-card-sets-field').hidden) {
+            return undefined;
+        }
+        const codes = Array.from(document.querySelectorAll('#new-game-card-sets-options input:checked')).map((input) => input.value);
+        return codes.length === 0 || (codes.length === 1 && codes[0] === ORIGINAL_CARD_SET_CODE) ? undefined : codes;
+    }
+
     async function openNewGameDialog(prefill) {
         newGameError.hidden = true;
         newGameForm.reset();
@@ -4032,6 +4089,7 @@
         // label) back in line with that.
         updateNewGameModeFields();
         updateDeckTypeAvailability();
+        await loadCardSetOptions(prefill ? prefill.cardSetCodes : undefined);
 
         const [{ ok, body }, botsResp] = await Promise.all([listFriends(), listPracticeBots()]);
         const friends = ok ? body.friends : [];
@@ -6010,6 +6068,9 @@
             : deckType === 'rotisserie_draft' && rotisserieDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-rotisserie-draft-saved-decklist').value) || undefined
             : undefined;
         const defaultSelectionsMode = document.getElementById('new-game-default-selections').checked;
+        // Which card set(s) the game's random pools use -- undefined (the original set only) unless the
+        // player picked something else; see selectedCardSetCodes().
+        const cardSetCodes = selectedCardSetCodes();
         // Only meaningful for deck_type 'custom_duel' with 1+ bots checked
         // -- one entry per checked bot, keyed by that bot's own user id --
         // see updateBotDecklistFieldsVisibility()/collectBotDecklists()
@@ -6106,6 +6167,7 @@
                 timeout_action: timeoutAction,
                 total_time_limit_minutes: totalTimeLimitMinutes,
                 synchronous_mode: synchronousMode,
+                card_set_codes: cardSetCodes,
             });
 
             if (!ok) {
@@ -6156,6 +6218,7 @@
             timeoutAction,
             totalTimeLimitMinutes,
             synchronousMode,
+            cardSetCodes,
         );
 
         if (!ok) {
@@ -6219,8 +6282,11 @@
         }
     }
 
+    // card.art_set_code is the folder under img/cards/ the print lives in: 'MSW' for the original set
+    // (and for a custom set's reprints of it), a custom set's own code for its new cards. Anything
+    // without the field (older payloads) is original-set art.
     function defaultCardArtUrl(card) {
-        return '../img/cards/MSW/' + card.catalog_card_id + '-' + slugify(card.name) + '.webp';
+        return '../img/cards/' + (card.art_set_code || 'MSW') + '/' + card.catalog_card_id + '-' + slugify(card.name) + '.webp';
     }
 
     // Session-lived record of skin/catalog_card_id combos already known to
@@ -6246,7 +6312,8 @@
     // when that file doesn't exist (yet).
     function cardArtUrl(card) {
         const skin = cardSkinPreference();
-        if (!CARD_ART_SKINS.includes(skin) || missingThemedArt.has(skin + ':' + card.catalog_card_id)) {
+        // Themed skins only exist for the original set's art.
+        if (!CARD_ART_SKINS.includes(skin) || (card.art_set_code || 'MSW') !== 'MSW' || missingThemedArt.has(skin + ':' + card.catalog_card_id)) {
             return defaultCardArtUrl(card);
         }
         return '../img/cards/MSW/' + skin + '/' + card.catalog_card_id + '-' + slugify(card.name) + '.webp';
@@ -8279,6 +8346,7 @@
         const synchronousDescription = state.game.synchronous_mode ? ', synchronous' : '';
         document.getElementById('board-title').textContent =
             'Game #' + state.game.id + ' (' + formatAndDeckDescription +
+            cardSetsDescription(state.game.card_set_codes) +
             (state.game.default_selections_mode ? ', default selections' : '') +
             totalTimeLimitDescription +
             timeoutDescription +
@@ -8942,6 +9010,7 @@
         renderSpectatorFinalHands(isReadOnlyView() ? state : null);
 
         renderTeammateHand(state);
+        renderRevealedHands(state);
         renderTeamDecision(state.team_decision);
         checkChaosDraftOffer(state);
         renderInitialCardPass(state);
@@ -9094,6 +9163,35 @@
             group.appendChild(list);
 
             section.appendChild(group);
+        });
+    }
+
+    // Candor ("your opponents play with their hands revealed"): GameService adds you.revealed_hands -- one
+    // read-only hand per opponent -- only for a player who has a Candor in play. Same card thumbs as the
+    // teammate's hand; clicking one opens the ordinary detail view.
+    function renderRevealedHands(state) {
+        const section = document.getElementById('revealed-hands-section');
+        const hands = state.you.revealed_hands;
+        if (!hands) {
+            section.hidden = true;
+            section.textContent = '';
+            return;
+        }
+
+        section.hidden = false;
+        section.textContent = '';
+        hands.forEach((entry) => {
+            const heading = document.createElement('h3');
+            heading.textContent = playerLabelFor(entry.game_player_id) + "'s hand (revealed)";
+            section.appendChild(heading);
+
+            const list = document.createElement('ul');
+            renderList(list, { hidden: true }, entry.hand, (card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                return li;
+            });
+            section.appendChild(list);
         });
     }
 
@@ -9693,6 +9791,7 @@
             format: state.game.format,
             deckType: state.game.deck_type,
             defaultSelectionsMode: state.game.default_selections_mode,
+            cardSetCodes: state.game.card_set_codes,
             opponentUserIds: opponents.map((p) => p.user_id),
             partnerUserId: partner ? partner.user_id : null,
             duelDeckRules: state.game.duel_deck_rules,
@@ -11870,6 +11969,11 @@
                         value: c.card_id,
                         label: cardLabel(c) + (c.last_owner_name ? ' — ' + c.last_owner_name : ''),
                     }));
+            case 'revealed_card':
+                // Cards just revealed to the whole table (Greed/Nosiness/Entitlement's opponent hand,
+                // Inspiration's top three) that sit in no zone the client lists: like 'grant_choice', the
+                // options are already fully server-computed (GameService::serializePendingDecision()).
+                return field.options || [];
             case 'grant_choice':
                 // Unlike every other case here, the options themselves are
                 // already fully server-computed (GameService::
@@ -12522,6 +12626,9 @@
             enthusiasm_extra_score: "Enthusiasm's bonus",
             passion_score_opponent_mood: "Passion's bonus",
             after_scoring_order: 'Order your after-scoring effects',
+            // An "at the start of each of your turns" mood (Brooding, Jealousy, ...) -- asked of
+            // whoever its effect needs, which isn't always the turn's owner.
+            turn_start_trigger: (pendingDecision.played_card_name || 'A mood') + ' triggered at the start of a turn',
         };
         document.getElementById('pending-decision-title').textContent =
             titlesByDecisionType[pendingDecision.decision_type] || 'Respond to ' + (pendingDecision.played_card_name || 'a mood');

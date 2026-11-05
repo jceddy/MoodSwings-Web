@@ -314,7 +314,9 @@ final class ChaosDefaultEffectRegistry
     {
         $colors = [];
         foreach ($state->moodsOwnedBy($playerId) as $mood) {
-            $colors[$state->colorOf($mood->cardId)] = true;
+            if ($state->colorOf($mood->cardId) !== 'colorless') {
+                $colors[$state->colorOf($mood->cardId)] = true;
+            }
         }
 
         return count($colors);
@@ -364,7 +366,9 @@ final class ChaosDefaultEffectRegistry
     {
         $colors = [];
         foreach ($state->moodsInPlay() as $mood) {
-            $colors[$state->colorOf($mood->cardId)] = true;
+            if ($state->colorOf($mood->cardId) !== 'colorless') {
+                $colors[$state->colorOf($mood->cardId)] = true;
+            }
         }
 
         return count($colors) >= 5;

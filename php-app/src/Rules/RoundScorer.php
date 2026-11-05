@@ -58,6 +58,8 @@ final class RoundScorer
         }
 
         foreach ($state->moodsInPlay() as $mood) {
+            $scores[$mood->ownerId] += $state->scoringBonusOf($mood->cardId);
+
             $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
 
             if (in_array($effectKey, self::AUTOMATIC_SCORE_MULTIPLYING_EFFECT_KEYS, true)) {
@@ -85,7 +87,7 @@ final class RoundScorer
 
     private function sumOwnMoodsSharingColor(BoardState $state, int $ownerId, ?string $color): int
     {
-        if ($color === null) {
+        if ($color === null || $color === 'colorless') {
             return 0;
         }
 
