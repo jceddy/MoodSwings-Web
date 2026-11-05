@@ -24,6 +24,7 @@ final class CustomConditionalValueEffect extends AbstractMoodEffect
     public const DISCARD_PILE_AT_LEAST = 'discard_pile_at_least';
     public const EVEN_NUMBERED_MOODS_AT_LEAST = 'even_numbered_moods_at_least';
     public const OTHER_OWN_RED_MOODS_AT_LEAST = 'other_own_red_moods_at_least';
+    public const OWN_ROUND_WINS_FEWER_THAN_EACH_OTHER = 'own_round_wins_fewer_than_each_other';
 
     public function __construct(private readonly string $condition, private readonly int $threshold = 0)
     {
@@ -49,6 +50,7 @@ final class CustomConditionalValueEffect extends AbstractMoodEffect
             self::DISCARD_PILE_AT_LEAST => count($state->discardPile()) >= $this->threshold,
             self::EVEN_NUMBERED_MOODS_AT_LEAST => $this->evenNumberedMoods($state) >= $this->threshold,
             self::OTHER_OWN_RED_MOODS_AT_LEAST => $this->otherOwnRedMoods($state, $cardId, $ownerId) >= $this->threshold,
+            self::OWN_ROUND_WINS_FEWER_THAN_EACH_OTHER => CustomEffectSupport::hasWonFewerRoundsThanEachOther($state, $ownerId),
         };
     }
 

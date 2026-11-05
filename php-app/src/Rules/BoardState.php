@@ -114,6 +114,9 @@ final class BoardState
     /** Whoever took the first turn of the current round (e.g. for Chivalry/Triumph) -- distinct from currentPlayerId, which changes every turn. */
     private ?int $roundFirstPlayerId = null;
 
+    /** @var array<int, int> playerId => rounds that player (their team, in a team format) has won so far -- see setRoundWins(). */
+    private array $roundWins = [];
+
     /** The current round's number (game_rounds.round_number), used to stamp newly-played moods with when they were played -- see moveHandToInPlay()/moveDiscardToInPlay() and the 'playedInRound' effectState key (Patience, Glee, Doubt). */
     private ?int $currentRoundNumber = null;
 
@@ -2458,6 +2461,26 @@ final class BoardState
     {
         $this->roundFirstPlayerId = $playerId;
         $this->currentRoundNumber = $roundNumber;
+    }
+
+    /**
+     * The rounds each player has won so far (their team's, in a team format), loaded alongside the board
+     * -- see BoardStateRepository::roundWins(). Round wins aren't a stored counter anywhere (they're
+     * derived from the 'scored' game_rounds rows), so GameService refreshes this right after it records
+     * a round's winner, before the after-scoring effects that read it run. Empty (everyone at 0) for a
+     * hand-built board or a replayed one.
+     *
+     * @param array<int, int> $winsByPlayerId
+     */
+    public function setRoundWins(array $winsByPlayerId): void
+    {
+        $this->roundWins = $winsByPlayerId;
+    }
+
+    /** Rounds $playerId has won so far (Vindication, Resolve, Perseverance). */
+    public function roundWinsOf(int $playerId): int
+    {
+        return $this->roundWins[$playerId] ?? 0;
     }
 
     public function currentRoundNumber(): ?int

@@ -22,7 +22,8 @@ use PDOException;
 use PHPUnit\Framework\TestCase;
 
 /**
- * "At the start of each of your turns" moods of the community set (TurnStartEffect): a real two-seat
+ * "At the start of each of your turns" moods of the community set (TurnStartEffect), plus the other custom cards
+ * that need real game flow (round wins, after-scoring): a real two-seat
  * duel is built straight in the database, a turn is handed over with pass(), and the trigger is
  * followed through its pending decision(s) with respondToDecision().
  */
@@ -395,6 +396,44 @@ final class TurnStartTriggersIntegrationTest extends TestCase
 
         $this->games->pass($this->gameId, $this->p2); // the round ends
         self::assertSame(0, $this->state()->valueOf($anger), 'the bonus lasts only until the end of the round');
+    }
+
+    public function testPerseveranceGrowsAfterARoundThatLeavesItsOwnerBehind(): void
+    {
+        $perseverance = $this->card('Perseverance', 'in_play', $this->p1); // 2
+        $this->card('Apathy', 'in_play', $this->p2); // 4 -- player 2 wins round 1
+        $this->card('Creativity', 'hand', $this->p1);
+        $this->card('Creativity', 'hand', $this->p2);
+
+        $this->games->pass($this->gameId, $this->p1);
+        $this->games->pass($this->gameId, $this->p2); // round 1 scores
+
+        $state = $this->state();
+        self::assertSame(4, $state->valueOf($perseverance), 'behind 0-1 after the round: +2, permanently');
+        self::assertSame(1, $state->roundWinsOf($this->p2));
+        self::assertSame(0, $state->roundWinsOf($this->p1));
+    }
+
+    public function testPerseveranceDoesNotGrowForTheRoundsWinner(): void
+    {
+        $perseverance = $this->card('Perseverance', 'in_play', $this->p1); // 2 -- beats nothing
+        $this->card('Creativity', 'hand', $this->p1);
+        $this->card('Creativity', 'hand', $this->p2);
+
+        $this->games->pass($this->gameId, $this->p1);
+        $this->games->pass($this->gameId, $this->p2); // player 1 wins round 1, 2-0
+
+        self::assertSame(2, $this->state()->valueOf($perseverance));
+        self::assertSame(1, $this->state()->roundWinsOf($this->p1));
+    }
+
+    public function testVindicationReadsRoundWinsFromTheScoredRounds(): void
+    {
+        $vindication = $this->card('Vindication', 'in_play', $this->p1);
+        $this->pdo->prepare("INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, status, winner_game_player_id, wins_awarded) VALUES (:g, 0, :p, NULL, 0, 'scored', :p, 2)")
+            ->execute(['g' => $this->gameId, 'p' => $this->p1]);
+
+        self::assertSame(2 + 2 * 2, $this->state()->valueOf($vindication), 'a round that awarded two wins counts twice');
     }
 
     public function testReplayFollowsAWastefulnessCardFromTheDeckToTheDiscardPile(): void

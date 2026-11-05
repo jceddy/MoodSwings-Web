@@ -153,6 +153,8 @@ use MoodSwings\Rules\Effects\Custom\KinshipEffect;
 use MoodSwings\Rules\Effects\Custom\OrderlinessEffect;
 use MoodSwings\Rules\Effects\Custom\VerveEffect;
 use MoodSwings\Rules\Effects\Custom\VitalityEffect;
+use MoodSwings\Rules\Effects\Custom\PerseveranceEffect;
+use MoodSwings\Rules\Effects\Custom\VindicationEffect;
 
 /**
  * Wires up every MoodEffect for the full 133-card pool -- every card with
@@ -481,6 +483,11 @@ final class DefaultEffectRegistry
         $registry->register('orderliness', new OrderlinessEffect());
         $registry->register('verve', new VerveEffect());
         $registry->register('vitality', new VitalityEffect());
+
+        // Round-win counts.
+        $registry->register('resolve', new CustomConditionalValueEffect(CustomConditionalValueEffect::OWN_ROUND_WINS_FEWER_THAN_EACH_OTHER));
+        $registry->register('vindication', new VindicationEffect());
+        $registry->register('perseverance', new PerseveranceEffect());
 
         return $registry;
     }

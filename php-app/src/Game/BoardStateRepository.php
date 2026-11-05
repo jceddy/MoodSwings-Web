@@ -155,6 +155,8 @@ final class BoardStateRepository
 
         $state = new BoardState($catalog, $this->registry, $playerIds, $hands, $deck, $discard, $hasSeparateDecks, $discardOwners, $catalogCardIdFor, $teamIdByPlayer, $resignedPlayerIds, $bankedExtraPlays, $chaosCatalog, $this->chaosRegistry, $chaosEffectIdFor);
 
+        $state->setRoundWins($this->roundWins($gameId));
+
         foreach ($inPlayRows as $row) {
             $state->restoreMoodInPlay(
                 (int) $row['id'],
@@ -229,6 +231,44 @@ final class BoardStateRepository
         }
 
         return $state;
+    }
+
+    /**
+     * Rounds won so far by each seated player, keyed by game_player_id: the sum of wins_awarded over the
+     * game's scored rounds they won -- or, in a team format, their whole team's (winner_team_id), so
+     * teammates always show the same count. Counts nothing for a round nobody won (Awe's skipped one).
+     *
+     * @return array<int, int>
+     */
+    public function roundWins(int $gameId): array
+    {
+        $pdo = Connection::get();
+
+        $playersStmt = $pdo->prepare('SELECT id, team_id FROM game_players WHERE game_id = :game_id');
+        $playersStmt->execute(['game_id' => $gameId]);
+        $players = $playersStmt->fetchAll();
+
+        $roundsStmt = $pdo->prepare(
+            "SELECT winner_game_player_id, winner_team_id, wins_awarded FROM game_rounds WHERE game_id = :game_id AND status = 'scored'"
+        );
+        $roundsStmt->execute(['game_id' => $gameId]);
+        $rounds = $roundsStmt->fetchAll();
+
+        $wins = [];
+        foreach ($players as $player) {
+            $playerId = (int) $player['id'];
+            $wins[$playerId] = 0;
+            foreach ($rounds as $round) {
+                $won = $player['team_id'] !== null
+                    ? $round['winner_team_id'] !== null && (int) $round['winner_team_id'] === (int) $player['team_id']
+                    : $round['winner_game_player_id'] !== null && (int) $round['winner_game_player_id'] === $playerId;
+                if ($won) {
+                    $wins[$playerId] += (int) $round['wins_awarded'];
+                }
+            }
+        }
+
+        return $wins;
     }
 
     public function save(int $gameId, BoardState $state): void

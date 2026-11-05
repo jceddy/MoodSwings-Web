@@ -65,6 +65,28 @@ final class CustomEffectSupport
         return true;
     }
 
+    /**
+     * Whether $playerId has won strictly fewer rounds than EVERY other active player (Resolve,
+     * Perseverance). A teammate shares the team's count in a team format, so it can never be "fewer"
+     * than them there -- the condition is simply false, as the text ("each other player") reads.
+     */
+    public static function hasWonFewerRoundsThanEachOther(BoardState $state, int $playerId): bool
+    {
+        $others = self::otherPlayerIds($state, $playerId);
+        if ($others === []) {
+            return false;
+        }
+
+        $mine = $state->roundWinsOf($playerId);
+        foreach ($others as $otherId) {
+            if ($mine >= $state->roundWinsOf($otherId)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     /** A mood's printed number (the top right corner): the card's base value, through any Creativity copy. */
     public static function printedNumber(BoardState $state, int $cardId): int
     {

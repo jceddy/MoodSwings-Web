@@ -718,6 +718,54 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame(1, $state->valueOf($this->id('Competitiveness')));
     }
 
+    // ---- round-win counts ----
+
+    public function testResolveIsSixOnlyWhileYouHaveWonFewerRoundsThanEveryOtherPlayer(): void
+    {
+        $state = $this->state([1 => ['Resolve']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Resolve');
+
+        $state->setRoundWins([1 => 0, 2 => 0, 3 => 0]);
+        self::assertSame(3, $state->valueOf($this->id('Resolve')), 'tied for fewest is not fewer than each other player');
+        $state->setRoundWins([1 => 0, 2 => 1, 3 => 0]);
+        self::assertSame(3, $state->valueOf($this->id('Resolve')), 'still tied with one player');
+        $state->setRoundWins([1 => 0, 2 => 1, 3 => 2]);
+        self::assertSame(6, $state->valueOf($this->id('Resolve')));
+        $state->setRoundWins([1 => 2, 2 => 1, 3 => 2]);
+        self::assertSame(3, $state->valueOf($this->id('Resolve')));
+    }
+
+    public function testVindicationGrowsByTwoPerRoundWon(): void
+    {
+        $state = $this->state([1 => ['Vindication']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Vindication');
+
+        self::assertSame(2, $state->valueOf($this->id('Vindication')));
+        $state->setRoundWins([1 => 3, 2 => 1]);
+        self::assertSame(8, $state->valueOf($this->id('Vindication')));
+    }
+
+    public function testPerseveranceGrowsPermanentlyOnlyWhileBehindEveryoneElse(): void
+    {
+        $state = $this->state([1 => ['Perseverance']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Perseverance');
+        $effect = DefaultEffectRegistry::build()->for('perseverance');
+
+        $state->setRoundWins([1 => 1, 2 => 1, 3 => 0]);
+        $effect->afterScoring($state, $this->id('Perseverance'), 1);
+        self::assertSame(2, $state->valueOf($this->id('Perseverance')), 'not behind everyone');
+
+        $state->setRoundWins([1 => 0, 2 => 1, 3 => 1]);
+        $effect->afterScoring($state, $this->id('Perseverance'), 1);
+        $effect->afterScoring($state, $this->id('Perseverance'), 1);
+        self::assertSame(6, $state->valueOf($this->id('Perseverance')), '+2 each time, and it stays');
+        $state->setRoundWins([1 => 5, 2 => 1, 3 => 1]);
+        self::assertSame(6, $state->valueOf($this->id('Perseverance')), 'permanent');
+    }
+
     /**
      * Two players each holding their own copy of the same catalog card needs distinct card instance ids
      * (the engine's ids are game_cards ids), which state() -- one id per catalog card -- can't express.

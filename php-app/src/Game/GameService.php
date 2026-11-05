@@ -18,6 +18,7 @@ use MoodSwings\Repository\BotSearchJobRepository;
 use MoodSwings\Repository\GameChatRepository;
 use MoodSwings\Repository\GameNoteRepository;
 use MoodSwings\Repository\SessionRepository;
+use MoodSwings\Rules\AfterScoringTriggerEffect;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
 use MoodSwings\Rules\ChaosCardChoiceSchema;
@@ -13292,6 +13293,7 @@ final class GameService
             "UPDATE game_rounds SET status = 'scored', winner_game_player_id = :winner, wins_awarded = :wins_awarded, scored_at = NOW() WHERE id = :round_id"
         );
         $updateRound->execute(['winner' => $winnerId, 'wins_awarded' => $winsAwarded, 'round_id' => $roundId]);
+        $state->setRoundWins($this->boardStates->roundWins($gameId));
 
         // Computed here, before losers draw, so a round that pushes the
         // winner to wins_needed can skip the draw entirely below -- no
@@ -13924,6 +13926,7 @@ final class GameService
             'wins_awarded' => $winsAwarded,
             'round_id' => $roundId,
         ]);
+        $state->setRoundWins($this->boardStates->roundWins($gameId));
 
         $totalWins = $this->totalWinsForTeam($gameId, $winningTeamId);
         $winsNeeded = (int) $this->fetchGame($gameId)['wins_needed'];
@@ -14564,6 +14567,20 @@ final class GameService
                         }
                     }
                 }
+            }
+        }
+
+        // Perpetual "while in play -- after scoring" abilities (Perseverance): they fire after every round
+        // that scores, once the winner -- and so everyone's round-win count -- is settled above. Always
+        // after the one-shot tags, in play order; none of them can depend on the order the players chose.
+        foreach ($state->moodsInPlay() as $mood) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            if (!$this->plays->registry()->has($effectKey)) {
+                continue;
+            }
+            $effect = $this->plays->registry()->for($effectKey);
+            if ($effect instanceof AfterScoringTriggerEffect && !$state->isSuppressed($mood->cardId)) {
+                $effect->afterScoring($state, $mood->cardId, $mood->ownerId);
             }
         }
     }

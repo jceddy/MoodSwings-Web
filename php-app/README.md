@@ -9244,8 +9244,9 @@ in custom sets is.
   `ImpartialityEffect`, `DiscardToDeckBottomEffect` (Reminiscence, Remorse), `LevityEffect`,
   `PairedColorTargetEffect` (Distrust, Disdain, Indignation, Vigilance), `WarmthEffect`, `YearningEffect`.
   Batch 2 (migration 0498, 12 cards) adds the **turn-start triggers** and Resilience; batch 3 (migration
-  0499, 7 cards) adds the **static value modifiers** (both below). The later batches still need new hooks
-  (round-win counts, extra scoring, a colorless color) and aren't implemented yet; until a card is in the
+  0499, 7 cards) adds the **static value modifiers** and batch 4 (migration 0500, 3 cards) the **round-win
+  count** cards (all below). The later batches still need new hooks (extra scoring, a colorless color,
+  Grudge's chosen-opponent play grant) and aren't implemented yet; until a card is in the
   `cards` table it simply doesn't exist in the game.
 - **"At the start of each of your turns" (`TurnStartEffect`).** Brooding, Covetousness, Fairness, FOMO,
   Jealousy, Martyrdom, Maturity, Neglect, Rumination, Volatility and Wastefulness implement
@@ -9283,6 +9284,19 @@ in custom sets is.
   `BoardState::addRoundValueBonus()` (an effectState `roundValueBonus` that `valueOf()` adds and
   `clearEndOfRoundValueBonuses()` lifts wherever end-of-round suppressions are lifted) -- it affects the moods
   there when it resolves, survives Vitality leaving play, and does not reach moods that arrive later.
+- **Round-win counts.** Resolve (6 while you've won fewer rounds than each other player), Vindication
+  (+2 per round you've won) and Perseverance (after scoring, +2 permanently while you've won fewer rounds
+  than each other player). Round wins aren't a stored counter -- they're derived from the scored
+  `game_rounds` rows -- so `BoardStateRepository::roundWins()` sums `wins_awarded` per player (per *team*
+  in a team format, so teammates share a count and "fewer than each other player" is never true between
+  them) and `load()` hands it to `BoardState::setRoundWins()`/`roundWinsOf()`. A round that awards two wins
+  (Corruption) counts twice. `finishScoringAndAdvance()`/`finishTeamScoringAndAdvance()` refresh the counts
+  right after recording the round's winner, so after-scoring effects see the new standings.
+  Perseverance is the first perpetual after-scoring ability: it implements `Rules/AfterScoringTriggerEffect`
+  and `applyAfterScoringHooks()` calls it, after the one-shot 'afterScoring' tags, for every unsuppressed
+  in-play mood that does -- it reads the standings *including* the round just decided, and uses the permanent
+  value delta Maturity does. A replayed board has no round wins loaded, so a replay shows these three at
+  their printed values.
 
 ### Default selections mode (issue #274)
 
