@@ -1064,6 +1064,45 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertSame($this->p2, $this->state()->currentPlayerId(), 'one mood per turn, so the turn passes on');
     }
 
+    public function testSolaceShieldPersistsAcrossRequestsAndIsFlaggedToTheOpponent(): void
+    {
+        $solace = $this->card('Solace', 'hand', $this->p1);
+        $shielded = $this->card('Creativity', 'in_play', $this->p1);
+        $rashness = $this->card('Rashness', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $solace, []);
+        self::assertSame([$this->p1], $this->state()->roundChoiceShields(), 'saved with the round');
+
+        $asOpponent = $this->games->getState($this->gameId, $this->userIdOf($this->p2));
+        $flags = array_column($asOpponent['in_play'], 'unchoosable_by_you', 'card_id');
+        self::assertTrue($flags[$shielded], "the picker leaves out the shielded player's mood");
+        $asOwner = $this->games->getState($this->gameId, $this->userIdOf($this->p1));
+        self::assertFalse(array_column($asOwner['in_play'], 'unchoosable_by_you', 'card_id')[$shielded]);
+
+        $this->expectException(\MoodSwings\Rules\Exceptions\InvalidChoiceException::class);
+        $this->games->playMood($this->gameId, $this->p2, $rashness, ['target_mood_id' => $shielded]);
+    }
+
+    public function testElusivenessBouncesMoodsPutAwayByAnOpponentsPendingDecision(): void
+    {
+        $fury = $this->card('Fury', 'hand', $this->p1);
+        $elusiveness = $this->card('Elusiveness', 'in_play', $this->p2);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        // Fury: each player puts one of their own highest value moods away. Player 2's Elusiveness is their only mood,
+        // but it is player 1's Fury doing it, so it comes back to their hand; player 1's own Fury is discarded.
+        $this->games->playMood($this->gameId, $this->p1, $fury, []);
+        while (($target = $this->pendingDecisionTarget()) !== null) {
+            $candidates = $this->games->getState($this->gameId, $this->userIdOf($target))['round']['pending_decision']['field']['candidate_card_ids'];
+            $this->games->respondToDecision($this->gameId, $target, ['discarded_mood_id_' . $target => $candidates[0]]);
+        }
+
+        $state = $this->state();
+        self::assertFalse($state->isInPlay($elusiveness));
+        self::assertContains($elusiveness, $state->hand($this->p2), "player 2's mood came back to their hand");
+        self::assertSame([$fury], $state->discardPile(), "only player 1's own Fury reached the discard pile");
+    }
+
     public function testGrievanceMakesAnOpponentWithMoreCardsPutOneOnTheBottomOfTheDeck(): void
     {
         $grievance = $this->card('Grievance', 'hand', $this->p1);

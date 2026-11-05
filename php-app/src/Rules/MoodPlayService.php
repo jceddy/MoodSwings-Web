@@ -68,6 +68,19 @@ final class MoodPlayService
      */
     public function playMood(BoardState $state, int $playerId, int $cardId, PlayerChoices $choices, ?array $cardNames = null): PlayResult
     {
+        // $playerId's effect is the one resolving for the whole play (Elusiveness tells an opponent's from the owner's own).
+        $state->setEffectActor($playerId);
+        try {
+            return $this->resolvePlay($state, $playerId, $cardId, $choices, $cardNames);
+        } finally {
+            $state->setEffectActor(null);
+        }
+    }
+
+    private function resolvePlay(BoardState $state, int $playerId, int $cardId, PlayerChoices $choices, ?array $cardNames): PlayResult
+    {
+        $this->assertNoProtectedReactionTarget($state, $playerId, $choices);
+
         if ($state->currentPlayerId() !== $playerId) {
             throw new IllegalPlayException("It is not player {$playerId}'s turn");
         }
@@ -310,6 +323,7 @@ final class MoodPlayService
         }
 
         $effectiveEffectKey = $effectiveRow['effectKey'];
+        $this->assertNoProtectedMoodChosen($state, $playerId, $effectiveEffectKey, $invocationChoices);
         $effect = $this->registry->for($effectiveEffectKey);
 
         $duplicitySources = $state->countMoodsInPlayWithEffectiveKey($playerId, 'duplicity');
@@ -332,6 +346,41 @@ final class MoodPlayService
         }
 
         return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationChoices, $invocationSeq, $eligibleSources, $reactorCandidateCardIds);
+    }
+
+    /**
+     * Solace / Reassurance: "your opponents can't choose your moods". Every mood another player's play names -- through
+     * a mood field of the effect's own schema that isn't one of the player's own (scope 'own') -- must be one the
+     * player is allowed to choose; the schema is the list of what an effect chooses, so one check here covers every
+     * card (and every Duplicity repeat) without each effect repeating it. Effects where the owner picks their own
+     * moods (Fury, Vengeance), sweeps, random picks and "choose a value" are none of these fields, so they are unaffected.
+     */
+    private function assertNoProtectedMoodChosen(BoardState $state, int $playerId, string $effectKey, PlayerChoices $choices): void
+    {
+        foreach (CardChoiceSchema::afterPlayingFields($effectKey) as $field) {
+            if (($field['type'] ?? null) !== 'mood' || ($field['scope'] ?? 'any') === 'own') {
+                continue;
+            }
+            $this->assertChosenMoodsAllowed($state, $playerId, $choices, $field['key'], (bool) ($field['multi'] ?? false));
+        }
+    }
+
+    /** The same rule for the optional reaction fields (Scorn, Dominance) that ride with a play's choices. */
+    private function assertNoProtectedReactionTarget(BoardState $state, int $playerId, PlayerChoices $choices): void
+    {
+        foreach (CardChoiceSchema::reactionMoodFieldKeys() as $key) {
+            $this->assertChosenMoodsAllowed($state, $playerId, $choices, $key, false);
+        }
+    }
+
+    private function assertChosenMoodsAllowed(BoardState $state, int $playerId, PlayerChoices $choices, string $key, bool $multi): void
+    {
+        $ids = $multi ? $choices->ints($key) : array_filter([$choices->int($key)], static fn (?int $id) => $id !== null);
+        foreach ($ids as $moodId) {
+            if ($state->isProtectedFromChoiceBy($moodId, $playerId)) {
+                throw new InvalidChoiceException("Card {$moodId} can't be chosen by player {$playerId}'s effect");
+            }
+        }
     }
 
     /** The effect registry this service dispatches to (GameService looks up TurnStartEffect triggers through it). */
@@ -394,6 +443,27 @@ final class MoodPlayService
         int $duplicityEligibleSources,
         array $reactorCandidateCardIds = [],
         string $pendingSource = 'effect',
+    ): PlayResult {
+        $state->setEffectActor($playerId);
+        try {
+            return $this->resolvePendingAnswers($state, $cardId, $playerId, $topLevelChoices, $invocationChoices, $invocationSeq, $answers, $duplicityEligibleSources, $reactorCandidateCardIds, $pendingSource);
+        } finally {
+            $state->setEffectActor(null);
+        }
+    }
+
+    /** @param array<string, PlayerChoices> $answers @param int[] $reactorCandidateCardIds */
+    private function resolvePendingAnswers(
+        BoardState $state,
+        int $cardId,
+        int $playerId,
+        PlayerChoices $topLevelChoices,
+        PlayerChoices $invocationChoices,
+        int $invocationSeq,
+        array $answers,
+        int $duplicityEligibleSources,
+        array $reactorCandidateCardIds,
+        string $pendingSource,
     ): PlayResult {
         if (isset($answers[self::DUPLICITY_REPEAT_KEY])) {
             return $this->resolveDuplicityRepeatOffer($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $answers[self::DUPLICITY_REPEAT_KEY], $reactorCandidateCardIds);

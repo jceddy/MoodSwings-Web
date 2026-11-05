@@ -9465,6 +9465,26 @@ in custom sets is.
   A player with no active grant simply has no legal play: bots pass, and a human with auto-pass on an empty hand is
   passed automatically (otherwise they click Pass).
 
+- **"Can't choose your moods" (batch 15).** Solace, Reassurance and Elusiveness (migration 0513).
+  - **Choosing is stopped by rule, not per card.** `BoardState::isProtectedFromChoiceBy($mood, $chooser)` is true
+    for an opponent (never the owner, never a teammate) when the owner is shielded for the round (**Solace**,
+    `game_rounds.round_choice_shields`, a shield on the *player* so it holds if Solace leaves play, emptied with the
+    other round records) or has **Reassurance** in play and the mood's *current* value is 2 or less (so it covers
+    itself). `MoodPlayService` checks every mood field of the effect's own `CardChoiceSchema` entry that isn't
+    `scope: 'own'` -- on the first play and on every Duplicity repeat -- plus the reaction fields (Scorn, Dominance),
+    and `resolveScoringDecisionBonus()` checks Passion's pick. Sweeps (Rage, Wrath), random picks, "choose a value"
+    and effects where the owner picks their own mood (Fury, Vengeance's victim) have no such field, so they are
+    untouched, as the cards say. The picker never offers a protected mood: `in_play[].unchoosable_by_you` (per
+    viewer) is filtered in `fieldOptions()`, and bots' `moodCandidates()` skip them. Chaos Draft effects'
+    own mood fields aren't covered.
+  - **Elusiveness** is a replacement in `BoardState::moveInPlayToDiscard()`: when the *effect actor* -- the player
+    whose play is resolving (`setEffectActor()`, set by `MoodPlayService` around a play and around the answers to
+    its pending decisions, null elsewhere, so scoring-time and turn-start effects aren't replaced) -- isn't the
+    mood's owner or a teammate and the owner had Elusiveness in play when the play began, the mood goes to its
+    owner's hand instead. The set of Elusiveness owners is taken when the play begins, so a sweep that moves
+    Elusiveness first doesn't stop it protecting the rest. Nothing reaches the discard pile, so
+    `discardedThisRound` isn't set. The owner's own discards (costs, their own Anger) are untouched.
+
 
 ### Default selections mode (issue #274)
 

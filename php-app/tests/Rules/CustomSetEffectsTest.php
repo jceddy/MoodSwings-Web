@@ -1043,6 +1043,122 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame([], $state->consumePendingTurnRestrictionsFor(1));
     }
 
+    // ---- choosing moods: Solace, Reassurance, Elusiveness ----
+
+    public function testReassuranceStopsOpponentsChoosingMoodsOfTwoOrLess(): void
+    {
+        $state = $this->state([1 => ['Rashness'], 2 => ['Reassurance', 'Creativity']]);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Reassurance', 'Creativity'); // 2 and 0
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($state, 1, 'Rashness', ['target_mood_id' => $this->id('Creativity')]);
+    }
+
+    public function testReassuranceDoesNotProtectMoodsWorthMore(): void
+    {
+        $state = $this->state([1 => ['Spite'], 2 => ['Reassurance', 'Apathy']]);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Reassurance', 'Apathy'); // 2 and 4
+        $this->play($state, 1, 'Spite', ['target_mood_ids' => $this->ids('Apathy')]);
+
+        self::assertFalse($state->isInPlay($this->id('Apathy')));
+    }
+
+    public function testReassuranceProtectsItselfAndReadsTheCurrentValue(): void
+    {
+        $state = $this->state([1 => ['Spite'], 2 => ['Reassurance', 'Apathy']]);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Reassurance');
+
+        self::assertTrue($state->isProtectedFromChoiceBy($this->id('Reassurance'), 1), 'its own value of 2 is protected');
+        $this->seat($state, 2, 'Apathy');
+        self::assertFalse($state->isProtectedFromChoiceBy($this->id('Apathy'), 1));
+    }
+
+    public function testReassuranceDoesNotStopItsOwnerOrATeammateChoosingThoseMoods(): void
+    {
+        $state = $this->state([2 => ['Reassurance', 'Creativity']]);
+        $this->seat($state, 2, 'Reassurance', 'Creativity');
+
+        self::assertFalse($state->isProtectedFromChoiceBy($this->id('Creativity'), 2), 'the owner can choose their own');
+        self::assertTrue($state->isProtectedFromChoiceBy($this->id('Creativity'), 1));
+    }
+
+    public function testSolaceShieldsEveryMoodOfItsPlayerForTheRound(): void
+    {
+        $state = $this->state([1 => ['Solace', 'Apathy'], 2 => ['Spite']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Apathy');
+        $this->play($state, 1, 'Solace');
+        $state->startTurn(2);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($state, 2, 'Spite', ['target_mood_ids' => $this->ids('Apathy')]);
+    }
+
+    public function testSolaceHoldsAfterItLeavesPlayAndEndsWithTheRound(): void
+    {
+        $state = $this->state([1 => ['Solace', 'Apathy']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Apathy');
+        $this->play($state, 1, 'Solace');
+        $state->moveInPlayToDiscard($this->id('Solace'));
+        self::assertTrue($state->isProtectedFromChoiceBy($this->id('Apathy'), 2), 'a round-long shield on the player, not on the card');
+
+        $state->resetRoundChoiceShields();
+        self::assertFalse($state->isProtectedFromChoiceBy($this->id('Apathy'), 2));
+    }
+
+    public function testSolaceDoesNotStopSweepsOrThePlayersOwnChoices(): void
+    {
+        $state = $this->state([1 => ['Solace', 'Creativity', 'Spite'], 2 => ['Rage']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Creativity');
+        $this->play($state, 1, 'Solace');
+        $state->grantExtraPlay(1, null, $this->id('Solace'));
+        $this->play($state, 1, 'Spite', ['target_mood_ids' => $this->ids('Creativity')]); // 0 is even; its owner chooses it
+        self::assertFalse($state->isInPlay($this->id('Creativity')));
+
+        $state->startTurn(2);
+        $this->play($state, 2, 'Rage', ['discard_qualifying_moods' => true]); // a sweep: nothing is chosen
+        self::assertFalse($state->isInPlay($this->id('Solace')));
+    }
+
+    public function testElusivenessBouncesAnOpponentsDiscardOfItsOwnersMood(): void
+    {
+        $state = $this->state([1 => ['Rashness'], 2 => ['Elusiveness', 'Creativity']]);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Elusiveness', 'Creativity');
+        $this->play($state, 1, 'Rashness', ['target_mood_id' => $this->id('Creativity')]);
+
+        self::assertFalse($state->isInPlay($this->id('Creativity')));
+        self::assertContains($this->id('Creativity'), $state->hand(2), 'returned to its owner\'s hand');
+        self::assertSame([], $state->discardPile(), 'nothing reached the discard pile');
+        self::assertFalse($state->discardedThisRound());
+    }
+
+    public function testElusivenessLeavesTheOwnersOwnDiscardsAlone(): void
+    {
+        $state = $this->state([2 => ['Elusiveness', 'Creativity', 'Anger']]);
+        $state->startTurn(2);
+        $this->seat($state, 2, 'Elusiveness', 'Creativity');
+        $this->play($state, 2, 'Anger', ['target_mood_ids' => $this->ids('Creativity')]); // Anger: any moods worth 5 or less
+
+        self::assertContains($this->id('Creativity'), $state->discardPile(), 'your own effect, so it is discarded');
+    }
+
+    public function testElusivenessBouncesASweepOfEveryMoodItsOwnerHasIncludingItself(): void
+    {
+        $state = $this->state([1 => ['Wrath'], 2 => ['Elusiveness', 'Creativity']]);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Elusiveness', 'Creativity');
+        $this->play($state, 1, 'Wrath', ['discard_all_other_moods' => true]);
+
+        self::assertEqualsCanonicalizing($this->ids('Elusiveness', 'Creativity'), $state->hand(2));
+        self::assertSame([], $state->discardPile());
+    }
+
     // ---- static value modifiers ----
 
     public function testArdorAddsTheNumberOfRedMoodsToEachOwnRedMood(): void

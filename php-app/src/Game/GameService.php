@@ -13276,6 +13276,7 @@ final class GameService
         $state->clearEndOfRoundValueBonuses();
         $state->resetRoundHandDiscards();
         $state->resetRoundMoodPlays();
+        $state->resetRoundChoiceShields();
         $state->resetTurnReactions();
 
         // A single source of truth for "who won" -- see its own docblock
@@ -14136,6 +14137,9 @@ final class GameService
         }
         if (!$state->isInPlay($targetMoodId) || $state->ownerOf($targetMoodId) === $state->ownerOf($cardId)) {
             throw new InvalidChoiceException("Card {$targetMoodId} is not a valid opponent mood for Passion to score");
+        }
+        if ($state->isProtectedFromChoiceBy($targetMoodId, $state->ownerOf($cardId))) {
+            throw new InvalidChoiceException("Card {$targetMoodId} can't be chosen for Passion to score");
         }
 
         return $state->valueOf($targetMoodId);
@@ -15272,6 +15276,7 @@ final class GameService
         $state->clearEndOfRoundValueBonuses();
         $state->resetRoundHandDiscards();
         $state->resetRoundMoodPlays();
+        $state->resetRoundChoiceShields();
         $state->resetTurnReactions();
 
         $format = $this->fetchGame($gameId)['format'];
@@ -19635,6 +19640,9 @@ final class GameService
                 // exist as a grant at all until computeFreshGrants() creates
                 // it fresh when that turn actually starts.
                 'has_unused_play_grant' => in_array($cardId, $activeGrantSourceCardIds, true),
+                // Solace / Reassurance: the viewer's own effects can't choose this mood (an opponent's, shielded or a
+                // cheap one under Reassurance) -- the target pickers leave it out.
+                'unchoosable_by_you' => $viewerGamePlayerId !== null && $state->isProtectedFromChoiceBy($cardId, $viewerGamePlayerId),
                 // A permanent one-time "after playing this mood, ... this
                 // mood's value becomes N" trigger (Dignity, Delight, ...)
                 // has locked its value in via BoardState::setValueOverride()

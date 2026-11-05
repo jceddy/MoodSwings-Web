@@ -1015,7 +1015,7 @@ final class BotPlayerService
         $bestMoodId = null;
         $bestValue = -1;
         foreach ($state->moodsInPlay() as $mood) {
-            if ($mood->ownerId === $ownerGamePlayerId) {
+            if ($mood->ownerId === $ownerGamePlayerId || $state->isProtectedFromChoiceBy($mood->cardId, $ownerGamePlayerId)) {
                 continue;
             }
 

@@ -659,6 +659,24 @@ final class CardChoiceSchema
         ));
     }
 
+    /**
+     * Every reaction field (Scorn's, Dominance's) that picks a mood belonging to someone else -- keys a play's choices
+     * may carry besides its own card's fields, checked for Solace/Reassurance protection alongside them.
+     *
+     * @return string[]
+     */
+    public static function reactionMoodFieldKeys(): array
+    {
+        $keys = [];
+        foreach (self::REACTIONS as $template) {
+            if (($template['type'] ?? null) === 'mood' && ($template['scope'] ?? 'any') !== 'own') {
+                $keys[] = $template['key'];
+            }
+        }
+
+        return $keys;
+    }
+
     /** @return ?array<string, mixed> */
     public static function reactionTemplate(string $reactorEffectKey): ?array
     {

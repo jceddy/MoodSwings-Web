@@ -283,6 +283,10 @@ final class BotChoiceResolver
             if ($excludesTeammate && $state->isTeammate($actingPlayerId, $mood->ownerId)) {
                 continue;
             }
+            // Solace / Reassurance: a mood the bot's effects can't choose.
+            if ($state->isProtectedFromChoiceBy($mood->cardId, $actingPlayerId)) {
+                continue;
+            }
             if (!$this->matchesCardFilter($state, $mood->cardId, $field['filter'] ?? null)) {
                 continue;
             }

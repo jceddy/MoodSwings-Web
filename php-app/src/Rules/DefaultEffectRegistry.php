@@ -181,6 +181,7 @@ use MoodSwings\Rules\Effects\Custom\OverconfidenceEffect;
 use MoodSwings\Rules\Effects\Custom\PettinessEffect;
 use MoodSwings\Rules\Effects\Custom\PlayRuleMarkerEffect;
 use MoodSwings\Rules\Effects\Custom\RudenessEffect;
+use MoodSwings\Rules\Effects\Custom\SolaceEffect;
 use MoodSwings\Rules\Effects\Custom\GrievanceEffect;
 use MoodSwings\Rules\Effects\Custom\UrgencyEffect;
 use MoodSwings\Rules\Effects\Custom\DejectionEffect;
@@ -578,10 +579,11 @@ final class DefaultEffectRegistry
         $registry->register('urgency', new UrgencyEffect());
 
         // Play-restriction cards (turn flags: BoardState::beginTurnFlags()).
-        foreach (['obstinacy', 'restraint', 'defensiveness'] as $playRuleKey) {
+        foreach (['obstinacy', 'restraint', 'defensiveness', 'reassurance', 'elusiveness'] as $playRuleKey) {
             $registry->register($playRuleKey, new PlayRuleMarkerEffect());
         }
         $registry->register('rudeness', new RudenessEffect());
+        $registry->register('solace', new SolaceEffect());
         $registry->register('pettiness', new PettinessEffect());
         $registry->register('overconfidence', new OverconfidenceEffect());
         $registry->register('restlessness', new CustomConditionalValueEffect(CustomConditionalValueEffect::DISTINCT_OWN_VALUES_AT_LEAST, 3));

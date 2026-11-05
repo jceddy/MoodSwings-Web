@@ -11914,11 +11914,14 @@
                     : [];
                 if (field.candidate_card_ids) {
                     return selfOption.concat(currentState.in_play
+                        .filter((c) => !c.unchoosable_by_you)
                         .filter((c) => field.candidate_card_ids.includes(c.card_id))
                         .map((c) => ({ value: c.card_id, label: cardLabel(c), ownerLabel: playerLabelFor(c.owner_game_player_id) })));
                 }
                 return selfOption.concat(currentState.in_play
                     .filter((c) => c.card_id !== card.card_id)
+                    // Solace / Reassurance: an opponent's mood your effects can't choose is never offered.
+                    .filter((c) => !c.unchoosable_by_you)
                     .filter((c) => {
                         if (field.scope === 'own') return c.owner_game_player_id === currentState.you.game_player_id;
                         if (field.scope === 'other') return c.owner_game_player_id !== currentState.you.game_player_id;

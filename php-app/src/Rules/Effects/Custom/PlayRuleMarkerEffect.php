@@ -14,6 +14,9 @@ use MoodSwings\Rules\AbstractMoodEffect;
  *  - Restraint ("Moods can't let any player play additional moods"): BoardState::extraPlaysBlocked().
  *  - Defensiveness ("The after-playing effects of additional moods your opponents play don't happen"):
  *    BoardState::afterPlayingSuppressedFor().
+ *  - Reassurance ("Your opponents can't choose your moods with a value of 2 or less"): BoardState::isProtectedFromChoiceBy().
+ *  - Elusiveness ("If an opponent's effect would put one of your moods into the discard pile, put it into your hand
+ *    instead"): BoardState::moveInPlayToDiscard()'s replacement.
  * Registered under each key so the card resolves; the engine finds the rule by the effective effect key (so a Creativity
  * copying one carries it too).
  */

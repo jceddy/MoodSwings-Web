@@ -204,6 +204,27 @@ final class BoardState
     /** See $awardsExtraWinSourceCardId's own docblock. */
     private ?int $awardsExtraWinOwnerId = null;
 
+    /**
+     * Solace: the players whose moods their opponents can't choose until the end of the round
+     * (game_rounds.round_choice_shields, emptied with the other round records) -- see isProtectedFromChoiceBy().
+     *
+     * @var array<int, true>
+     */
+    private array $roundChoiceShields = [];
+
+    /**
+     * The player whose play or effect is resolving right now (set by MoodPlayService for a play and for the
+     * answers to its pending decisions), so a replacement effect can tell an opponent's effect from the owner's own
+     * -- Elusiveness. Null outside a play (scoring, turn-start triggers, a hand-built board), where nothing is replaced.
+     */
+    private ?int $effectActorId = null;
+
+    /**
+     * @var array<int, true> the players who had Elusiveness in play when the current play began (see setEffectActor()) --
+     * a sweep moves their moods one at a time, and Elusiveness itself must not stop protecting the rest by going first.
+     */
+    private array $elusivenessOwners = [];
+
     /** Pettiness/Overconfidence: the player may not play moods this turn. */
     public const TURN_NO_PLAYS = 'no_plays';
     /** Rudeness: no additional moods this turn, and no after-playing effects of the moods played in it. */
@@ -1109,6 +1130,16 @@ final class BoardState
     public function moveInPlayToDiscard(int $cardId): void
     {
         $ownerId = $this->moodInPlay($cardId)->ownerId;
+        // Elusiveness: an opponent's effect that would put one of its owner's moods into the discard pile puts it into their
+        // hand instead -- so nothing reaches the discard pile, and nothing that watches the pile happens.
+        if ($this->effectActorId !== null
+            && $ownerId !== $this->effectActorId
+            && !$this->isTeammate($this->effectActorId, $ownerId)
+            && isset($this->elusivenessOwners[$ownerId])) {
+            $this->moveInPlayToHand($cardId);
+
+            return;
+        }
         $value = $this->valueOf($cardId);
         $this->discardOwners[$cardId] = $ownerId;
         unset($this->moodsInPlay[$cardId]);
@@ -2564,6 +2595,7 @@ final class BoardState
         $this->roundFirstPlayerId = $playerId;
         $this->currentRoundNumber = $roundNumber;
         $this->roundMoodPlays = [];
+        $this->roundChoiceShields = [];
     }
 
     /**
@@ -2887,6 +2919,68 @@ final class BoardState
     public function bankedExtraPlaysByPlayer(): array
     {
         return $this->bankedExtraPlays;
+    }
+
+    // --- choosing moods: Solace / Reassurance protection and the effect actor (Elusiveness) ---
+
+    /** The player whose play/effect is resolving (see $effectActorId). */
+    public function setEffectActor(?int $playerId): void
+    {
+        $this->effectActorId = $playerId;
+        $this->elusivenessOwners = [];
+        if ($playerId === null) {
+            return;
+        }
+        foreach ($this->moodsInPlay as $mood) {
+            if ($this->catalogRow($this->effectiveCardId($mood->cardId))['effectKey'] === 'elusiveness') {
+                $this->elusivenessOwners[$mood->ownerId] = true;
+            }
+        }
+    }
+
+    /**
+     * Whether $chooserId may not choose the mood $cardId (an opponent choosing it as a target): its owner is shielded
+     * for the round (Solace), or has Reassurance in play and the mood's current value is 2 or less. Never true for
+     * the owner's own choice or a teammate's -- only "opponents can't choose your moods".
+     */
+    public function isProtectedFromChoiceBy(int $cardId, int $chooserId): bool
+    {
+        if (!$this->isInPlay($cardId)) {
+            return false;
+        }
+        $ownerId = $this->ownerOf($cardId);
+        if ($ownerId === $chooserId || $this->isTeammate($chooserId, $ownerId)) {
+            return false;
+        }
+        if (isset($this->roundChoiceShields[$ownerId])) {
+            return true;
+        }
+
+        return $this->countMoodsInPlayWithEffectiveKey($ownerId, 'reassurance') > 0 && $this->valueOf($cardId) <= 2;
+    }
+
+    /** Solace: until the end of the round, $playerId's opponents can't choose their moods. */
+    public function shieldMoodsFromChoices(int $playerId): void
+    {
+        $this->roundChoiceShields[$playerId] = true;
+    }
+
+    /** @return int[] the players whose moods are shielded this round */
+    public function roundChoiceShields(): array
+    {
+        return array_keys($this->roundChoiceShields);
+    }
+
+    /** @param int[] $playerIds */
+    public function restoreRoundChoiceShields(array $playerIds): void
+    {
+        $this->roundChoiceShields = array_fill_keys(array_map(intval(...), $playerIds), true);
+    }
+
+    /** A round ends: nobody's moods are shielded in the next one. */
+    public function resetRoundChoiceShields(): void
+    {
+        $this->roundChoiceShields = [];
     }
 
     // --- turn flags: plays made this turn, base plays, and next-turn restrictions (Restraint, Rudeness, Pettiness...) ---
