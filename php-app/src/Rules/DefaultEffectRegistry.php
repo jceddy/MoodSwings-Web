@@ -166,7 +166,6 @@ use MoodSwings\Rules\Effects\Custom\WhimsyEffect;
 use MoodSwings\Rules\Effects\Custom\EntitlementEffect;
 use MoodSwings\Rules\Effects\Custom\InspirationEffect;
 use MoodSwings\Rules\Effects\Custom\RevealHandPickEffect;
-use MoodSwings\Rules\Effects\Custom\SchadenfreudeEffect;
 use MoodSwings\Rules\Effects\Custom\ColorGatedPlayEffect;
 use MoodSwings\Rules\Effects\Custom\EmptinessEffect;
 use MoodSwings\Rules\Effects\Custom\NeutralityEffect;
@@ -522,7 +521,7 @@ final class DefaultEffectRegistry
         $registry->register('nosiness', new RevealHandPickEffect(RevealHandPickEffect::DISCARD, 'Nosiness'));
         $registry->register('entitlement', new EntitlementEffect());
         $registry->register('inspiration', new InspirationEffect());
-        $registry->register('schadenfreude', new SchadenfreudeEffect());
+        $registry->register('schadenfreude', new CustomConditionalValueEffect(CustomConditionalValueEffect::ANY_OPPONENT_DISCARDED_FROM_HAND_THIS_ROUND));
 
         // Colorless cards.
         $registry->register('reverence', new ColorGatedPlayEffect('white'));
