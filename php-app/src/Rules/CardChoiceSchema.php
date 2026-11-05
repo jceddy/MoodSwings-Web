@@ -445,6 +445,9 @@ final class CardChoiceSchema
         'fomo' => [
             ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => true, 'label' => 'Card to discard (cost to play this card)'],
         ],
+        'orderliness' => [
+            ['key' => 'parity', 'type' => 'mode', 'required' => true, 'options' => ['odd', 'even'], 'label' => 'Your other moods with odd or even printed numbers get +1 while this is in play'],
+        ],
         'rashness' => [
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => false, 'label' => "An opponent's mood valued 1 or less to put into the discard pile", 'excludes_teammate' => true, 'filter' => ['max_value' => 1]],
         ],

@@ -377,6 +377,26 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertSame([$next], $state->deck($this->p2));
     }
 
+    public function testVitalityBoostsOwnMoodsOfTheChosenColorUntilTheRoundEnds(): void
+    {
+        $this->card('Vitality', 'in_play', $this->p2); // green, 1
+        $anger = $this->card('Anger', 'in_play', $this->p2); // red, 0
+        $apathy = $this->card('Apathy', 'in_play', $this->p2); // black, 4
+        $theirs = $this->card('Boredom', 'in_play', $this->p1); // red, 4 -- an opponent's mood is never boosted
+        $this->card('Creativity', 'hand', $this->p1);
+
+        $this->handTurnToPlayerTwo();
+        $this->games->respondToDecision($this->gameId, $this->p2, ['color' => 'red']);
+
+        $state = $this->state();
+        self::assertSame(2, $state->valueOf($anger));
+        self::assertSame(4, $state->valueOf($apathy));
+        self::assertSame(4, $state->valueOf($theirs));
+
+        $this->games->pass($this->gameId, $this->p2); // the round ends
+        self::assertSame(0, $this->state()->valueOf($anger), 'the bonus lasts only until the end of the round');
+    }
+
     public function testReplayFollowsAWastefulnessCardFromTheDeckToTheDiscardPile(): void
     {
         $this->card('Wastefulness', 'in_play', $this->p2);

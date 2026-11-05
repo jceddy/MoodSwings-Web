@@ -9243,9 +9243,9 @@ in custom sets is.
   `LargesseEffect`, `BulkMoodMoveEffect` (Belligerence, Chagrin), `AtonementEffect`, `IntuitionEffect`,
   `ImpartialityEffect`, `DiscardToDeckBottomEffect` (Reminiscence, Remorse), `LevityEffect`,
   `PairedColorTargetEffect` (Distrust, Disdain, Indignation, Vigilance), `WarmthEffect`, `YearningEffect`.
-  Batch 2 (migration 0498, 12 cards) adds the **turn-start triggers** and Resilience (below). The later
-  batches still need new hooks (static value modifiers on other moods -- Vitality is waiting on that --
-  round-win counts, extra scoring, a colorless color) and aren't implemented yet; until a card is in the
+  Batch 2 (migration 0498, 12 cards) adds the **turn-start triggers** and Resilience; batch 3 (migration
+  0499, 7 cards) adds the **static value modifiers** (both below). The later batches still need new hooks
+  (round-win counts, extra scoring, a colorless color) and aren't implemented yet; until a card is in the
   `cards` table it simply doesn't exist in the game.
 - **"At the start of each of your turns" (`TurnStartEffect`).** Brooding, Covetousness, Fairness, FOMO,
   Jealousy, Martyrdom, Maturity, Neglect, Rumination, Volatility and Wastefulness implement
@@ -9269,6 +9269,19 @@ in custom sets is.
 - **Resilience** is Hope-shaped: the same-turn play is granted by `MoodPlayService` and every later turn's by
   `computeFreshGrants()`, both from `ResilienceEffect::RESTRICTION` (a 0-3 mood from the discard pile, lost
   if Resilience leaves play first).
+- **Static value modifiers (`ValueModifyingEffect`).** Ardor, Humility, Kinship, Orderliness and Verve change
+  other moods' values while in play. `BoardState::valueOf()` now adds `valueModifierFor()` from every
+  unsuppressed in-play mood that implements `Rules/ValueModifyingEffect` (memoized per effect key) on top of
+  everything else it computes, so a modifier stacks with a one-time "value becomes N", a conditional alt value
+  or a chaos delta rather than replacing it. A modifier must read only colors, printed numbers and effect
+  state -- never `valueOf()` -- or modifiers would recurse into each other. "Printed number" is the card's
+  base value through any Creativity copy; Verve reuses Patience/Glee's `playedInRound`/`playedByPlayerId`
+  tag; Orderliness remembers its choice as `orderlinessParity`. Competitiveness (1 more than the highest
+  opposing mood) is a plain `computeValue()` with a guard so two of them facing each other can't recurse.
+  Vitality is a turn-start trigger that stamps +2 on each of the owner's moods of the chosen color through
+  `BoardState::addRoundValueBonus()` (an effectState `roundValueBonus` that `valueOf()` adds and
+  `clearEndOfRoundValueBonuses()` lifts wherever end-of-round suppressions are lifted) -- it affects the moods
+  there when it resolves, survives Vitality leaving play, and does not reach moods that arrive later.
 
 ### Default selections mode (issue #274)
 

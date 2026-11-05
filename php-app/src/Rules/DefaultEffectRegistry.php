@@ -146,6 +146,13 @@ use MoodSwings\Rules\Effects\Custom\ResilienceEffect;
 use MoodSwings\Rules\Effects\Custom\RuminationEffect;
 use MoodSwings\Rules\Effects\Custom\VolatilityEffect;
 use MoodSwings\Rules\Effects\Custom\WastefulnessEffect;
+use MoodSwings\Rules\Effects\Custom\ArdorEffect;
+use MoodSwings\Rules\Effects\Custom\CompetitivenessEffect;
+use MoodSwings\Rules\Effects\Custom\HumilityEffect;
+use MoodSwings\Rules\Effects\Custom\KinshipEffect;
+use MoodSwings\Rules\Effects\Custom\OrderlinessEffect;
+use MoodSwings\Rules\Effects\Custom\VerveEffect;
+use MoodSwings\Rules\Effects\Custom\VitalityEffect;
 
 /**
  * Wires up every MoodEffect for the full 133-card pool -- every card with
@@ -465,6 +472,15 @@ final class DefaultEffectRegistry
         $registry->register('rumination', new RuminationEffect());
         $registry->register('volatility', new VolatilityEffect());
         $registry->register('wastefulness', new WastefulnessEffect());
+
+        // Static value modifiers (ValueModifyingEffect), Competitiveness, and Vitality's turn-start trigger.
+        $registry->register('ardor', new ArdorEffect());
+        $registry->register('competitiveness', new CompetitivenessEffect());
+        $registry->register('humility', new HumilityEffect());
+        $registry->register('kinship', new KinshipEffect());
+        $registry->register('orderliness', new OrderlinessEffect());
+        $registry->register('verve', new VerveEffect());
+        $registry->register('vitality', new VitalityEffect());
 
         return $registry;
     }

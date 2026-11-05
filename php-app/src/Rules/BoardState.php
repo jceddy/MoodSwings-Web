@@ -1939,7 +1939,60 @@ final class BoardState
             return 0;
         }
 
-        return $this->applyChaosValuePipeline($cardId, $this->printedValueOf($cardId, $mood)) + $this->chaosValueDeltaOf($cardId);
+        return $this->applyChaosValuePipeline($cardId, $this->printedValueOf($cardId, $mood))
+            + $this->chaosValueDeltaOf($cardId)
+            + $this->staticValueModifiersFor($cardId, $mood)
+            + (int) ($mood->effectState['roundValueBonus'] ?? 0);
+    }
+
+    /**
+     * Whether an effect_key's effect is a ValueModifyingEffect -- memoized, since valueOf() asks about
+     * every mood in play each time it runs (the registry lookup is the only non-trivial part).
+     *
+     * @var array<string, bool>
+     */
+    private array $valueModifierEffectKeys = [];
+
+    /**
+     * What every other mood in play adds to $cardId's value through a "while in play -- each of your moods
+     * that ... has its value increased" ability (ValueModifyingEffect): Ardor, Humility, Kinship, Verve,
+     * Orderliness. Applied on top of everything else valueOf() computes, so it stacks with a one-time
+     * "value becomes N" or a conditional alt value rather than replacing them, and a suppressed source
+     * contributes nothing (its ability is off).
+     */
+    private function staticValueModifiersFor(int $cardId, MoodInPlay $mood): int
+    {
+        $total = 0;
+        foreach ($this->moodsInPlay as $sourceCardId => $source) {
+            if ($source->suppressions !== []) {
+                continue;
+            }
+            $effectKey = $this->catalogRow($this->effectiveCardId($sourceCardId))['effectKey'];
+            if (!($this->valueModifierEffectKeys[$effectKey] ??= $this->registry->has($effectKey) && $this->registry->for($effectKey) instanceof ValueModifyingEffect)) {
+                continue;
+            }
+            $total += $this->registry->for($effectKey)->valueModifierFor($this, $sourceCardId, $cardId);
+        }
+
+        return $total;
+    }
+
+    /**
+     * Vitality-style "until the end of this round, this mood has its value increased by N": stacks onto
+     * the mood's own 'roundValueBonus' effectState (applied by valueOf()), lifted by
+     * clearEndOfRoundValueBonuses() when the round ends.
+     */
+    public function addRoundValueBonus(int $cardId, int $amount): void
+    {
+        $this->setEffectState($cardId, 'roundValueBonus', (int) ($this->effectState($cardId, 'roundValueBonus') ?? 0) + $amount);
+    }
+
+    /** Removes every addRoundValueBonus() bonus -- called wherever the round's end-of-round suppressions are lifted. */
+    public function clearEndOfRoundValueBonuses(): void
+    {
+        foreach (array_keys($this->moodsInPlay) as $cardId) {
+            $this->clearEffectState($cardId, 'roundValueBonus');
+        }
     }
 
     /**

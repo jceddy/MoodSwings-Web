@@ -820,6 +820,17 @@ final class BotPlayerService
 
                 return $best === null ? [] : [$field['key'] => $best];
             }
+            if ($effectKey === 'vitality' && $field['key'] === 'color') {
+                // The color the bot has the most moods of (each gets +2).
+                $counts = [];
+                foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+                    $color = $state->colorOf($mood->cardId);
+                    $counts[$color] = ($counts[$color] ?? 0) + 1;
+                }
+                arsort($counts);
+
+                return [$field['key'] => $counts === [] ? $field['options'][0] : array_key_first($counts)];
+            }
             if ($effectKey === 'fomo' && $field['type'] === 'hand_card') {
                 // Keep FOMO (a 7) by discarding the least useful card in hand.
                 $worst = null;

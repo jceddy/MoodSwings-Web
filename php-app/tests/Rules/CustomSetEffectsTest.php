@@ -604,6 +604,120 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame($this->ids('Complacency'), $state->discardPile());
     }
 
+    // ---- static value modifiers ----
+
+    public function testArdorAddsTheNumberOfRedMoodsToEachOwnRedMood(): void
+    {
+        $state = $this->state([1 => ['Ardor', 'Anger', 'Creativity'], 2 => ['Boredom']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Ardor', 'Anger', 'Creativity');
+        $this->seat($state, 2, 'Boredom');
+
+        // Ardor and Anger are red (0 + 2 each); Creativity is blue; the opponent's red mood isn't counted or boosted.
+        self::assertSame(2, $state->valueOf($this->id('Ardor')));
+        self::assertSame(2, $state->valueOf($this->id('Anger')));
+        self::assertSame(0, $state->valueOf($this->id('Creativity')));
+        self::assertSame(4, $state->valueOf($this->id('Boredom')));
+    }
+
+    public function testHumilityBoostsOwnMoodsPrintedZeroToTwo(): void
+    {
+        $state = $this->state([1 => ['Humility', 'Creativity', 'Apathy', 'Benevolence'], 2 => ['Charity']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Humility', 'Creativity', 'Apathy', 'Benevolence');
+        $this->seat($state, 2, 'Charity');
+
+        self::assertSame(3, $state->valueOf($this->id('Humility')), 'printed 3: not boosted');
+        self::assertSame(1, $state->valueOf($this->id('Creativity')));
+        self::assertSame(4, $state->valueOf($this->id('Apathy')));
+        self::assertSame(3, $state->valueOf($this->id('Benevolence')));
+        self::assertSame(1, $state->valueOf($this->id('Charity')), "an opponent's mood isn't boosted");
+    }
+
+    public function testKinshipBoostsMoodsSharingAColorWithAnotherOwnMood(): void
+    {
+        $state = $this->state([1 => ['Kinship', 'Apathy', 'Hate', 'Creativity']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Kinship', 'Apathy', 'Hate', 'Creativity');
+
+        self::assertSame(1, $state->valueOf($this->id('Kinship')), 'the only green mood');
+        self::assertSame(5, $state->valueOf($this->id('Apathy')), 'black, shares with Hate');
+        self::assertSame(1, $state->valueOf($this->id('Hate')));
+        self::assertSame(0, $state->valueOf($this->id('Creativity')), 'the only blue mood');
+    }
+
+    public function testOrderlinessBoostsOtherOwnMoodsOfTheChosenParity(): void
+    {
+        $state = $this->state([1 => ['Orderliness', 'Apathy', 'Charity', 'Creativity']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Apathy', 'Charity', 'Creativity');
+        $this->play($state, 1, 'Orderliness', ['parity' => 'even']);
+
+        self::assertSame(5, $state->valueOf($this->id('Apathy')));
+        self::assertSame(1, $state->valueOf($this->id('Charity')), 'odd: untouched');
+        self::assertSame(1, $state->valueOf($this->id('Creativity')), '0 is even');
+        self::assertSame(2, $state->valueOf($this->id('Orderliness')), 'it only boosts its other moods');
+    }
+
+    public function testOrderlinessRequiresAChoice(): void
+    {
+        $state = $this->state([1 => ['Orderliness']]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($state, 1, 'Orderliness');
+    }
+
+    public function testModifiersStackAndASuppressedSourceStopsApplying(): void
+    {
+        $state = $this->state([1 => ['Humility', 'Orderliness', 'Creativity']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Humility', 'Creativity', 'Orderliness');
+        $state->setEffectState($this->id('Orderliness'), 'orderlinessParity', 'even');
+
+        self::assertSame(2, $state->valueOf($this->id('Creativity')), 'Humility +1 and Orderliness +1 stack on 0');
+        $state->suppress($this->id('Humility'), 'end_of_round');
+        self::assertSame(1, $state->valueOf($this->id('Creativity')));
+    }
+
+    public function testVerveOnlyBoostsRedMoodsPlayedThisRound(): void
+    {
+        $state = $this->state([1 => ['Verve', 'Anger', 'Boredom']]);
+        $state->startRound(1, 2);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Verve');
+        $this->seat($state, 1, 'Boredom');
+        $state->setEffectState($this->id('Boredom'), 'playedInRound', 1); // an earlier round
+        $state->setEffectState($this->id('Boredom'), 'playedByPlayerId', 1);
+        $this->seat($state, 1, 'Anger');
+        $state->setEffectState($this->id('Anger'), 'playedInRound', 2);
+        $state->setEffectState($this->id('Anger'), 'playedByPlayerId', 1);
+
+        self::assertSame(2, $state->valueOf($this->id('Anger')));
+        self::assertSame(4, $state->valueOf($this->id('Boredom')));
+    }
+
+    public function testCompetitivenessIsOneMoreThanTheHighestOpposingMood(): void
+    {
+        $state = $this->state([1 => ['Competitiveness'], 2 => ['Apathy', 'Creativity']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Competitiveness');
+        self::assertSame(1, $state->valueOf($this->id('Competitiveness')), 'no opposing moods');
+
+        $this->seat($state, 2, 'Apathy', 'Creativity');
+        self::assertSame(5, $state->valueOf($this->id('Competitiveness')));
+    }
+
+    public function testCompetitivenessIgnoresItsOwnersMoods(): void
+    {
+        $state = $this->state([1 => ['Competitiveness', 'Apathy'], 2 => ['Creativity']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Competitiveness', 'Apathy');
+        $this->seat($state, 2, 'Creativity');
+
+        self::assertSame(1, $state->valueOf($this->id('Competitiveness')));
+    }
+
     // ---- registry / schema consistency ----
 
     public function testEveryBatchCardHasARegisteredEffect(): void

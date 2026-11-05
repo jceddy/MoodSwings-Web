@@ -13244,6 +13244,7 @@ final class GameService
         // paths below, since finishTeamScoringAndAdvance() reuses this same
         // $state.
         $state->clearEndOfRoundSuppressions();
+        $state->clearEndOfRoundValueBonuses();
 
         // A single source of truth for "who won" -- see its own docblock
         // for why the order-decision check below and whichever tail
@@ -15169,6 +15170,7 @@ final class GameService
         // path does, or it would otherwise carry into the round Awe just
         // started.
         $state->clearEndOfRoundSuppressions();
+        $state->clearEndOfRoundValueBonuses();
 
         $format = $this->fetchGame($gameId)['format'];
         $isTeamFormat = self::isTeamFormat($format);
