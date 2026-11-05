@@ -1,4 +1,6 @@
--- Community set 'Emotional Baggage' (XEMB), batch 13: Grievance, Urgency and Restlessness (the last of the tier-1 cards).
+-- Community set 'Emotional Baggage' (XEMB), batch 13: Grievance, Urgency and Restlessness (the last of the tier-1 cards). game_rounds.round_mood_plays records how many moods each player has played this round (Urgency).
+
+ALTER TABLE game_rounds ADD COLUMN round_mood_plays LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL DEFAULT NULL CHECK (json_valid(round_mood_plays));
 
 INSERT INTO cards (id, name, effect_key, color, rarity, base_value, alt_value, has_to_play_ability, has_while_in_play_ability, has_after_playing_ability, rules_text, art_set_code) VALUES
     (180, 'Grievance', 'grievance', 'blue', 'rare', 3, NULL, 0, 0, 1, 'After playing this mood — Each opponent with more cards in their hand than you puts a card from their hand on the bottom of the deck.', 'XEMB'),

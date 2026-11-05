@@ -9428,11 +9428,12 @@ in custom sets is.
   - **Grievance**: each *opponent* (teammates excluded) holding more cards than you -- compared as the board
     stands when it resolves, the played Grievance already out of your hand -- is asked for a hand card to put on
     the bottom of the deck, and all of them move together once every answer is in. Equal is not more.
-  - **Urgency** follows the card's own ruling rather than the bare printed text: the play that put it in play
-    counts, plays from *before* it entered don't. It is a `reactToAnotherPlay()` reactor tallying its owner's
-    plays in its own `urgencyRound`/`urgencyPlays` effect state (so a new round starts the count over), plus one
-    for its own entry when it was played this round (the usual `playedInRound`/`playedByPlayerId` tag). Two or
-    more -- so it needs an extra play -- shows 6.
+  - **Urgency** counts every mood its owner has played this round -- Urgency's own play, plays from *before* it
+    entered, and moods that have since left play -- from a per-round play record: `BoardState::recordMoodPlayed()`
+    (called by `MoodPlayService` when a mood is played, not when an effect merely puts one into play),
+    `moodsPlayedThisRound()`, persisted as `game_rounds.round_mood_plays` (migration 0511) and emptied at the same
+    round-end sites as the hand-discard record. Two or more -- so it needs an extra play or an earlier play this
+    round -- shows 6; "you" is whoever owns it now. (Like the other round records, replays don't load it.)
   - **Restlessness** is another `CustomConditionalValueEffect` condition (`DISTINCT_OWN_VALUES_AT_LEAST`, 3):
     different current values among its owner's moods, opposing moods never counted. A mood whose value *is*
     this count -- Restlessness itself, and any other copy -- is counted at its printed 3, so the check cannot

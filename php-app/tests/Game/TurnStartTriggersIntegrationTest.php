@@ -961,18 +961,40 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertTrue($this->state()->isInPlay($dejection));
     }
 
-    public function testUrgencyTalliesItsPlaysAcrossRequests(): void
+    public function testUrgencyCountsTheRoundsPlaysAcrossRequestsIncludingEarlierOnes(): void
     {
         $this->pdo->exec("UPDATE game_rounds SET plays_remaining = 3, pending_play_grants = '[null,null,null]' WHERE game_id = {$this->gameId}");
         $urgency = $this->card('Urgency', 'hand', $this->p1);
         $courage = $this->card('Courage', 'hand', $this->p1);
         $this->card('Boredom', 'hand', $this->p2);
 
-        $this->games->playMood($this->gameId, $this->p1, $urgency, []);
-        self::assertSame(3, $this->state()->valueOf($urgency));
         $this->games->playMood($this->gameId, $this->p1, $courage, []);
+        self::assertSame(1, $this->state()->moodsPlayedThisRound($this->p1), 'the play record is saved with the round');
+        $this->games->playMood($this->gameId, $this->p1, $urgency, []);
 
-        self::assertSame(6, $this->state()->valueOf($urgency), 'the tally was saved with the mood and read back on a fresh load');
+        self::assertSame(6, $this->state()->valueOf($urgency), 'the Courage played before Urgency counts');
+    }
+
+    public function testUrgencysCountStartsOverInTheNextRound(): void
+    {
+        $this->pdo->exec("UPDATE game_rounds SET plays_remaining = 3, pending_play_grants = '[null,null,null]' WHERE game_id = {$this->gameId}");
+        $urgency = $this->card('Urgency', 'hand', $this->p1);
+        $this->card('Courage', 'hand', $this->p1);
+        $this->card('Boredom', 'hand', $this->p2);
+        $this->games->playMood($this->gameId, $this->p1, $this->catalogCardInHand('Courage', $this->p1), []);
+        $this->games->playMood($this->gameId, $this->p1, $urgency, []);
+        self::assertSame(6, $this->state()->valueOf($urgency));
+
+        $this->games->pass($this->gameId, $this->p1);
+        $this->games->pass($this->gameId, $this->p2); // the round ends
+
+        self::assertSame([], $this->state()->roundMoodPlays(), 'nobody has played a mood yet in the new round');
+        self::assertSame(3, $this->state()->valueOf($urgency));
+    }
+
+    private function catalogCardInHand(string $name, int $owner): int
+    {
+        return (int) $this->pdo->query("SELECT gc.id FROM game_cards gc JOIN cards c ON c.id = gc.card_id WHERE gc.game_id = {$this->gameId} AND gc.zone = 'hand' AND gc.owner_game_player_id = {$owner} AND c.name = " . $this->pdo->quote($name) . ' LIMIT 1')->fetchColumn();
     }
 
     public function testGrievanceMakesAnOpponentWithMoreCardsPutOneOnTheBottomOfTheDeck(): void

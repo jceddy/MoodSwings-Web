@@ -171,6 +171,7 @@ final class MoodPlayService
         } else {
             $state->moveHandToInPlay($playerId, $cardId, $copiedCardId);
         }
+        $state->recordMoodPlayed($playerId);
 
         // Gluttony/Insecurity tag whichever specific card ends up consuming
         // their granted extra play with effectState (e.g. "discard it after

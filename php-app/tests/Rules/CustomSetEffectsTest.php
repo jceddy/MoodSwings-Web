@@ -785,7 +785,7 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame(3, $state->valueOf($this->id('Restlessness')));
     }
 
-    public function testUrgencyTurnsOnWithASecondPlayAfterItEnters(): void
+    public function testUrgencyTurnsOnWithASecondPlayThisRound(): void
     {
         $state = $this->state([1 => ['Urgency', 'Anger']]);
         $state->startRound(1, 1);
@@ -798,19 +798,30 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame(6, $state->valueOf($this->id('Urgency')));
     }
 
-    public function testUrgencyDoesNotCountPlaysFromBeforeItEntered(): void
+    public function testUrgencyCountsPlaysFromBeforeItEntered(): void
     {
-        $state = $this->state([1 => ['Anger', 'Urgency', 'Boredom']]);
+        $state = $this->state([1 => ['Anger', 'Urgency']]);
         $state->startRound(1, 1);
         $state->startTurn(1);
         $state->grantExtraPlay();
+        $this->play($state, 1, 'Anger');
+        self::assertSame(1, $state->moodsPlayedThisRound(1));
+        $this->play($state, 1, 'Urgency');
+
+        self::assertSame(6, $state->valueOf($this->id('Urgency')), 'the earlier Anger and Urgency itself are two plays');
+    }
+
+    public function testUrgencyStillCountsAMoodThatHasLeftPlay(): void
+    {
+        $state = $this->state([1 => ['Anger', 'Urgency']]);
+        $state->startRound(1, 1);
+        $state->startTurn(1);
         $state->grantExtraPlay();
         $this->play($state, 1, 'Anger');
+        $state->moveInPlayToDiscard($this->id('Anger'));
         $this->play($state, 1, 'Urgency');
-        self::assertSame(3, $state->valueOf($this->id('Urgency')), 'the earlier Anger does not count');
 
-        $this->play($state, 1, 'Boredom');
-        self::assertSame(6, $state->valueOf($this->id('Urgency')));
+        self::assertSame(6, $state->valueOf($this->id('Urgency')), 'Anger was played this round even though it is gone');
     }
 
     public function testUrgencyIgnoresOtherPlayersPlaysAndStartsOverEachRound(): void
@@ -831,7 +842,7 @@ final class CustomSetEffectsTest extends TestCase
         $this->play($second, 1, 'Anger');
         self::assertSame(6, $second->valueOf($this->id('Urgency')));
         $second->startRound(1, 2);
-        self::assertSame(3, $second->valueOf($this->id('Urgency')), 'the tally is for the round it was made in');
+        self::assertSame(3, $second->valueOf($this->id('Urgency')), 'a new round starts the count over');
     }
 
     // ---- static value modifiers ----

@@ -126,6 +126,16 @@ final class BoardState
     /** @var list<array{playerId: int, color: string, amount: int}> Vitality's round-long color bonuses -- see addRoundColorBonus(). */
     private array $roundColorBonuses = [];
 
+    /**
+     * playerId => how many moods that player has played during the current round, counting ones that have since left
+     * play (Urgency's "you played two or more moods this round"). Persisted on the live round
+     * (BoardStateRepository, game_rounds.round_mood_plays) and emptied when the round ends -- see
+     * resetRoundMoodPlays().
+     *
+     * @var array<int, int>
+     */
+    private array $roundMoodPlays = [];
+
     /** @var array<int, int> playerId => rounds that player (their team, in a team format) has won so far -- see setRoundWins(). */
     private array $roundWins = [];
 
@@ -2531,6 +2541,7 @@ final class BoardState
     {
         $this->roundFirstPlayerId = $playerId;
         $this->currentRoundNumber = $roundNumber;
+        $this->roundMoodPlays = [];
     }
 
     /**
@@ -2566,6 +2577,39 @@ final class BoardState
         $effect = $this->registry->for($effectKey);
 
         return $effect instanceof ScoringBonusEffect ? $effect->scoringBonus($this, $cardId, $this->ownerOf($cardId)) : 0;
+    }
+
+    /** A mood was played by $playerId (from their hand or the discard pile -- not merely put into play by an effect). */
+    public function recordMoodPlayed(int $playerId): void
+    {
+        $this->roundMoodPlays[$playerId] = ($this->roundMoodPlays[$playerId] ?? 0) + 1;
+    }
+
+    /** How many moods $playerId has played this round, ones that have since left play included. */
+    public function moodsPlayedThisRound(int $playerId): int
+    {
+        return $this->roundMoodPlays[$playerId] ?? 0;
+    }
+
+    /** @return array<int, int> playerId => moods played this round (players who played none are absent) */
+    public function roundMoodPlays(): array
+    {
+        return $this->roundMoodPlays;
+    }
+
+    /** @param array<int|string, int> $playsByPlayerId */
+    public function restoreRoundMoodPlays(array $playsByPlayerId): void
+    {
+        $this->roundMoodPlays = [];
+        foreach ($playsByPlayerId as $playerId => $count) {
+            $this->roundMoodPlays[(int) $playerId] = (int) $count;
+        }
+    }
+
+    /** A round ends: nobody has played a mood yet in the next one. */
+    public function resetRoundMoodPlays(): void
+    {
+        $this->roundMoodPlays = [];
     }
 
     /** @return int[] the players who have discarded a card from their hand during the current round */
