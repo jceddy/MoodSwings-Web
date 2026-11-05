@@ -716,6 +716,19 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertSame(6, $this->state()->valueOf($schadenfreude), "player 2 discarded a card from hand on player 1's turn");
     }
 
+    public function testSchadenfreudeSeesAnOpponentsMoodDiscardedEarlierThisTurn(): void
+    {
+        $rashness = $this->card('Rashness', 'hand', $this->p1); // discards an opposing mood worth 1 or less, and grants an extra play
+        $schadenfreude = $this->card('Schadenfreude', 'hand', $this->p1);
+        $victim = $this->card('Creativity', 'in_play', $this->p2);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $rashness, ['target_mood_id' => $victim]);
+        $this->games->playMood($this->gameId, $this->p1, $schadenfreude, []);
+
+        self::assertSame(6, $this->state()->valueOf($schadenfreude));
+    }
+
     public function testSchadenfreudeDoesNotCarryADiscardIntoTheNextTurn(): void
     {
         $this->pdo->exec("UPDATE game_rounds SET plays_remaining = 2, pending_play_grants = '[null, null]'");

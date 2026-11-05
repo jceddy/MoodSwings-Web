@@ -9334,13 +9334,16 @@ in custom sets is.
   reveal-or-not choice, then either the owner's pick (with a play of only that card) or the target's choice
   among their tied-highest moods (automatic when one is strictly highest). Bots always pick the highest
   draft-priority card, and answer Entitlement's reveal by revealing while their best mood is worth 3 or more.
-- **Schadenfreude and the turn's hand-discarders.** "If another player discarded a card this turn" needs a
-  turn-scoped record of who discarded from hand: `BoardState::moveHandToDiscard()` notes the player in
-  `playersWhoDiscardedFromHandThisTurn()` (a mood going to the discard pile doesn't count; any discard by a
-  player other than the one playing Schadenfreude does, a teammate's included, one made at the start of the
-  turn by Martyrdom or earlier in the turn by another play). It is persisted on the live round
-  (`game_rounds.turn_hand_discarders`, migration 0505) and reset whenever a turn begins
-  (`updateRoundTurnState()` on a change of player) or a round ends. The value is locked to 6 once, like Dignity.
+- **Schadenfreude and the turn's discards.** "If another player discarded a card or had a mood put into the
+  discard pile this turn" needs a turn-scoped record of who lost a card to the discard pile:
+  `BoardState` notes a player in `playersWhoDiscardedThisTurn()` when they discard from hand
+  (`moveHandToDiscard()`) or one of their moods is put into the discard pile (`moveInPlayToDiscard()`, by the
+  mood's owner at that moment). Any player other than the one playing Schadenfreude counts, a teammate
+  included, however it happened and whenever earlier in the turn -- Martyrdom/Jealousy at the start of the turn,
+  an earlier play -- but a mood bounced to a hand or the deck, and a card moved from the deck to the discard
+  pile (Carelessness), don't. It is persisted on the live round (`game_rounds.turn_discards`, migration 0505)
+  and reset whenever a turn begins (`updateRoundTurnState()` on a change of player) or a round ends. The value
+  is locked to 6 once, like Dignity.
 - **Colorless (batch 9).** `cards.color` gained a sixth value, `colorless` (migration 0506): Reverence,
   Detachment, Resentment, Impatience and Contentment (5-point moods that can only be played if *you* have a
   white/blue/black/red/green mood -- `ColorGatedPlayEffect::canPayToPlayCost()`, so the playability checks and

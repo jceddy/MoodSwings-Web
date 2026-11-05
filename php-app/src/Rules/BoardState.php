@@ -115,12 +115,14 @@ final class BoardState
     private ?int $roundFirstPlayerId = null;
 
     /**
-     * @var array<int, true> playerId => true for every player who discarded a card FROM THEIR HAND since the
-     * current turn began (Schadenfreude: "if another player discarded a card this turn"). Moods put into
-     * the discard pile don't count. Persisted on the live round (BoardStateRepository,
-     * game_rounds.turn_hand_discarders) and emptied whenever a turn begins -- see resetTurnHandDiscarders().
+     * @var array<int, true> playerId => true for every player who, since the current turn began, discarded a
+     * card from their hand OR had one of their moods put into the discard pile from play (Schadenfreude: "if
+     * another player discarded a card or had a mood put into the discard pile this turn"). A mood that went to
+     * a hand, the deck or anywhere else doesn't count, and neither does a card moved from the deck (Carelessness).
+     * Persisted on the live round (BoardStateRepository, game_rounds.turn_discards) and emptied whenever a turn
+     * begins -- see resetTurnDiscards().
      */
-    private array $turnHandDiscarders = [];
+    private array $turnDiscards = [];
 
     /** @var list<array{playerId: int, color: string, amount: int}> Vitality's round-long color bonuses -- see addRoundColorBonus(). */
     private array $roundColorBonuses = [];
@@ -1077,6 +1079,7 @@ final class BoardState
     public function moveInPlayToDiscard(int $cardId): void
     {
         $ownerId = $this->moodInPlay($cardId)->ownerId;
+        $this->turnDiscards[$ownerId] = true;
         $value = $this->valueOf($cardId);
         $this->discardOwners[$cardId] = $ownerId;
         unset($this->moodsInPlay[$cardId]);
@@ -1167,7 +1170,7 @@ final class BoardState
         $this->discard[] = $cardId;
         $this->discardOwners[$cardId] = $playerId;
         $this->discardedThisRound = true;
-        $this->turnHandDiscarders[$playerId] = true;
+        $this->turnDiscards[$playerId] = true;
         $this->recordMove($cardId, 'hand', 'discard', fromPlayerId: $playerId);
     }
 
@@ -2567,22 +2570,22 @@ final class BoardState
         return $effect instanceof ScoringBonusEffect ? $effect->scoringBonus($this, $cardId, $this->ownerOf($cardId)) : 0;
     }
 
-    /** @return int[] the players who have discarded a card from their hand during the current turn */
-    public function playersWhoDiscardedFromHandThisTurn(): array
+    /** @return int[] the players who have discarded a card from hand or had a mood put into the discard pile during the current turn */
+    public function playersWhoDiscardedThisTurn(): array
     {
-        return array_keys($this->turnHandDiscarders);
+        return array_keys($this->turnDiscards);
     }
 
     /** @param int[] $playerIds */
-    public function restoreTurnHandDiscarders(array $playerIds): void
+    public function restoreTurnDiscards(array $playerIds): void
     {
-        $this->turnHandDiscarders = array_fill_keys(array_map(intval(...), $playerIds), true);
+        $this->turnDiscards = array_fill_keys(array_map(intval(...), $playerIds), true);
     }
 
     /** A turn (or round) begins: nobody has discarded from hand yet this turn. */
-    public function resetTurnHandDiscarders(): void
+    public function resetTurnDiscards(): void
     {
-        $this->turnHandDiscarders = [];
+        $this->turnDiscards = [];
     }
 
     public function currentRoundNumber(): ?int

@@ -13274,7 +13274,7 @@ final class GameService
         // $state.
         $state->clearEndOfRoundSuppressions();
         $state->clearEndOfRoundValueBonuses();
-        $state->resetTurnHandDiscarders();
+        $state->resetTurnDiscards();
 
         // A single source of truth for "who won" -- see its own docblock
         // for why the order-decision check below and whichever tail
@@ -15257,7 +15257,7 @@ final class GameService
         // started.
         $state->clearEndOfRoundSuppressions();
         $state->clearEndOfRoundValueBonuses();
-        $state->resetTurnHandDiscarders();
+        $state->resetTurnDiscards();
 
         $format = $this->fetchGame($gameId)['format'];
         $isTeamFormat = self::isTeamFormat($format);
@@ -23256,7 +23256,7 @@ final class GameService
             $state->resetTurnStateSignatureCounts();
             $state->resetCoarseTurnStateSignatureCounts();
             $state->resetDrawnThisTurnCardIds();
-            $state->resetTurnHandDiscarders();
+            $state->resetTurnDiscards();
             $state->resetChaosEffectFireCounts();
             $state->resetChaosLoopShortcutOfferedThisTurn();
         } elseif ($previousRow !== false) {
