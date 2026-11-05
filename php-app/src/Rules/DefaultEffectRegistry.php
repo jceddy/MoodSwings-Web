@@ -170,6 +170,12 @@ use MoodSwings\Rules\Effects\Custom\ColorGatedPlayEffect;
 use MoodSwings\Rules\Effects\Custom\EmptinessEffect;
 use MoodSwings\Rules\Effects\Custom\NeutralityEffect;
 use MoodSwings\Rules\Effects\Custom\UnityEffect;
+use MoodSwings\Rules\Effects\Custom\DominanceEffect;
+use MoodSwings\Rules\Effects\Custom\FirstEachTurnExtraPlayEffect;
+use MoodSwings\Rules\Effects\Custom\ImpulseEffect;
+use MoodSwings\Rules\Effects\Custom\ReflectionEffect;
+use MoodSwings\Rules\Effects\Custom\ReverieEffect;
+use MoodSwings\Rules\Effects\Custom\WarinessEffect;
 
 /**
  * Wires up every MoodEffect for the full 133-card pool -- every card with
@@ -532,6 +538,16 @@ final class DefaultEffectRegistry
         $registry->register('emptiness', new EmptinessEffect());
         $registry->register('neutrality', new NeutralityEffect());
         $registry->register('unity', new UnityEffect());
+
+        // Extra-play grants and "each time you play another mood" reactions.
+        $registry->register('familiarity', new ConditionalExtraPlayEffect(restriction: ['type' => 'matches_a_number_of_your_moods']));
+        $registry->register('impulse', new ImpulseEffect());
+        $registry->register('wariness', new WarinessEffect());
+        $registry->register('adrenaline', new FirstEachTurnExtraPlayEffect(FirstEachTurnExtraPlayEffect::RED_MOOD));
+        $registry->register('affinity', new FirstEachTurnExtraPlayEffect(FirstEachTurnExtraPlayEffect::MATCHING_NUMBER));
+        $registry->register('dominance', new DominanceEffect());
+        $registry->register('reflection', new ReflectionEffect());
+        $registry->register('reverie', new ReverieEffect());
 
         return $registry;
     }

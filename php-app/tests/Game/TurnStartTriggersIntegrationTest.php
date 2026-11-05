@@ -745,6 +745,81 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertSame(3, $this->state()->valueOf($schadenfreude));
     }
 
+    public function testReactionChoicesAreOfferedWithAHandCardOnlyWhileTheReactorIsInPlay(): void
+    {
+        $this->card('Reflection', 'in_play', $this->p1);
+        $this->card('Apathy', 'hand', $this->p1);
+        $this->card('Complacency', 'hand', $this->p1);
+        $this->card('Creativity', 'hand', $this->p2);
+
+        $hand = $this->games->getState($this->gameId, $this->userIdOf($this->p1))['you']['hand'];
+        foreach ($hand as $card) {
+            self::assertContains('reflection_discard_card_id', array_column($card['choice_fields'], 'key'), "{$card['name']} offers Reflection's reaction");
+        }
+
+        $this->pdo->exec("UPDATE game_cards SET zone = 'discard' WHERE card_id = {$this->catalogIds['Reflection']}");
+        $hand = $this->games->getState($this->gameId, $this->userIdOf($this->p1))['you']['hand'];
+        foreach ($hand as $card) {
+            self::assertNotContains('reflection_discard_card_id', array_column($card['choice_fields'], 'key'));
+        }
+    }
+
+    public function testReflectionLootsThroughARealPlay(): void
+    {
+        $this->card('Reflection', 'in_play', $this->p1);
+        $played = $this->card('Apathy', 'hand', $this->p1);
+        $discarded = $this->card('Complacency', 'hand', $this->p1);
+        $drawn = $this->card('Creativity', 'deck', $this->p1, 0);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $played, ['reflection_discard_card_id' => $discarded]);
+
+        $state = $this->state();
+        self::assertContains($discarded, $state->discardPile());
+        self::assertContains($drawn, $state->hand($this->p1));
+    }
+
+    public function testAnImpulsePlayedWithItsExtraPlayUsedReturnsToHandAfterScoring(): void
+    {
+        $impulse = $this->card('Impulse', 'hand', $this->p1);
+        $extra = $this->card('Apathy', 'hand', $this->p1);
+        $this->card('Creativity', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $impulse, []);
+        $this->games->playMood($this->gameId, $this->p1, $extra, []);
+        $this->games->pass($this->gameId, $this->p2); // the round scores
+
+        $state = $this->state();
+        self::assertContains($impulse, $state->hand($this->p1), 'Impulse went back to its owner\'s hand after scoring');
+        self::assertTrue($state->isInPlay($extra), 'the extra mood stays');
+    }
+
+    public function testAnImpulseWhoseExtraPlayWasNotUsedStaysInPlay(): void
+    {
+        $impulse = $this->card('Impulse', 'hand', $this->p1);
+        $this->card('Apathy', 'hand', $this->p1);
+        $this->card('Creativity', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $impulse, []);
+        $this->games->pass($this->gameId, $this->p1); // declines the extra play
+        $this->games->pass($this->gameId, $this->p2);
+
+        self::assertTrue($this->state()->isInPlay($impulse));
+    }
+
+    public function testAdrenalineGrantsAnExtraPlayThroughARealPlay(): void
+    {
+        $this->card('Adrenaline', 'in_play', $this->p1);
+        $anger = $this->card('Anger', 'hand', $this->p1);
+        $boredom = $this->card('Boredom', 'hand', $this->p1);
+        $this->card('Creativity', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $anger, []);
+        $this->games->playMood($this->gameId, $this->p1, $boredom, []); // the granted extra play
+
+        self::assertTrue($this->state()->isInPlay($boredom));
+    }
+
     public function testUnityWinsTheRoundForItsOwnerRegardlessOfScore(): void
     {
         $this->card('Unity', 'in_play', $this->p1);

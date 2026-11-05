@@ -9247,8 +9247,8 @@ in custom sets is.
   0499, 7 cards) adds the **static value modifiers**, batch 4 (migration 0500, 3 cards) the **round-win
   count** cards and batch 5 (migration 0502, 2 cards) the **extra scoring** cards and batch 6 (migration 0503,
   6 cards) Carelessness and the **hand-reveal** cards, and batch 7 (migration 0504, 4 cards) the
-  **reveal-then-pick** cards, batch 8 (migration 0505) Schadenfreude and batch 9 (migration 0506) the
-  **colorless** cards (all below). The later batches still need new hooks (Grudge's chosen-opponent play
+  **reveal-then-pick** cards, batch 8 (migration 0505) Schadenfreude, batch 9 (migration 0506) the
+  **colorless** cards and batch 10 (migration 0508) the **extra-play and reaction** cards (all below). The later batches still need new hooks (Grudge's chosen-opponent play
   grant); Levelheadedness, Forgetfulness and Compassion are tier 2 and aren't implemented yet; until a card is in the
   `cards` table it simply doesn't exist in the game.
 - **"At the start of each of your turns" (`TurnStartEffect`).** Brooding, Covetousness, Fairness, FOMO,
@@ -9366,6 +9366,26 @@ in custom sets is.
   after the score swaps) and, if any owner qualifies, the winner is chosen among the qualifying owners --
   or their team -- by the usual scores and tiebreak instead of among everyone. It counts only your own
   moods that share a color (colorless ones, itself included, share none).
+- **Extra plays and reactions (batch 10).** Familiarity (an extra mood that has the same printed number as one of
+  your moods -- the new grant restriction `matches_a_number_of_your_moods`, checked live like the color-sharing
+  ones), Wariness (give a card to another player when two or more blue/black moods are in play, then an extra
+  play) and Impulse (an extra play; if it is *used*, Impulse itself goes back to your hand after scoring). Impulse
+  needed a grant that tags the mood that *granted* the play rather than the one that used it:
+  `onUseSourceEffectState`, applied by `MoodPlayService` when the grant is spent, if the source is still in play
+  (the same self `afterScoring` return Insecurity uses). The "each time you play another mood" while-in-play
+  cards react through `MoodEffect::reactToAnotherPlay()` like Scorn and Validation:
+  - **Adrenaline** ("the first time you play a red mood each turn") and **Affinity** (a mood with the same
+    printed number as another of yours) grant an extra play outright, once per turn --
+    `FirstEachTurnExtraPlayEffect` remembers it fired in the mood's `reactionUsedThisTurn` effect state, lifted by
+    `BoardState::resetTurnReactions()` whenever a turn or round begins. Neither reacts to its own play (it isn't
+    in play yet).
+  - **Dominance**, **Reflection** and **Reverie** have an optional choice that rides with the *triggering* play,
+    exactly like Scorn's: `dominance_target_mood_id` (an opponent's mood with a lower value than the red mood being
+    played, compared when the trigger resolves), `reflection_discard_card_id` (discard, then draw) and
+    `reverie_discard_card_id` (discard-pile card to the bottom of the deck, then draw). `GameService::reactionFields()`
+    adds the field to a hand card's choices only while the reactor is in play (Dominance only for a red card), and a
+    choice whose card is already gone (a second Reflection sharing it) is skipped. Reverie's own after-playing half
+    is Reminiscence's. Bots never take these optional reactions.
 
 
 ### Default selections mode (issue #274)

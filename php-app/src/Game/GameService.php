@@ -13275,6 +13275,7 @@ final class GameService
         $state->clearEndOfRoundSuppressions();
         $state->clearEndOfRoundValueBonuses();
         $state->resetRoundHandDiscards();
+        $state->resetTurnReactions();
 
         // A single source of truth for "who won" -- see its own docblock
         // for why the order-decision check below and whichever tail
@@ -15258,6 +15259,7 @@ final class GameService
         $state->clearEndOfRoundSuppressions();
         $state->clearEndOfRoundValueBonuses();
         $state->resetRoundHandDiscards();
+        $state->resetTurnReactions();
 
         $format = $this->fetchGame($gameId)['format'];
         $isTeamFormat = self::isTeamFormat($format);
@@ -21497,6 +21499,7 @@ final class GameService
             null => '',
             'shares_color_with_your_moods' => ' (must share a color with one of your moods)',
             'does_not_share_color_with_your_moods' => ' (must not share a color with any of your moods)',
+            'matches_a_number_of_your_moods' => ' (must have the same number as one of your moods)',
             'base_value_in' => ' (base value ' . implode(' or ', $restriction['values']) . ')',
             'specific_card_ids' => ' (' . implode(' or ', array_map(fn ($id) => $cardNames[$id] ?? 'a card', $restriction['values'])) . ' only)',
             default => '',
@@ -22188,7 +22191,7 @@ final class GameService
     }
 
     /**
-     * Scorn's reactToAnotherPlay() choice, filled in for *this specific
+     * Scorn's (and Emotional Baggage's Dominance/Reflection/Reverie) reactToAnotherPlay() choice, filled in for *this specific
      * card* (see CardChoiceSchema::reactionTemplate()): the suppress-target
      * is narrowed to $color (matching the played card's color, mirroring
      * ScornEffect's own check). Validation has no field here at all --
@@ -22206,6 +22209,17 @@ final class GameService
                 ...CardChoiceSchema::reactionTemplate('scorn'),
                 'filter' => ['colors' => [$color]],
             ];
+        }
+
+        // Emotional Baggage's optional "each time you play another mood" reactions. Dominance only ever reacts to
+        // a RED mood, so its field is only offered for one.
+        if ($color === 'red' && $state->playerHasMoodInPlay($viewerId, 'dominance')) {
+            $fields[] = CardChoiceSchema::reactionTemplate('dominance');
+        }
+        foreach (['reflection', 'reverie'] as $reactorKey) {
+            if ($state->playerHasMoodInPlay($viewerId, $reactorKey)) {
+                $fields[] = CardChoiceSchema::reactionTemplate($reactorKey);
+            }
         }
 
         return $fields;
@@ -23256,6 +23270,7 @@ final class GameService
             $state->resetTurnStateSignatureCounts();
             $state->resetCoarseTurnStateSignatureCounts();
             $state->resetDrawnThisTurnCardIds();
+            $state->resetTurnReactions();
             $state->resetChaosEffectFireCounts();
             $state->resetChaosLoopShortcutOfferedThisTurn();
         } elseif ($previousRow !== false) {
