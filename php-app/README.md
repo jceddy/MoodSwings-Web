@@ -9315,10 +9315,11 @@ in custom sets is.
   (then locks its value to 6 if every card shares a color with one of your moods -- Honesty counts as one,
   an empty hand qualifies, colorless doesn't), Whimsy reveals a random hand card and grants an extra play of
   only that card, Discernment and Turmoil (odd/even cycling, optional cards for Discernment, forced on a
-  chosen player for Turmoil) reveal what they cycle. Candor adds no engine rule: `buildGameState()` gives its
-  owner `you.revealed_hands` (every non-teammate opponent's hand, shown by the client like a teammate's) and
-  nobody else. Not done: Greed/Nosiness/Entitlement (the chooser must privately see an opponent's hand and
-  pick from it) and Inspiration (pick one of the revealed top-three deck cards) -- both need a decision
+  chosen player for Turmoil) reveal what they cycle. Candor adds no engine rule: a reveal is always to *all* players (the custom set repo's CLAUDE.md), so
+  `buildGameState()` gives every seated player `you.revealed_hands` -- the hand of each non-teammate
+  opponent of a Candor's owner other than the viewer, shown by the client like a teammate's (the owner sees
+  all of them, an opponent sees the other opponents', nobody sees the owner's hand through it). Not done: Greed/Nosiness/Entitlement (the whole hand is revealed to all, and the chooser picks from it)
+  and Inspiration (pick one of the revealed top-three deck cards) -- both need a decision
   field that offers cards that aren't in a hand, the discard pile or play.
 
 ### Default selections mode (issue #274)

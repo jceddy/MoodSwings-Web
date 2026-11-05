@@ -474,7 +474,7 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         return (int) $this->pdo->query("SELECT user_id FROM game_players WHERE id = {$gamePlayerId}")->fetchColumn();
     }
 
-    public function testCandorShowsItsOwnerEveryOpponentsHandAndNobodyElse(): void
+    public function testCandorRevealsAnOpponentsHandToTheOwner(): void
     {
         $this->card('Candor', 'in_play', $this->p1);
         $secret = $this->card('Apathy', 'hand', $this->p2);
@@ -486,7 +486,35 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertSame([$secret], array_column($mine['you']['revealed_hands'][0]['hand'], 'card_id'));
 
         $theirs = $this->games->getState($this->gameId, $this->userIdOf($this->p2));
-        self::assertArrayNotHasKey('revealed_hands', $theirs['you'], 'only the Candor owner sees the opponents\' hands');
+        self::assertArrayNotHasKey('revealed_hands', $theirs['you'], "the owner's own hand isn't revealed, and an opponent's own hand needs no reveal to them");
+    }
+
+    public function testCandorsRevealIsToAllPlayersSoOpponentsSeeEachOthersHands(): void
+    {
+        $this->pdo->prepare("INSERT INTO users (username, email, password_hash, email_verified_at) VALUES ('tsu3', 'tsu3@example.com', 'hash', NOW())")->execute();
+        $thirdUserId = (int) $this->pdo->lastInsertId();
+        $this->pdo->prepare('INSERT INTO game_players (game_id, user_id, seat_order) VALUES (:g, :u, 2)')->execute(['g' => $this->gameId, 'u' => $thirdUserId]);
+        $p3 = (int) $this->pdo->lastInsertId();
+
+        $this->card('Candor', 'in_play', $this->p1);
+        $hand2 = $this->card('Apathy', 'hand', $this->p2);
+        $hand3 = $this->card('Complacency', 'hand', $p3);
+        $hand1 = $this->card('Creativity', 'hand', $this->p1);
+
+        $seenBy = fn (int $gamePlayerId): array => array_column(
+            $this->games->getState($this->gameId, $this->userIdOf($gamePlayerId))['you']['revealed_hands'] ?? [],
+            'hand',
+            'game_player_id',
+        );
+
+        $owner = $seenBy($this->p1);
+        self::assertSame([$hand2], array_column($owner[$this->p2], 'card_id'));
+        self::assertSame([$hand3], array_column($owner[$p3], 'card_id'));
+
+        $second = $seenBy($this->p2);
+        self::assertSame([$p3], array_keys($second), 'player 2 sees player 3\'s hand -- both are the owner\'s opponents');
+        self::assertSame([$hand3], array_column($second[$p3], 'card_id'));
+        self::assertNotContains($hand1, array_column($second[$p3], 'card_id'));
     }
 
     public function testWithoutCandorNoHandsAreRevealed(): void

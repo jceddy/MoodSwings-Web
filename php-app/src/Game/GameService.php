@@ -19421,21 +19421,37 @@ final class GameService
             );
         }
 
-        // Candor: "your opponents play with their hands revealed" -- shown to the Candor's owner only, as one
-        // read-only hand per opponent (you.revealed_hands), the way an Open Team Play teammate's hand is.
-        if ($viewerGamePlayerId !== null && $this->effectiveSourceCardIds($state, $viewerGamePlayerId, 'candor') !== []) {
-            $response['you']['revealed_hands'] = [];
-            foreach ($state->activePlayerOrder() as $opponentId) {
-                if ($opponentId === $viewerGamePlayerId || $state->isTeammate($viewerGamePlayerId, $opponentId)) {
+        // Candor: "your opponents play with their hands revealed". A reveal is always to ALL players (see the
+        // custom set repo's CLAUDE.md), so every opponent of a Candor's owner has a face-up hand that every
+        // other seated player can see: the owner sees all of them, and an opponent sees the other opponents'
+        // (but not the owner's own hand, which Candor doesn't reveal). Shown as you.revealed_hands -- one
+        // read-only hand per such player other than the viewer, like an Open Team Play teammate's hand.
+        if ($viewerGamePlayerId !== null) {
+            $revealedPlayerIds = [];
+            foreach ($state->moodsInPlay() as $mood) {
+                if ($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'] !== 'candor') {
                     continue;
                 }
-                $response['you']['revealed_hands'][] = [
-                    'game_player_id' => $opponentId,
-                    'hand' => array_map(
-                        fn (int $cardId) => $this->serializeCard($state, $cardId, $names, $opponentId),
-                        $state->hand($opponentId)
-                    ),
-                ];
+                foreach ($state->activePlayerOrder() as $opponentId) {
+                    if ($opponentId !== $mood->ownerId && !$state->isTeammate($mood->ownerId, $opponentId)) {
+                        $revealedPlayerIds[$opponentId] = true;
+                    }
+                }
+            }
+            unset($revealedPlayerIds[$viewerGamePlayerId]);
+            if ($revealedPlayerIds !== []) {
+                $response['you']['revealed_hands'] = [];
+                foreach ($state->activePlayerOrder() as $revealedPlayerId) {
+                    if (isset($revealedPlayerIds[$revealedPlayerId])) {
+                        $response['you']['revealed_hands'][] = [
+                            'game_player_id' => $revealedPlayerId,
+                            'hand' => array_map(
+                                fn (int $cardId) => $this->serializeCard($state, $cardId, $names, $revealedPlayerId),
+                                $state->hand($revealedPlayerId)
+                            ),
+                        ];
+                    }
+                }
             }
         }
 
