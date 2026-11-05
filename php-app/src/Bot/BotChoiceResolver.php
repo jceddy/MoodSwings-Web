@@ -91,6 +91,13 @@ final class BotChoiceResolver
      *   fewer than every legal opponent would leave free value on the
      *   table the same way never filling the field at all would.
      */
+    /**
+     * Effects whose required 'value' field is a free "how many" with no cost to going high (Premonition's
+     * draw count: every card drawn is put back, so drawing the most just digs deepest), so a bot picks the
+     * field's max instead of its min.
+     */
+    private const MAX_VALUE_FIELD_EFFECT_KEYS = ['premonition'];
+
     private const ALWAYS_FILLED_OPTIONAL_FIELDS = [
         'curiosity' => ['target_player_id'],
         'suspicion' => ['player_ids'],
@@ -154,7 +161,7 @@ final class BotChoiceResolver
 
         return match ($field['type']) {
             'mode' => $this->resolveMode($field, $effectKey),
-            'value' => $field['min'] ?? null,
+            'value' => in_array($effectKey, self::MAX_VALUE_FIELD_EFFECT_KEYS, true) ? ($field['max'] ?? null) : ($field['min'] ?? null),
             'mood' => $this->resolveMoodField($state, $field, $actingPlayerId, $ownCardId),
             'player' => $this->resolvePlayerField($state, $field, $actingPlayerId, $forced),
             'hand_card' => $this->resolveOwnResourceField($state, $field, $this->ambitionSafeHandCardIds($state, $effectKey, $state->hand($actingPlayerId)), $ownCardId),

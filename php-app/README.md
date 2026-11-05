@@ -9386,6 +9386,25 @@ in custom sets is.
     adds the field to a hand card's choices only while the reactor is in play (Dominance only for a red card), and a
     choice whose card is already gone (a second Reflection sharing it) is skipped. Reverie's own after-playing half
     is Reminiscence's. Bots never take these optional reactions.
+- **Draw and cycle (batch 11).** Rapport, Longing, Premonition and Resignation are all Zeal/Yearning-shaped, so
+  no new engine hook -- but two of them draw and then need a pick from the *new* hand, which the play-time choice
+  can't express, so they use the existing follow-up decision machinery (`RequiresOpponentDecision` with the acting
+  player as the target; `pendingDecisionsFor()` stays pure and returns `[]`, and `resolveDecisions()` is called with
+  no answers to do the draw before asking):
+  - **Rapport**: the first loot (bottom a hand card, draw) is the optional `hand_card_id`; with two or more
+    white and/or black moods in play (any player's) a follow-up `second_hand_card_id` decision offers the second,
+    chosen from the hand as it stands then, so the card the first loot drew can go straight back. Skipping it is a
+    normal answer.
+  - **Longing**: optional `hand_card_id` to discard plus up to two `discard_card_ids` from the pile; the discarded
+    card is already in the pile, so it can be taken straight back.
+  - **Premonition**: `draw_count` (0-3, required) is the play-time choice. The draws happen, the extra play is
+    granted, and a `bottom_card_ids` decision (exactly as many cards as were *actually* drawn -- a short deck draws
+    fewer -- from the whole hand) puts them back. The drawn count rides in the mood's `premonitionDrawn` effect
+    state until the answer arrives. Bots draw the maximum (`BotChoiceResolver::MAX_VALUE_FIELD_EFFECT_KEYS`) and put
+    back their lowest cards.
+  - **Resignation**: a to-play cost (`hand_card_id`, put on the bottom of the deck), like FOMO's discard -- it can't
+    pay for itself, so it needs another card in hand. Bots never volunteer for Rapport's or Longing's optional
+    choices.
 
 
 ### Default selections mode (issue #274)

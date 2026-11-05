@@ -472,6 +472,19 @@ final class CardChoiceSchema
         'reverie' => [
             ['key' => 'discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => 'Discard-pile card to put on the bottom of the deck (then draw a card)'],
         ],
+        'rapport' => [
+            ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to put on the bottom of the deck (then draw a card; with two or more white and/or black moods you may do it again)'],
+        ],
+        'longing' => [
+            ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard from your hand'],
+            ['key' => 'discard_card_ids', 'type' => 'discard_card', 'multi' => true, 'required' => false, 'label' => 'Up to 2 discard-pile cards to put into your hand (if you discard a card above)', 'count' => ['max' => 2]],
+        ],
+        'premonition' => [
+            ['key' => 'draw_count', 'type' => 'value', 'required' => true, 'min' => 0, 'max' => 3, 'label' => 'Cards to draw (up to 3; you then put that many cards from your hand on the bottom of the deck)'],
+        ],
+        'resignation' => [
+            ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => true, 'label' => 'Card to put on the bottom of the deck (cost to play this card)'],
+        ],
         'rashness' => [
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => false, 'label' => "An opponent's mood valued 1 or less to put into the discard pile", 'excludes_teammate' => true, 'filter' => ['max_value' => 1]],
         ],

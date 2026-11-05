@@ -604,6 +604,73 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame($this->ids('Complacency'), $state->discardPile());
     }
 
+    public function testLongingDiscardsACardAndTakesUpToTwoFromTheDiscardPile(): void
+    {
+        $state = $this->state([1 => ['Longing', 'Complacency']], discardNames: ['Apathy', 'Courage', 'Boredom']);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Longing', [
+            'hand_card_id' => $this->id('Complacency'),
+            'discard_card_ids' => $this->ids('Apathy', 'Courage'),
+        ]);
+
+        self::assertEqualsCanonicalizing($this->ids('Apathy', 'Courage'), $state->hand(1), 'a net +1 card in hand');
+        self::assertEqualsCanonicalizing($this->ids('Boredom', 'Complacency'), $state->discardPile());
+    }
+
+    public function testLongingCanTakeBackTheCardItJustDiscarded(): void
+    {
+        $state = $this->state([1 => ['Longing', 'Complacency']]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Longing', [
+            'hand_card_id' => $this->id('Complacency'),
+            'discard_card_ids' => $this->ids('Complacency'),
+        ]);
+
+        self::assertSame($this->ids('Complacency'), $state->hand(1));
+    }
+
+    public function testLongingRefusesMoreThanTwoPickedCards(): void
+    {
+        $state = $this->state([1 => ['Longing', 'Complacency']], discardNames: ['Apathy', 'Courage', 'Boredom']);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($state, 1, 'Longing', [
+            'hand_card_id' => $this->id('Complacency'),
+            'discard_card_ids' => $this->ids('Apathy', 'Courage', 'Boredom'),
+        ]);
+    }
+
+    public function testLongingIsOptional(): void
+    {
+        $state = $this->state([1 => ['Longing', 'Complacency']], discardNames: ['Apathy']);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Longing');
+
+        self::assertSame($this->ids('Complacency'), $state->hand(1));
+        self::assertSame($this->ids('Apathy'), $state->discardPile());
+    }
+
+    public function testResignationPutsAHandCardOnTheBottomOfTheDeckAsItsCost(): void
+    {
+        $state = $this->state([1 => ['Resignation', 'Complacency']], ['Apathy']);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Resignation', ['hand_card_id' => $this->id('Complacency')]);
+
+        self::assertSame([], $state->hand(1));
+        self::assertSame($this->ids('Apathy', 'Complacency'), $state->deck(), 'the paid card is on the bottom');
+        self::assertTrue($state->isInPlay($this->id('Resignation')));
+    }
+
+    public function testResignationCannotBePlayedWithNoOtherCardInHand(): void
+    {
+        $state = $this->state([1 => ['Resignation']]);
+        $state->startTurn(1);
+
+        $this->expectException(IllegalPlayException::class);
+        $this->play($state, 1, 'Resignation', []);
+    }
+
     // ---- static value modifiers ----
 
     public function testArdorAddsTheNumberOfRedMoodsToEachOwnRedMood(): void

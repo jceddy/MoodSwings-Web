@@ -176,6 +176,10 @@ use MoodSwings\Rules\Effects\Custom\ImpulseEffect;
 use MoodSwings\Rules\Effects\Custom\ReflectionEffect;
 use MoodSwings\Rules\Effects\Custom\ReverieEffect;
 use MoodSwings\Rules\Effects\Custom\WarinessEffect;
+use MoodSwings\Rules\Effects\Custom\LongingEffect;
+use MoodSwings\Rules\Effects\Custom\PremonitionEffect;
+use MoodSwings\Rules\Effects\Custom\RapportEffect;
+use MoodSwings\Rules\Effects\Custom\ResignationEffect;
 
 /**
  * Wires up every MoodEffect for the full 133-card pool -- every card with
@@ -543,6 +547,12 @@ final class DefaultEffectRegistry
         $registry->register('familiarity', new ConditionalExtraPlayEffect(restriction: ['type' => 'matches_a_number_of_your_moods']));
         $registry->register('impulse', new ImpulseEffect());
         $registry->register('wariness', new WarinessEffect());
+
+        // Draw/cycle cards.
+        $registry->register('rapport', new RapportEffect());
+        $registry->register('longing', new LongingEffect());
+        $registry->register('premonition', new PremonitionEffect());
+        $registry->register('resignation', new ResignationEffect());
         $registry->register('adrenaline', new FirstEachTurnExtraPlayEffect(FirstEachTurnExtraPlayEffect::RED_MOOD));
         $registry->register('affinity', new FirstEachTurnExtraPlayEffect(FirstEachTurnExtraPlayEffect::MATCHING_NUMBER));
         $registry->register('dominance', new DominanceEffect());
