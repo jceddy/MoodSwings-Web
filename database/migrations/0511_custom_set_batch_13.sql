@@ -5,7 +5,7 @@ ALTER TABLE game_rounds ADD COLUMN round_mood_plays LONGTEXT CHARACTER SET utf8m
 INSERT INTO cards (id, name, effect_key, color, rarity, base_value, alt_value, has_to_play_ability, has_while_in_play_ability, has_after_playing_ability, rules_text, art_set_code) VALUES
     (180, 'Grievance', 'grievance', 'blue', 'rare', 3, NULL, 0, 0, 1, 'After playing this mood — Each opponent with more cards in their hand than you puts a card from their hand on the bottom of the deck.', 'XEMB'),
     (254, 'Urgency', 'urgency', 'green', 'uncommon', 3, 6, 0, 1, 0, 'While in play — This mood''s value is 6 if you played two or more moods this round.', 'XEMB'),
-    (252, 'Restlessness', 'restlessness', 'green', 'uncommon', 3, 6, 0, 1, 0, 'While in play — This mood''s value is 6 if there are three or more different values among your moods. (Moods are cards in play.)', 'XEMB');
+    (252, 'Restlessness', 'restlessness', 'green', 'uncommon', 3, 6, 0, 1, 0, 'While in play — This mood''s value is 6 if there are three or more different values among your moods that don''t have this ability. (Moods are cards in play.)', 'XEMB');
 
 INSERT INTO card_sets (card_id, set_id, collector_number) VALUES
     (180, (SELECT id FROM sets WHERE code = 'XEMB'), 44),

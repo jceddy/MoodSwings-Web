@@ -764,25 +764,35 @@ final class CustomSetEffectsTest extends TestCase
         $this->play($state, 1, 'Malevolence', ['parity' => 'even', 'target_mood_ids' => $this->ids('Anger', 'Apathy')]);
     }
 
-    public function testRestlessnessNeedsThreeDifferentValuesAmongYourMoods(): void
+    public function testRestlessnessNeedsThreeDifferentValuesAmongYourOtherMoods(): void
     {
-        $state = $this->state([1 => ['Restlessness', 'Courage', 'Apathy'], 2 => ['Anger', 'Boredom']]);
+        $state = $this->state([1 => ['Restlessness', 'Courage', 'Joy', 'Apathy'], 2 => ['Anger', 'Boredom']]);
         $state->startTurn(1);
-        $this->seat($state, 1, 'Restlessness', 'Courage'); // itself counts as its printed 3, Courage is 1
+        $this->seat($state, 1, 'Restlessness', 'Courage', 'Joy'); // 1 and 3 besides itself
         $this->seat($state, 2, 'Anger', 'Boredom'); // opposing values never count
-        self::assertSame(3, $state->valueOf($this->id('Restlessness')), 'only two different values');
+        self::assertSame(3, $state->valueOf($this->id('Restlessness')), 'only two different values, and itself is not one of them');
 
-        $this->seat($state, 1, 'Apathy'); // 4: three different values now
+        $this->seat($state, 1, 'Apathy'); // 4: three different values among the others
         self::assertSame(6, $state->valueOf($this->id('Restlessness')));
     }
 
-    public function testRestlessnessDoesNotCountRepeatedValuesAsDifferent(): void
+    public function testRestlessnessDoesNotCountItselfOrRepeatedValues(): void
     {
-        $state = $this->state([1 => ['Restlessness', 'Courage', 'Joy']]);
+        $state = $this->state([1 => ['Restlessness', 'Courage', 'Anger']]);
         $state->startTurn(1);
-        $this->seat($state, 1, 'Restlessness', 'Courage', 'Joy'); // 3, 1, 3: Joy repeats Restlessness's 3
+        $this->seat($state, 1, 'Restlessness', 'Courage', 'Anger'); // 1 and 0 besides itself: Restlessness's own 3 would have made three
 
         self::assertSame(3, $state->valueOf($this->id('Restlessness')));
+    }
+
+    public function testRestlessnessIgnoresACreativityCopyingIt(): void
+    {
+        $state = $this->state([1 => ['Restlessness', 'Courage', 'Apathy', 'Creativity']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Restlessness', 'Courage', 'Apathy');
+        $state->moveHandToInPlay(1, $this->id('Creativity'), $this->id('Restlessness'));
+
+        self::assertSame(3, $state->valueOf($this->id('Restlessness')), 'two values among the others; the copy has the ability, so it is ignored');
     }
 
     public function testUrgencyTurnsOnWithASecondPlayThisRound(): void

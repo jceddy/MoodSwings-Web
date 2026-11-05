@@ -59,18 +59,20 @@ final class CustomConditionalValueEffect extends AbstractMoodEffect
     }
 
     /**
-     * How many different values the owner's moods show (Restlessness). A mood whose own value reads this very
-     * count -- this one, and any other copy of the same card -- is counted at its printed value, so the check
-     * can't chase its own tail (a copy asking after the other would never finish); every other mood counts at
-     * its current value, modifiers included.
+     * How many different values the owner's moods show, not counting any mood with this card's own ability
+     * (Restlessness: "among your moods that don't have this ability") -- itself, any other copy, and a Creativity
+     * copying it. That is also what keeps the count from chasing its own tail: the moods that read it never feed it.
+     * Every other mood counts at its current value, modifiers included.
      */
     private function distinctOwnValues(BoardState $state, int $cardId, int $ownerId): int
     {
         $ownKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
         $values = [];
         foreach ($state->moodsOwnedBy($ownerId) as $mood) {
-            $row = $state->catalogRow($state->effectiveCardId($mood->cardId));
-            $values[$row['effectKey'] === $ownKey ? $row['baseValue'] : $state->valueOf($mood->cardId)] = true;
+            if ($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'] === $ownKey) {
+                continue;
+            }
+            $values[$state->valueOf($mood->cardId)] = true;
         }
 
         return count($values);

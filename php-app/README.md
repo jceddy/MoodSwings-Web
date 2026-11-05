@@ -9435,9 +9435,10 @@ in custom sets is.
     round-end sites as the hand-discard record. Two or more -- so it needs an extra play or an earlier play this
     round -- shows 6; "you" is whoever owns it now. (Like the other round records, replays don't load it.)
   - **Restlessness** is another `CustomConditionalValueEffect` condition (`DISTINCT_OWN_VALUES_AT_LEAST`, 3):
-    different current values among its owner's moods, opposing moods never counted. A mood whose value *is*
-    this count -- Restlessness itself, and any other copy -- is counted at its printed 3, so the check cannot
-    chase its own tail (a card reading its own value, or two copies reading each other, would never finish).
+    different current values among its owner's moods *that don't have this ability*, opposing moods never counted.
+    Restlessness itself, any other copy and a Creativity copying it are all ignored (the card's own loop fix: counting
+    itself made a board with a 1 and a 6 flip between 3 and 6 forever), so it needs three different values among the
+    owner's *other* moods -- a board of at least four.
 
 
 ### Default selections mode (issue #274)
