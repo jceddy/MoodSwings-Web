@@ -9277,7 +9277,8 @@ in custom sets is.
   state -- never `valueOf()` -- or modifiers would recurse into each other. "Printed number" is the card's
   base value through any Creativity copy; Verve reuses Patience/Glee's `playedInRound`/`playedByPlayerId`
   tag; Orderliness remembers its choice as `orderlinessParity`. Competitiveness (1 more than the highest
-  opposing mood) is a plain `computeValue()` with a guard so two of them facing each other can't recurse.
+  opposing mood *that doesn't have this ability*, or 1 with none) is a plain `computeValue()`; leaving out
+  opposing Competitiveness moods (and Creativity copies of one) is what stops two of them reading each other.
   Vitality is a turn-start trigger that stamps +2 on each of the owner's moods of the chosen color through
   `BoardState::addRoundValueBonus()` (an effectState `roundValueBonus` that `valueOf()` adds and
   `clearEndOfRoundValueBonuses()` lifts wherever end-of-round suppressions are lifted) -- it affects the moods

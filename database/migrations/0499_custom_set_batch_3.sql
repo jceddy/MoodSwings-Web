@@ -2,7 +2,7 @@
 
 INSERT INTO cards (id, name, effect_key, color, rarity, base_value, alt_value, has_to_play_ability, has_while_in_play_ability, has_after_playing_ability, rules_text, art_set_code) VALUES
     (218, 'Ardor', 'ardor', 'red', 'mythic', 0, NULL, 0, 1, 0, 'While in play — Each of your red moods has its value increased by the number of red moods you have.', 'XEMB'),
-    (220, 'Competitiveness', 'competitiveness', 'red', 'mythic', 0, NULL, 0, 1, 0, 'While in play — This mood''s value is 1 more than the highest value among your opponents'' moods.', 'XEMB'),
+    (220, 'Competitiveness', 'competitiveness', 'red', 'mythic', 0, NULL, 0, 1, 0, 'While in play — This mood''s value is 1 more than the highest value among your opponents'' moods that don''t have this ability. (If there are no such moods, this mood''s value is 1.)', 'XEMB'),
     (157, 'Humility', 'humility', 'white', 'uncommon', 3, NULL, 0, 1, 0, 'While in play — Each of your moods with a 0, 1, or 2 in its top right corner has its value increased by 1.', 'XEMB'),
     (243, 'Kinship', 'kinship', 'green', 'rare', 1, NULL, 0, 1, 0, 'While in play — Each of your moods that shares a color with another of your moods has its value increased by 1.', 'XEMB'),
     (163, 'Orderliness', 'orderliness', 'white', 'mythic', 2, NULL, 0, 1, 1, 'After playing this mood — Choose odd numbers or even numbers. While in play — Each of your other moods with a number of the chosen type in its top right corner has its value increased by 1. (0 is even.)', 'XEMB'),

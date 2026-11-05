@@ -9,34 +9,26 @@ use MoodSwings\Rules\BoardState;
 
 /**
  * Competitiveness: "While in play -- This mood's value is 1 more than the highest value among your
- * opponents' moods." With no opposing moods that's just 1. Two Competitiveness moods facing each other
- * would depend on one another's value for ever, so a mood that is already being computed further up the
- * stack counts as its printed value instead.
+ * opponents' moods that don't have this ability. (If there are no such moods, this mood's value is 1.)"
+ * Opposing moods with this same ability (a Competitiveness, or a Creativity copy of one) are left out of
+ * the count -- that is what keeps two of them from reading each other's value for ever, and it means both
+ * settle on the same value.
  */
 final class CompetitivenessEffect extends AbstractMoodEffect
 {
-    /** @var array<int, true> card ids whose value is being computed right now */
-    private static array $computing = [];
-
     public function computeValue(BoardState $state, int $cardId): int
     {
-        $row = $state->catalogRow($state->effectiveCardId($cardId));
-        if (isset(self::$computing[$cardId])) {
-            return $row['baseValue'];
-        }
+        $opponentIds = CustomEffectSupport::opponentIds($state, $state->ownerOf($cardId));
 
-        self::$computing[$cardId] = true;
-        try {
-            $ownerId = $state->ownerOf($cardId);
-            $opponentIds = CustomEffectSupport::opponentIds($state, $ownerId);
-            $highest = 0;
-            foreach ($state->moodsInPlay() as $mood) {
-                if (in_array($mood->ownerId, $opponentIds, true)) {
-                    $highest = max($highest, $state->valueOf($mood->cardId));
-                }
+        $highest = 0;
+        foreach ($state->moodsInPlay() as $mood) {
+            if (!in_array($mood->ownerId, $opponentIds, true)) {
+                continue;
             }
-        } finally {
-            unset(self::$computing[$cardId]);
+            if ($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'] === 'competitiveness') {
+                continue;
+            }
+            $highest = max($highest, $state->valueOf($mood->cardId));
         }
 
         return $highest + 1;

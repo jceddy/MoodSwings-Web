@@ -718,6 +718,40 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame(1, $state->valueOf($this->id('Competitiveness')));
     }
 
+    /**
+     * Two players each holding their own copy of the same catalog card needs distinct card instance ids
+     * (the engine's ids are game_cards ids), which state() -- one id per catalog card -- can't express.
+     */
+    public function testTwoCompetitivenessMoodsIgnoreEachOtherAndSettleOnTheSameValue(): void
+    {
+        $competitiveness = $this->id('Competitiveness');
+        $apathy = $this->id('Apathy');
+        $catalog = self::$catalog;
+        $instanceToCatalog = [1001 => $competitiveness, 1002 => $competitiveness, 1003 => $apathy];
+        foreach ($instanceToCatalog as $instanceId => $catalogId) {
+            $catalog[$instanceId] = self::$catalog[$catalogId];
+        }
+        $build = fn (array $hands): BoardState => new BoardState(
+            $catalog, DefaultEffectRegistry::build(), [1, 2], $hands, [], [], false, [], $instanceToCatalog,
+        );
+
+        $state = $build([1 => [1001], 2 => [1002]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 1001);
+        $state->moveHandToInPlay(2, 1002);
+        self::assertSame(1, $state->valueOf(1001), 'no opposing moods without the ability: worth 1');
+        self::assertSame(1, $state->valueOf(1002));
+
+        $state = $build([1 => [1001, 1003], 2 => [1002]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 1001);
+        $state->moveHandToInPlay(1, 1003);
+        $state->moveHandToInPlay(2, 1002);
+        self::assertSame(1, $state->valueOf(1001), "P1's own Apathy is not an opposing mood for P1's copy");
+        self::assertSame(5, $state->valueOf(1002), "P2's copy counts P1's Apathy (4) but not P1's copy");
+        self::assertSame(4, $state->valueOf(1003));
+    }
+
     // ---- registry / schema consistency ----
 
     public function testEveryBatchCardHasARegisteredEffect(): void
