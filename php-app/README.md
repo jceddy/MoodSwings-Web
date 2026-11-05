@@ -9351,9 +9351,9 @@ in custom sets is.
   Curiosity, Celebration, Fickleness/Bitterness, Bliss, Kinship, Honesty and the Chaos color counters; under
   Imagination every mood (colorless included) is the declared color. Anything keyed by the five colors guards
   the new bucket (Even Color Distribution deck rules can never be met by a deck holding one; league and stats
-  sorts put it last; the deck builder's color filter lists it). Pool generation is by color-and-rarity quota
-  for Structure/jceddy's decks, so colorless cards only appear where a pool is drawn without a color
-  (random drafts, One of Each, Power's non-mythic cards, sealed pools).
+  sorts put it last; the deck builder's color filter lists it). Structure decks (the generator and the `structure` duel preset) only count rarities, never colors,
+  so they include colorless cards like any other; jceddy's 75/150 decks are built to a per-color quota by design
+  and so never contain one.
   Unity is the first **`RoundWinEffect`**: `determineRoundWinner()` asks every in-play one after scoring (and
   after the score swaps) and, if any owner qualifies, the winner is chosen among the qualifying owners --
   or their team -- by the usual scores and tiebreak instead of among everyone. It counts only your own

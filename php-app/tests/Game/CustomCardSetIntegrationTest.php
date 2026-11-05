@@ -304,6 +304,20 @@ final class CustomCardSetIntegrationTest extends TestCase
         self::assertSame([], array_values(array_diff($dealt, $customIds)), 'every dealt card is from the custom set');
     }
 
+    public function testAStructureDeckDoesNotCareAboutColorSoItCanHoldColorlessCards(): void
+    {
+        // Exactly the 45 cards a Structure deck needs, one of them colorless: all 45 are dealt, so it must be in there.
+        $customIds = $this->insertCustomSetCards(['common' => 23, 'uncommon' => 14, 'rare' => 6, 'mythic' => 2]);
+        $this->pdo->exec("UPDATE cards SET color = 'colorless' WHERE id = {$customIds[0]}");
+        $alice = $this->insertUser('alice', true);
+        $bob = $this->insertUser('bob', true);
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], cardSetCodes: ['XEMB']);
+        $this->games->startGame($gameId);
+
+        self::assertContains($customIds[0], $this->dealtCardIds($gameId));
+    }
+
     public function testPickingBothSetsDrawsFromBoth(): void
     {
         $customIds = $this->insertFullCustomSet();

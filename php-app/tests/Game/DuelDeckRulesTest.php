@@ -99,6 +99,20 @@ final class DuelDeckRulesTest extends TestCase
         $rules->validate([19, 19, 1, 2, 3, 4, 5], $this->catalog());
     }
 
+    public function testTheStructurePresetIgnoresColorSoColorlessCardsAreFine(): void
+    {
+        $catalog = $this->catalog();
+        $catalog[1]['color'] = 'colorless';
+        $catalog[2]['color'] = 'colorless';
+        $preset = DuelDeckRules::forPreset('structure')->toArray();
+        self::assertSame([], $preset['even_color_distribution_rarities'], 'the Structure rules have no color rule at all');
+
+        // The preset's own rarity caps and singleton rule, just with a smaller minimum so 15 cards can be checked.
+        $rules = new DuelDeckRules(7, $preset['rarity_limits'], $preset['duplicate_limits']);
+        $rules->validate(range(1, 15), $catalog); // includes the two colorless commons
+        $this->addToAssertionCount(1);
+    }
+
     public function testAColorlessCardCanNeverSatisfyAnEvenColorDistribution(): void
     {
         $catalog = $this->catalog();
