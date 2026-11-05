@@ -87,6 +87,24 @@ final class CustomEffectSupport
         return true;
     }
 
+    /** @return string 'odd' or 'even' -- anything else is an invalid choice */
+    public static function requireParity(string $parity): string
+    {
+        if (!in_array($parity, ['odd', 'even'], true)) {
+            throw new \MoodSwings\Rules\Exceptions\InvalidChoiceException("'{$parity}' is not odd or even");
+        }
+
+        return $parity;
+    }
+
+    /** Whether $cardId's printed number (top right corner; 0 is even) is odd/even -- works for a card anywhere, not just in play. */
+    public static function hasParity(BoardState $state, int $cardId, string $parity): bool
+    {
+        $number = $state->isInPlay($cardId) ? self::printedNumber($state, $cardId) : $state->catalogRow($cardId)['baseValue'];
+
+        return ($number % 2 === 1) === ($parity === 'odd');
+    }
+
     /** A mood's printed number (the top right corner): the card's base value, through any Creativity copy. */
     public static function printedNumber(BoardState $state, int $cardId): int
     {

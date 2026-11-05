@@ -9007,6 +9007,7 @@
         renderSpectatorFinalHands(isReadOnlyView() ? state : null);
 
         renderTeammateHand(state);
+        renderRevealedHands(state);
         renderTeamDecision(state.team_decision);
         checkChaosDraftOffer(state);
         renderInitialCardPass(state);
@@ -9159,6 +9160,35 @@
             group.appendChild(list);
 
             section.appendChild(group);
+        });
+    }
+
+    // Candor ("your opponents play with their hands revealed"): GameService adds you.revealed_hands -- one
+    // read-only hand per opponent -- only for a player who has a Candor in play. Same card thumbs as the
+    // teammate's hand; clicking one opens the ordinary detail view.
+    function renderRevealedHands(state) {
+        const section = document.getElementById('revealed-hands-section');
+        const hands = state.you.revealed_hands;
+        if (!hands) {
+            section.hidden = true;
+            section.textContent = '';
+            return;
+        }
+
+        section.hidden = false;
+        section.textContent = '';
+        hands.forEach((entry) => {
+            const heading = document.createElement('h3');
+            heading.textContent = playerLabelFor(entry.game_player_id) + "'s hand (revealed)";
+            section.appendChild(heading);
+
+            const list = document.createElement('ul');
+            renderList(list, { hidden: true }, entry.hand, (card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                return li;
+            });
+            section.appendChild(list);
         });
     }
 

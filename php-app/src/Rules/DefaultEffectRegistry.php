@@ -157,6 +157,12 @@ use MoodSwings\Rules\Effects\Custom\PerseveranceEffect;
 use MoodSwings\Rules\Effects\Custom\VindicationEffect;
 use MoodSwings\Rules\Effects\Custom\FulfillmentEffect;
 use MoodSwings\Rules\Effects\Custom\GratitudeEffect;
+use MoodSwings\Rules\Effects\Custom\CandorEffect;
+use MoodSwings\Rules\Effects\Custom\CarelessnessEffect;
+use MoodSwings\Rules\Effects\Custom\DiscernmentEffect;
+use MoodSwings\Rules\Effects\Custom\HonestyEffect;
+use MoodSwings\Rules\Effects\Custom\TurmoilEffect;
+use MoodSwings\Rules\Effects\Custom\WhimsyEffect;
 
 /**
  * Wires up every MoodEffect for the full 133-card pool -- every card with
@@ -494,6 +500,14 @@ final class DefaultEffectRegistry
         // Extra scoring (ScoringBonusEffect).
         $registry->register('fulfillment', new FulfillmentEffect());
         $registry->register('gratitude', new GratitudeEffect());
+
+        // Deck-top moves and hand reveals.
+        $registry->register('candor', new CandorEffect());
+        $registry->register('carelessness', new CarelessnessEffect());
+        $registry->register('discernment', new DiscernmentEffect());
+        $registry->register('honesty', new HonestyEffect());
+        $registry->register('turmoil', new TurmoilEffect());
+        $registry->register('whimsy', new WhimsyEffect());
 
         return $registry;
     }

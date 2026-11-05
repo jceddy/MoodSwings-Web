@@ -19421,6 +19421,24 @@ final class GameService
             );
         }
 
+        // Candor: "your opponents play with their hands revealed" -- shown to the Candor's owner only, as one
+        // read-only hand per opponent (you.revealed_hands), the way an Open Team Play teammate's hand is.
+        if ($viewerGamePlayerId !== null && $this->effectiveSourceCardIds($state, $viewerGamePlayerId, 'candor') !== []) {
+            $response['you']['revealed_hands'] = [];
+            foreach ($state->activePlayerOrder() as $opponentId) {
+                if ($opponentId === $viewerGamePlayerId || $state->isTeammate($viewerGamePlayerId, $opponentId)) {
+                    continue;
+                }
+                $response['you']['revealed_hands'][] = [
+                    'game_player_id' => $opponentId,
+                    'hand' => array_map(
+                        fn (int $cardId) => $this->serializeCard($state, $cardId, $names, $opponentId),
+                        $state->hand($opponentId)
+                    ),
+                ];
+            }
+        }
+
         if (self::isTeamFormat($game['format'])) {
             // Which player is your teammate is common to both team
             // formats (derived purely from team_id, regardless of
@@ -20994,7 +21012,8 @@ final class GameService
         $revealedCardIds = $details['revealed_card_ids'] ?? [];
         if ($revealedCardIds !== []) {
             $revealedNames = array_map(fn (int $id) => $cardNames[$id] ?? 'a card', $revealedCardIds);
-            $targetName = isset($details['target_player_id']) ? ($playerNames[(int) $details['target_player_id']] ?? 'a player') : 'a player';
+            // No target in the choices means the player revealed from their own hand (Honesty, Whimsy).
+            $targetName = isset($details['target_player_id']) ? ($playerNames[(int) $details['target_player_id']] ?? 'a player') : $actor;
             $description .= ', revealing ' . implode(', ', $revealedNames) . " from {$targetName}'s hand";
         }
 

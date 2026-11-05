@@ -469,6 +469,47 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertSame(2 + 2 * 2, $this->state()->valueOf($vindication), 'a round that awarded two wins counts twice');
     }
 
+    private function userIdOf(int $gamePlayerId): int
+    {
+        return (int) $this->pdo->query("SELECT user_id FROM game_players WHERE id = {$gamePlayerId}")->fetchColumn();
+    }
+
+    public function testCandorShowsItsOwnerEveryOpponentsHandAndNobodyElse(): void
+    {
+        $this->card('Candor', 'in_play', $this->p1);
+        $secret = $this->card('Apathy', 'hand', $this->p2);
+        $this->card('Creativity', 'hand', $this->p1);
+
+        $mine = $this->games->getState($this->gameId, $this->userIdOf($this->p1));
+        self::assertCount(1, $mine['you']['revealed_hands']);
+        self::assertSame($this->p2, $mine['you']['revealed_hands'][0]['game_player_id']);
+        self::assertSame([$secret], array_column($mine['you']['revealed_hands'][0]['hand'], 'card_id'));
+
+        $theirs = $this->games->getState($this->gameId, $this->userIdOf($this->p2));
+        self::assertArrayNotHasKey('revealed_hands', $theirs['you'], 'only the Candor owner sees the opponents\' hands');
+    }
+
+    public function testWithoutCandorNoHandsAreRevealed(): void
+    {
+        $this->card('Apathy', 'hand', $this->p2);
+        $this->card('Creativity', 'hand', $this->p1);
+
+        $state = $this->games->getState($this->gameId, $this->userIdOf($this->p1));
+        self::assertArrayNotHasKey('revealed_hands', $state['you']);
+    }
+
+    public function testHonestysRevealIsNamedInTheLogForItsOwner(): void
+    {
+        $honesty = $this->card('Honesty', 'hand', $this->p1);
+        $this->card('Laziness', 'hand', $this->p1);
+        $this->card('Creativity', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $honesty, []);
+
+        $log = array_column($this->games->fullEventLog($this->gameId), 'description');
+        self::assertStringContainsString("revealing Laziness from tsu1's hand", implode("\n", $log));
+    }
+
     public function testReplayFollowsAWastefulnessCardFromTheDeckToTheDiscardPile(): void
     {
         $this->card('Wastefulness', 'in_play', $this->p2);

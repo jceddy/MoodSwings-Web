@@ -737,6 +737,144 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame(0, $state->valueOf($this->id('Anger')));
     }
 
+    // ---- deck-top moves and hand reveals ----
+
+    public function testCarelessnessPutsTheTopTwoCardsOfTheDeckIntoTheDiscardPile(): void
+    {
+        $state = $this->state([1 => ['Carelessness']], deckNames: ['Apathy', 'Complacency', 'Creativity']);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Carelessness');
+
+        self::assertSame($this->ids('Apathy', 'Complacency'), $state->discardPile());
+        self::assertSame($this->ids('Creativity'), $state->deck());
+    }
+
+    public function testCarelessnessWithAShortDeckMovesWhatThereIs(): void
+    {
+        $state = $this->state([1 => ['Carelessness']], deckNames: ['Apathy']);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Carelessness');
+
+        self::assertSame($this->ids('Apathy'), $state->discardPile());
+    }
+
+    public function testHonestyBecomesSixWhenEveryHandCardSharesAColorWithAMood(): void
+    {
+        // Honesty is green and counts as a mood: green Laziness shares, black Apathy shares with the black mood.
+        $state = $this->state([1 => ['Honesty', 'Laziness', 'Apathy', 'Hate']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Hate'); // black
+        $this->play($state, 1, 'Honesty');
+
+        self::assertSame(6, $state->valueOf($this->id('Honesty')));
+        self::assertEqualsCanonicalizing($this->ids('Laziness', 'Apathy'), $state->consumeRevealedCardIds(), 'the whole hand was revealed');
+    }
+
+    public function testHonestyStaysAtItsPrintedValueWhenAHandCardSharesNoColor(): void
+    {
+        $state = $this->state([1 => ['Honesty', 'Laziness', 'Creativity']]); // blue Creativity: no blue mood
+        $state->startTurn(1);
+        $this->play($state, 1, 'Honesty');
+
+        self::assertSame(3, $state->valueOf($this->id('Honesty')));
+    }
+
+    public function testHonestyWithAnEmptyHandCounts(): void
+    {
+        $state = $this->state([1 => ['Honesty']]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Honesty');
+
+        self::assertSame(6, $state->valueOf($this->id('Honesty')));
+    }
+
+    public function testWhimsyRevealsARandomHandCardAndGrantsAPlayOfOnlyThatCard(): void
+    {
+        $state = $this->state([1 => ['Whimsy', 'Apathy']]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Whimsy');
+
+        self::assertSame($this->ids('Apathy'), $state->consumeRevealedCardIds());
+        self::assertSame(1, $state->playsRemaining());
+        $this->play($state, 1, 'Apathy');
+        self::assertTrue($state->isInPlay($this->id('Apathy')));
+    }
+
+    public function testWhimsyRefusesAnyOtherCardForItsExtraPlay(): void
+    {
+        $state = $this->state([1 => ['Whimsy', 'Apathy', 'Complacency', 'Creativity']]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Whimsy');
+        $revealed = $state->consumeRevealedCardIds()[0];
+
+        $other = null;
+        foreach ($this->ids('Apathy', 'Complacency', 'Creativity') as $candidate) {
+            if ($candidate !== $revealed) {
+                $other = $candidate;
+                break;
+            }
+        }
+        $this->expectException(IllegalPlayException::class);
+        $this->plays->playMood($state, 1, $other, new PlayerChoices([]));
+    }
+
+    public function testWhimsyWithAnEmptyHandDoesNothing(): void
+    {
+        $state = $this->state([1 => ['Whimsy']]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Whimsy');
+
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testDiscernmentCyclesOnlyTheChosenParityAndDrawsThatMany(): void
+    {
+        // Apathy 4 (even), Charity 1 (odd), Creativity 0 (even).
+        $state = $this->state([1 => ['Discernment', 'Apathy', 'Charity', 'Creativity']], deckNames: ['Complacency', 'Courage']);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Discernment', ['parity' => 'even', 'reveal_card_ids' => $this->ids('Apathy', 'Creativity')]);
+
+        self::assertEqualsCanonicalizing($this->ids('Charity', 'Complacency', 'Courage'), $state->hand(1));
+        self::assertSame($this->ids('Apathy', 'Creativity'), $state->deck());
+    }
+
+    public function testDiscernmentRejectsACardOfTheWrongParity(): void
+    {
+        $state = $this->state([1 => ['Discernment', 'Charity']]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($state, 1, 'Discernment', ['parity' => 'even', 'reveal_card_ids' => $this->ids('Charity')]);
+    }
+
+    public function testDiscernmentIsOptionalBeyondTheParity(): void
+    {
+        $state = $this->state([1 => ['Discernment', 'Apathy']], deckNames: ['Complacency']);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Discernment', ['parity' => 'odd']);
+
+        self::assertSame($this->ids('Apathy'), $state->hand(1));
+    }
+
+    public function testTurmoilForcesTheChosenPlayerToCycleEveryCardOfThatParity(): void
+    {
+        $state = $this->state([1 => ['Turmoil'], 2 => ['Apathy', 'Charity', 'Creativity']], deckNames: ['Complacency', 'Courage']);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Turmoil', ['parity' => 'even', 'target_player_id' => 2]);
+
+        self::assertEqualsCanonicalizing($this->ids('Charity', 'Complacency', 'Courage'), $state->hand(2));
+        self::assertEqualsCanonicalizing($this->ids('Apathy', 'Charity', 'Creativity'), $state->consumeRevealedCardIds(), "the chosen player's whole hand is revealed");
+    }
+
+    public function testTurmoilCanTargetYourself(): void
+    {
+        $state = $this->state([1 => ['Turmoil', 'Apathy']], deckNames: ['Complacency']);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Turmoil', ['parity' => 'even', 'target_player_id' => 1]);
+
+        self::assertSame($this->ids('Complacency'), $state->hand(1));
+    }
+
     // ---- extra scoring ----
 
     public function testFulfillmentScoresEachOwnMoodWorthSixOrMoreAnExtraTime(): void

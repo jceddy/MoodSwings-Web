@@ -9245,8 +9245,10 @@ in custom sets is.
   `PairedColorTargetEffect` (Distrust, Disdain, Indignation, Vigilance), `WarmthEffect`, `YearningEffect`.
   Batch 2 (migration 0498, 12 cards) adds the **turn-start triggers** and Resilience; batch 3 (migration
   0499, 7 cards) adds the **static value modifiers**, batch 4 (migration 0500, 3 cards) the **round-win
-  count** cards and batch 5 (migration 0502, 2 cards) the **extra scoring** cards (all below). The later
-  batches still need new hooks (a colorless color, Grudge's chosen-opponent play grant) and aren't implemented yet; until a card is in the
+  count** cards and batch 5 (migration 0502, 2 cards) the **extra scoring** cards and batch 6 (migration 0503,
+  6 cards) Carelessness and the **hand-reveal** cards (all below). The later batches still need new hooks
+  (a colorless color, Grudge's chosen-opponent play grant, a private hand reveal to a chooser, picking from
+  revealed deck cards) and aren't implemented yet; until a card is in the
   `cards` table it simply doesn't exist in the game.
 - **"At the start of each of your turns" (`TurnStartEffect`).** Brooding, Covetousness, Fairness, FOMO,
   Jealousy, Martyrdom, Maturity, Neglect, Rumination, Volatility and Wastefulness implement
@@ -9307,6 +9309,17 @@ in custom sets is.
   moods are judged as they stand when the round scores. Suppression only zeroes a mood's own value in this
   engine -- a suppressed Fulfillment (value 0) still grants its extra scoring, like every other while-in-play
   ability here, so the value modifiers and Perseverance also keep working while suppressed.
+- **Hand reveals and deck-top moves (batch 6).** Carelessness uses `BoardState::moveDeckTopToDiscard()` twice.
+  A reveal is `BoardState::recordRevealedCard()`, which puts the card in the play's log entry ("revealing X
+  from Y's hand" -- the actor's own hand when the choices name no target): Honesty reveals its whole hand
+  (then locks its value to 6 if every card shares a color with one of your moods -- Honesty counts as one,
+  an empty hand qualifies, colorless doesn't), Whimsy reveals a random hand card and grants an extra play of
+  only that card, Discernment and Turmoil (odd/even cycling, optional cards for Discernment, forced on a
+  chosen player for Turmoil) reveal what they cycle. Candor adds no engine rule: `buildGameState()` gives its
+  owner `you.revealed_hands` (every non-teammate opponent's hand, shown by the client like a teammate's) and
+  nobody else. Not done: Greed/Nosiness/Entitlement (the chooser must privately see an opponent's hand and
+  pick from it) and Inspiration (pick one of the revealed top-three deck cards) -- both need a decision
+  field that offers cards that aren't in a hand, the discard pile or play.
 
 ### Default selections mode (issue #274)
 

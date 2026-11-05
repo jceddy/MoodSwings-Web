@@ -448,6 +448,14 @@ final class CardChoiceSchema
         'orderliness' => [
             ['key' => 'parity', 'type' => 'mode', 'required' => true, 'options' => ['odd', 'even'], 'label' => 'Your other moods with odd or even printed numbers get +1 while this is in play'],
         ],
+        'discernment' => [
+            ['key' => 'parity', 'type' => 'mode', 'required' => true, 'options' => ['odd', 'even'], 'label' => 'Odd or even: which printed numbers you may cycle'],
+            ['key' => 'reveal_card_ids', 'type' => 'hand_card', 'multi' => true, 'required' => false, 'label' => 'Hand cards of that type to reveal and put on the bottom of the deck (you draw that many)'],
+        ],
+        'turmoil' => [
+            ['key' => 'parity', 'type' => 'mode', 'required' => true, 'options' => ['odd', 'even'], 'label' => 'Odd or even: which printed numbers get cycled'],
+            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => true, 'label' => 'Player who reveals their hand and cycles every card of that type'],
+        ],
         'rashness' => [
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => false, 'label' => "An opponent's mood valued 1 or less to put into the discard pile", 'excludes_teammate' => true, 'filter' => ['max_value' => 1]],
         ],
