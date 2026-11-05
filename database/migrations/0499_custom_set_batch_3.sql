@@ -7,7 +7,7 @@ INSERT INTO cards (id, name, effect_key, color, rarity, base_value, alt_value, h
     (243, 'Kinship', 'kinship', 'green', 'rare', 1, NULL, 0, 1, 0, 'While in play — Each of your moods that shares a color with another of your moods has its value increased by 1.', 'XEMB'),
     (163, 'Orderliness', 'orderliness', 'white', 'mythic', 2, NULL, 0, 1, 1, 'After playing this mood — Choose odd numbers or even numbers. While in play — Each of your other moods with a number of the chosen type in its top right corner has its value increased by 1. (0 is even.)', 'XEMB'),
     (235, 'Verve', 'verve', 'red', 'rare', 1, NULL, 0, 1, 0, 'While in play — Each of your red moods that you played this round has its value increased by 2.', 'XEMB'),
-    (256, 'Vitality', 'vitality', 'green', 'rare', 1, NULL, 0, 1, 0, 'While in play — At the start of each of your turns, choose a color. Until the end of this round, each of your moods of that color has its value increased by 2.', 'XEMB');
+    (256, 'Vitality', 'vitality', 'green', 'rare', 1, NULL, 0, 1, 0, 'While in play — At the start of each of your turns, choose a color. Until the end of this round, each of your moods of that color has its value increased by 2. (This includes moods you play later this round.)', 'XEMB');
 
 INSERT INTO card_sets (card_id, set_id, collector_number) VALUES
     (218, (SELECT id FROM sets WHERE code = 'XEMB'), 85),

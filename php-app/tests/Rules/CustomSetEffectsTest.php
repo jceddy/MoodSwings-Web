@@ -718,6 +718,24 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame(1, $state->valueOf($this->id('Competitiveness')));
     }
 
+    public function testVitalitysColorBonusIsKeptByPlayerAndColor(): void
+    {
+        $state = $this->state([1 => ['Anger', 'Boredom', 'Creativity'], 2 => ['Hate']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Anger', 'Creativity');
+        $state->addRoundColorBonus(1, 'red', 2);
+        $this->seat($state, 1, 'Boredom'); // played after the bonus was chosen
+
+        self::assertSame(2, $state->valueOf($this->id('Anger')));
+        self::assertSame(6, $state->valueOf($this->id('Boredom')));
+        self::assertSame(0, $state->valueOf($this->id('Creativity')), 'another color');
+
+        $state->addRoundColorBonus(1, 'red', 2);
+        self::assertSame(4, $state->valueOf($this->id('Anger')), 'two bonuses stack');
+        $state->clearEndOfRoundValueBonuses();
+        self::assertSame(0, $state->valueOf($this->id('Anger')));
+    }
+
     // ---- round-win counts ----
 
     public function testResolveIsSixOnlyWhileYouHaveWonFewerRoundsThanEveryOtherPlayer(): void

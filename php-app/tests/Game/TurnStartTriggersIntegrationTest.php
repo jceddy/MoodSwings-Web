@@ -396,6 +396,39 @@ final class TurnStartTriggersIntegrationTest extends TestCase
 
         $this->games->pass($this->gameId, $this->p2); // the round ends
         self::assertSame(0, $this->state()->valueOf($anger), 'the bonus lasts only until the end of the round');
+        self::assertSame([], $this->state()->roundColorBonuses());
+    }
+
+    public function testVitalityAlsoBoostsMoodsOfThatColorPlayedLaterThisTurn(): void
+    {
+        $this->card('Vitality', 'in_play', $this->p2);
+        $this->card('Anger', 'in_play', $this->p2);
+        $this->card('Hope', 'in_play', $this->p2); // an extra play each turn, so the round is still open after Boredom
+        $boredom = $this->card('Boredom', 'hand', $this->p2); // red, 4 -- played after the trigger
+        $this->card('Creativity', 'hand', $this->p1);
+
+        $this->handTurnToPlayerTwo();
+        $this->games->respondToDecision($this->gameId, $this->p2, ['color' => 'red']);
+        $this->games->playMood($this->gameId, $this->p2, $boredom, []);
+
+        self::assertSame(6, $this->state()->valueOf($boredom), '4 printed, +2 from Vitality');
+    }
+
+    public function testVitalitysBonusSurvivesItLeavingPlayAndFollowsOwnership(): void
+    {
+        $vitality = $this->card('Vitality', 'in_play', $this->p2);
+        $anger = $this->card('Anger', 'in_play', $this->p2);
+        $this->card('Creativity', 'hand', $this->p1);
+
+        $this->handTurnToPlayerTwo();
+        $this->games->respondToDecision($this->gameId, $this->p2, ['color' => 'red']);
+
+        $state = $this->state();
+        $state->moveInPlayToDiscard($vitality);
+        self::assertSame(2, $state->valueOf($anger), 'Vitality leaving play does not end the bonus');
+
+        $state->giveInPlayToPlayer($anger, $this->p1);
+        self::assertSame(0, $state->valueOf($anger), "the bonus is for the chooser's moods: a mood that changes hands stops counting");
     }
 
     public function testPerseveranceGrowsAfterARoundThatLeavesItsOwnerBehind(): void

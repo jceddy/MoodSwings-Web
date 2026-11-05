@@ -9280,10 +9280,12 @@ in custom sets is.
   tag; Orderliness remembers its choice as `orderlinessParity`. Competitiveness (1 more than the highest
   opposing mood *that doesn't have this ability*, or 1 with none) is a plain `computeValue()`; leaving out
   opposing Competitiveness moods (and Creativity copies of one) is what stops two of them reading each other.
-  Vitality is a turn-start trigger that stamps +2 on each of the owner's moods of the chosen color through
-  `BoardState::addRoundValueBonus()` (an effectState `roundValueBonus` that `valueOf()` adds and
-  `clearEndOfRoundValueBonuses()` lifts wherever end-of-round suppressions are lifted) -- it affects the moods
-  there when it resolves, survives Vitality leaving play, and does not reach moods that arrive later.
+  Vitality is a turn-start trigger whose chosen color becomes a round-long (player, color, +2) entry on the
+  board (`BoardState::addRoundColorBonus()`, persisted on the live round as `game_rounds.round_value_bonuses`,
+  migration 0501, and dropped by `clearEndOfRoundValueBonuses()` wherever end-of-round suppressions are
+  lifted). `valueOf()` adds it to every mood that player currently owns of that color -- whenever it was
+  played (the card says so: "includes moods you play later this round"), and even after Vitality leaves play;
+  a mood that changes hands stops counting for the old owner.
 - **Round-win counts.** Resolve (6 while you've won fewer rounds than each other player), Vindication
   (+2 per round you've won) and Perseverance (after scoring, +2 permanently while you've won fewer rounds
   than each other player). Round wins aren't a stored counter -- they're derived from the scored

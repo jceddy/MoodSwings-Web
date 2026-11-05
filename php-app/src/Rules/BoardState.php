@@ -114,6 +114,9 @@ final class BoardState
     /** Whoever took the first turn of the current round (e.g. for Chivalry/Triumph) -- distinct from currentPlayerId, which changes every turn. */
     private ?int $roundFirstPlayerId = null;
 
+    /** @var list<array{playerId: int, color: string, amount: int}> Vitality's round-long color bonuses -- see addRoundColorBonus(). */
+    private array $roundColorBonuses = [];
+
     /** @var array<int, int> playerId => rounds that player (their team, in a team format) has won so far -- see setRoundWins(). */
     private array $roundWins = [];
 
@@ -1945,7 +1948,7 @@ final class BoardState
         return $this->applyChaosValuePipeline($cardId, $this->printedValueOf($cardId, $mood))
             + $this->chaosValueDeltaOf($cardId)
             + $this->staticValueModifiersFor($cardId, $mood)
-            + (int) ($mood->effectState['roundValueBonus'] ?? 0);
+            + $this->roundColorBonusFor($cardId, $mood);
     }
 
     /**
@@ -1981,21 +1984,51 @@ final class BoardState
     }
 
     /**
-     * Vitality-style "until the end of this round, this mood has its value increased by N": stacks onto
-     * the mood's own 'roundValueBonus' effectState (applied by valueOf()), lifted by
-     * clearEndOfRoundValueBonuses() when the round ends.
+     * Vitality: "until the end of this round, each of your moods of that color has its value increased by
+     * N" -- remembered as a round-long (player, color, amount) entry rather than stamped on moods, so it
+     * reaches every mood that player owns of that color for the rest of the round, whenever it was played
+     * and whatever happens to the mood that created the bonus. Entries stack. Persisted on the round
+     * (BoardStateRepository, game_rounds.round_value_bonuses) and dropped by clearEndOfRoundValueBonuses().
      */
-    public function addRoundValueBonus(int $cardId, int $amount): void
+    public function addRoundColorBonus(int $playerId, string $color, int $amount): void
     {
-        $this->setEffectState($cardId, 'roundValueBonus', (int) ($this->effectState($cardId, 'roundValueBonus') ?? 0) + $amount);
+        $this->roundColorBonuses[] = ['playerId' => $playerId, 'color' => $color, 'amount' => $amount];
     }
 
-    /** Removes every addRoundValueBonus() bonus -- called wherever the round's end-of-round suppressions are lifted. */
+    /** @return list<array{playerId: int, color: string, amount: int}> */
+    public function roundColorBonuses(): array
+    {
+        return $this->roundColorBonuses;
+    }
+
+    /** @param list<array{playerId: int, color: string, amount: int}> $bonuses */
+    public function restoreRoundColorBonuses(array $bonuses): void
+    {
+        $this->roundColorBonuses = array_values($bonuses);
+    }
+
+    /** What the round's color bonuses add to $cardId right now: those for its CURRENT owner and CURRENT color. */
+    private function roundColorBonusFor(int $cardId, MoodInPlay $mood): int
+    {
+        if ($this->roundColorBonuses === []) {
+            return 0;
+        }
+
+        $color = $this->colorOf($cardId);
+        $total = 0;
+        foreach ($this->roundColorBonuses as $bonus) {
+            if ($bonus['playerId'] === $mood->ownerId && $bonus['color'] === $color) {
+                $total += $bonus['amount'];
+            }
+        }
+
+        return $total;
+    }
+
+    /** Drops every addRoundColorBonus() entry -- called wherever the round's end-of-round suppressions are lifted. */
     public function clearEndOfRoundValueBonuses(): void
     {
-        foreach (array_keys($this->moodsInPlay) as $cardId) {
-            $this->clearEffectState($cardId, 'roundValueBonus');
-        }
+        $this->roundColorBonuses = [];
     }
 
     /**
