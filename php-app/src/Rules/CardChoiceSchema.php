@@ -456,6 +456,15 @@ final class CardChoiceSchema
             ['key' => 'parity', 'type' => 'mode', 'required' => true, 'options' => ['odd', 'even'], 'label' => 'Odd or even: which printed numbers get cycled'],
             ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => true, 'label' => 'Player who reveals their hand and cycles every card of that type'],
         ],
+        'greed' => [
+            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'other', 'required' => true, 'label' => 'Opponent with cards in hand who reveals their hand (you take a card from it)', 'excludes_teammate' => true, 'filter' => ['min_hand_count' => 1], 'optional_if_no_targets' => true],
+        ],
+        'nosiness' => [
+            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'other', 'required' => true, 'label' => 'Opponent with cards in hand who reveals their hand (you choose a card for them to discard)', 'excludes_teammate' => true, 'filter' => ['min_hand_count' => 1], 'optional_if_no_targets' => true],
+        ],
+        'entitlement' => [
+            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'other', 'required' => true, 'label' => 'Opponent with cards in hand and a mood in play (they may reveal their hand, or lose a highest value mood)', 'excludes_teammate' => true, 'filter' => ['min_hand_count' => 1, 'min_mood_count' => 1], 'optional_if_no_targets' => true],
+        ],
         'rashness' => [
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => false, 'label' => "An opponent's mood valued 1 or less to put into the discard pile", 'excludes_teammate' => true, 'filter' => ['max_value' => 1]],
         ],

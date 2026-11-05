@@ -804,6 +804,32 @@ final class BotPlayerService
             }
         }
 
+        // Greed/Nosiness/Entitlement/Inspiration: pick from cards the table has just seen revealed. The best card
+        // (by draft priority, lowest id on a tie) is right every time -- taken for ourselves, or the one an
+        // opponent should lose.
+        if (($field['type'] ?? null) === 'revealed_card') {
+            $best = null;
+            foreach ($field['candidate_card_ids'] ?? [] as $candidateId) {
+                $score = $state->catalogRow($candidateId)['draftPriorityScore'];
+                if ($best === null || $score > $best['score']) {
+                    $best = ['id' => $candidateId, 'score' => $score];
+                }
+            }
+
+            return $best === null ? [] : [$field['key'] => $best['id']];
+        }
+
+        // Entitlement's "reveal your hand?" (asked of the opponent it targets): give up a card rather than a
+        // mood that's carrying real weight. Declining costs the highest value mood.
+        if ($decisionType === 'entitlement_reveal') {
+            $highest = 0;
+            foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+                $highest = max($highest, $state->valueOf($mood->cardId));
+            }
+
+            return $highest >= 3 ? [$field['key'] => true] : [];
+        }
+
         // "At the start of each of your turns" moods (TurnStartEffect) whose optional choice is free or
         // plainly worth taking -- the generic resolver below never fills an optional field. Anything not
         // listed (Brooding, Martyrdom, Rumination, Wastefulness) is left declined, the conservative default.

@@ -11966,6 +11966,11 @@
                         value: c.card_id,
                         label: cardLabel(c) + (c.last_owner_name ? ' — ' + c.last_owner_name : ''),
                     }));
+            case 'revealed_card':
+                // Cards just revealed to the whole table (Greed/Nosiness/Entitlement's opponent hand,
+                // Inspiration's top three) that sit in no zone the client lists: like 'grant_choice', the
+                // options are already fully server-computed (GameService::serializePendingDecision()).
+                return field.options || [];
             case 'grant_choice':
                 // Unlike every other case here, the options themselves are
                 // already fully server-computed (GameService::

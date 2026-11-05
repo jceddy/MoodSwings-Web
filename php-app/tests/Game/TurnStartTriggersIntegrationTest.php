@@ -538,6 +538,169 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertStringContainsString("revealing Laziness from tsu1's hand", implode("\n", $log));
     }
 
+    public function testGreedTakesAChosenCardFromTheRevealedHandAndTheOpponentRedraws(): void
+    {
+        $greed = $this->card('Greed', 'hand', $this->p1);
+        $this->card('Creativity', 'hand', $this->p1);
+        $keepable = $this->card('Complacency', 'hand', $this->p2);
+        $taken = $this->card('Apathy', 'hand', $this->p2);
+        $drawn = $this->card('Courage', 'deck', $this->p2, 0);
+
+        $this->games->playMood($this->gameId, $this->p1, $greed, ['target_player_id' => $this->p2]);
+
+        self::assertSame($this->p1, $this->pendingDecisionTarget(), 'the player who played Greed picks');
+        $pending = $this->games->getState($this->gameId, $this->userIdOf($this->p1))['round']['pending_decision'];
+        self::assertSame('revealed_card', $pending['field']['type']);
+        $labels = array_column($pending['field']['options'], 'label', 'value');
+        self::assertSame('Apathy (black, 4)', $labels[$taken]);
+        self::assertCount(2, $labels, "exactly the opponent's two hand cards");
+
+        $this->games->respondToDecision($this->gameId, $this->p1, ['picked_card_id' => $taken]);
+
+        $state = $this->state();
+        self::assertContains($taken, $state->hand($this->p1));
+        self::assertEqualsCanonicalizing([$keepable, $drawn], $state->hand($this->p2));
+        $log = implode("\n", array_column($this->games->fullEventLog($this->gameId), 'description'));
+        self::assertStringContainsString("revealing Complacency, Apathy from tsu2's hand", str_replace('Apathy, Complacency', 'Complacency, Apathy', $log));
+    }
+
+    public function testGreedRejectsAnOpponentWithNoCards(): void
+    {
+        $greed = $this->card('Greed', 'hand', $this->p1);
+
+        $this->expectException(\MoodSwings\Rules\Exceptions\InvalidChoiceException::class);
+        $this->games->playMood($this->gameId, $this->p1, $greed, ['target_player_id' => $this->p2]);
+    }
+
+    public function testNosinessMakesTheOpponentDiscardTheCardTheOwnerChooses(): void
+    {
+        $nosiness = $this->card('Nosiness', 'hand', $this->p1);
+        $this->card('Creativity', 'hand', $this->p1);
+        $kept = $this->card('Complacency', 'hand', $this->p2);
+        $lost = $this->card('Apathy', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $nosiness, ['target_player_id' => $this->p2]);
+        $this->games->respondToDecision($this->gameId, $this->p1, ['picked_card_id' => $lost]);
+
+        $state = $this->state();
+        self::assertSame([$kept], $state->hand($this->p2));
+        self::assertContains($lost, $state->discardPile());
+    }
+
+    public function testEntitlementRevealPathLetsItsOwnerTakeACardAndPlayItAtOnce(): void
+    {
+        $entitlement = $this->card('Entitlement', 'hand', $this->p1);
+        $this->card('Creativity', 'hand', $this->p1);
+        $this->card('Boredom', 'in_play', $this->p2);
+        $other = $this->card('Complacency', 'hand', $this->p2);
+        $taken = $this->card('Apathy', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $entitlement, ['target_player_id' => $this->p2]);
+        self::assertSame($this->p2, $this->pendingDecisionTarget(), 'the target chooses whether to reveal');
+        $this->games->respondToDecision($this->gameId, $this->p2, ['reveal_hand' => true]);
+
+        self::assertSame($this->p1, $this->pendingDecisionTarget(), 'then the owner picks from the revealed hand');
+        $this->games->respondToDecision($this->gameId, $this->p1, ['taken_card_id' => $taken]);
+
+        self::assertContains($taken, $this->state()->hand($this->p1));
+        self::assertSame([$other], $this->state()->hand($this->p2));
+        $this->games->playMood($this->gameId, $this->p1, $taken, []); // the granted extra play, for that card only
+        self::assertTrue($this->state()->isInPlay($taken));
+    }
+
+    public function testEntitlementDeclinedMakesTheTargetLoseAHighestMood(): void
+    {
+        $entitlement = $this->card('Entitlement', 'hand', $this->p1);
+        $this->card('Creativity', 'hand', $this->p1);
+        $high = $this->card('Apathy', 'in_play', $this->p2); // 4
+        $low = $this->card('Creativity', 'in_play', $this->p2); // 0
+        $this->card('Complacency', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $entitlement, ['target_player_id' => $this->p2]);
+        $this->games->respondToDecision($this->gameId, $this->p2, []);
+
+        self::assertNull($this->pendingDecisionTarget(), 'a single highest mood goes without a further choice');
+        $state = $this->state();
+        self::assertFalse($state->isInPlay($high));
+        self::assertTrue($state->isInPlay($low));
+    }
+
+    public function testEntitlementDeclinedWithTiedHighestMoodsLetsTheTargetChoose(): void
+    {
+        $entitlement = $this->card('Entitlement', 'hand', $this->p1);
+        $this->card('Creativity', 'hand', $this->p1);
+        $first = $this->card('Apathy', 'in_play', $this->p2); // 4
+        $second = $this->card('Boredom', 'in_play', $this->p2); // 4
+        $this->card('Complacency', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $entitlement, ['target_player_id' => $this->p2]);
+        $this->games->respondToDecision($this->gameId, $this->p2, []);
+
+        self::assertSame($this->p2, $this->pendingDecisionTarget());
+        $this->games->respondToDecision($this->gameId, $this->p2, ['discard_mood_id' => $second]);
+
+        self::assertTrue($this->state()->isInPlay($first));
+        self::assertFalse($this->state()->isInPlay($second));
+    }
+
+    public function testEntitlementNeedsAnOpponentWithACardAndAMood(): void
+    {
+        $entitlement = $this->card('Entitlement', 'hand', $this->p1);
+        $this->card('Complacency', 'hand', $this->p2); // a hand card but no mood
+
+        $this->expectException(\MoodSwings\Rules\Exceptions\InvalidChoiceException::class);
+        $this->games->playMood($this->gameId, $this->p1, $entitlement, ['target_player_id' => $this->p2]);
+    }
+
+    public function testInspirationKeepsTheChosenOfTheTopThreeBottomsTheRestAndGrantsAPlayOfIt(): void
+    {
+        $inspiration = $this->card('Inspiration', 'hand', $this->p1);
+        $first = $this->card('Apathy', 'deck', $this->p1, 0);
+        $second = $this->card('Complacency', 'deck', $this->p1, 1);
+        $third = $this->card('Creativity', 'deck', $this->p1, 2);
+        $fourth = $this->card('Courage', 'deck', $this->p1, 3);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $inspiration, []);
+        $pending = $this->games->getState($this->gameId, $this->userIdOf($this->p1))['round']['pending_decision'];
+        self::assertEqualsCanonicalizing([$first, $second, $third], array_column($pending['field']['options'], 'value'), 'only the top three are offered');
+
+        $this->games->respondToDecision($this->gameId, $this->p1, ['chosen_card_id' => $second]);
+
+        $state = $this->state();
+        self::assertSame([$second], $state->hand($this->p1));
+        self::assertSame($fourth, $state->deck($this->p1)[0], 'the unrevealed fourth card is now on top');
+        self::assertEqualsCanonicalizing([$first, $third], array_slice($state->deck($this->p1), 1), 'the other two went to the bottom');
+        $this->games->playMood($this->gameId, $this->p1, $second, []); // the granted extra play
+        self::assertTrue($this->state()->isInPlay($second));
+    }
+
+    public function testInspirationRejectsACardOutsideTheTopThree(): void
+    {
+        $inspiration = $this->card('Inspiration', 'hand', $this->p1);
+        $this->card('Apathy', 'deck', $this->p1, 0);
+        $this->card('Complacency', 'deck', $this->p1, 1);
+        $this->card('Creativity', 'deck', $this->p1, 2);
+        $fourth = $this->card('Courage', 'deck', $this->p1, 3);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $inspiration, []);
+
+        $this->expectException(\MoodSwings\Rules\Exceptions\InvalidChoiceException::class);
+        $this->games->respondToDecision($this->gameId, $this->p1, ['chosen_card_id' => $fourth]);
+    }
+
+    public function testInspirationWithAnEmptyDeckDoesNothing(): void
+    {
+        $inspiration = $this->card('Inspiration', 'hand', $this->p1);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $inspiration, []);
+
+        self::assertNull($this->pendingDecisionTarget());
+        self::assertTrue($this->state()->isInPlay($inspiration));
+    }
+
     public function testReplayFollowsAWastefulnessCardFromTheDeckToTheDiscardPile(): void
     {
         $this->card('Wastefulness', 'in_play', $this->p2);

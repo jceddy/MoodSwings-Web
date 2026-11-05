@@ -163,6 +163,9 @@ use MoodSwings\Rules\Effects\Custom\DiscernmentEffect;
 use MoodSwings\Rules\Effects\Custom\HonestyEffect;
 use MoodSwings\Rules\Effects\Custom\TurmoilEffect;
 use MoodSwings\Rules\Effects\Custom\WhimsyEffect;
+use MoodSwings\Rules\Effects\Custom\EntitlementEffect;
+use MoodSwings\Rules\Effects\Custom\InspirationEffect;
+use MoodSwings\Rules\Effects\Custom\RevealHandPickEffect;
 
 /**
  * Wires up every MoodEffect for the full 133-card pool -- every card with
@@ -508,6 +511,12 @@ final class DefaultEffectRegistry
         $registry->register('honesty', new HonestyEffect());
         $registry->register('turmoil', new TurmoilEffect());
         $registry->register('whimsy', new WhimsyEffect());
+
+        // Reveals followed by a pick from the revealed cards ('revealed_card' decision field).
+        $registry->register('greed', new RevealHandPickEffect(RevealHandPickEffect::TAKE_AND_REDRAW, 'Greed'));
+        $registry->register('nosiness', new RevealHandPickEffect(RevealHandPickEffect::DISCARD, 'Nosiness'));
+        $registry->register('entitlement', new EntitlementEffect());
+        $registry->register('inspiration', new InspirationEffect());
 
         return $registry;
     }

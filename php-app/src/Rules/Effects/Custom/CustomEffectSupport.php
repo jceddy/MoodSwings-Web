@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace MoodSwings\Rules\Effects\Custom;
 
 use MoodSwings\Rules\BoardState;
+use MoodSwings\Rules\PendingDecisionRequest;
 
 /**
  * Small board queries shared by the community custom set's effects (see
@@ -103,6 +104,24 @@ final class CustomEffectSupport
         $number = $state->isInPlay($cardId) ? self::printedNumber($state, $cardId) : $state->catalogRow($cardId)['baseValue'];
 
         return ($number % 2 === 1) === ($parity === 'odd');
+    }
+
+    /**
+     * A decision for $chooserId to pick one of $candidateIds -- cards the table can all see because they were
+     * just revealed (an opponent's hand, the top of the deck) but that sit in no zone the client lists. The
+     * 'revealed_card' field type carries the exact candidates; GameService::serializePendingDecision() turns
+     * them into labelled options.
+     *
+     * @param int[] $candidateIds
+     */
+    public static function revealedCardRequest(string $key, int $chooserId, array $candidateIds, string $label): PendingDecisionRequest
+    {
+        return new PendingDecisionRequest(
+            key: $key,
+            targetPlayerId: $chooserId,
+            decisionType: 'revealed_card_pick',
+            field: ['key' => $key, 'type' => 'revealed_card', 'required' => true, 'label' => $label, 'candidate_card_ids' => array_values($candidateIds)],
+        );
     }
 
     /** A mood's printed number (the top right corner): the card's base value, through any Creativity copy. */

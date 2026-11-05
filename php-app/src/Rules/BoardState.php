@@ -1182,6 +1182,35 @@ final class BoardState
         return $cardId;
     }
 
+    /**
+     * Inspiration: takes a chosen card out of $playerId's deck -- wherever it sits -- into their hand,
+     * without drawing it. A real card move (deck to hand), so the log and replay show it.
+     */
+    public function moveDeckCardToHand(int $playerId, int $cardId): void
+    {
+        $key = $this->deckKeyFor($playerId);
+        $index = array_search($cardId, $this->decks[$key] ?? [], true);
+        if ($index === false) {
+            throw new InvalidArgumentException("Card {$cardId} is not in player {$playerId}'s deck");
+        }
+        array_splice($this->decks[$key], $index, 1);
+        $this->hands[$playerId][] = $cardId;
+        $this->recordMove($cardId, 'deck', 'hand', fromPlayerId: $playerId, toPlayerId: $playerId);
+    }
+
+    /** Inspiration: moves a card already in $playerId's deck to the bottom of that deck. */
+    public function moveDeckCardToBottom(int $playerId, int $cardId): void
+    {
+        $key = $this->deckKeyFor($playerId);
+        $index = array_search($cardId, $this->decks[$key] ?? [], true);
+        if ($index === false) {
+            throw new InvalidArgumentException("Card {$cardId} is not in player {$playerId}'s deck");
+        }
+        array_splice($this->decks[$key], $index, 1);
+        $this->decks[$key][] = $cardId;
+        $this->recordMove($cardId, 'deck', 'deck', fromPlayerId: $playerId);
+    }
+
     public function moveHandToBottomOfDeck(int $playerId, int $cardId): void
     {
         $this->removeFromHand($playerId, $cardId);

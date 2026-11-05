@@ -23696,6 +23696,20 @@ final class GameService
                     $field = $this->withDuplicityRepeatChoiceDefaults($state, $field, $playedCardId, $targetGamePlayerId);
                 }
             }
+            if (($field['type'] ?? null) === 'revealed_card') {
+                // Cards the table has just seen revealed (an opponent's hand, the top of the deck) that sit in
+                // no zone the client lists: the exact candidates arrive as labelled options.
+                $revealedState = $state ?? $this->boardStates->load((int) $batchRow['game_id']);
+                $revealedNames = $this->cardNamesFor((int) $batchRow['game_id']);
+                $field['options'] = array_map(
+                    static fn (int $candidateId): array => [
+                        'value' => $candidateId,
+                        'label' => ($revealedNames[$candidateId] ?? 'a card')
+                            . ' (' . $revealedState->catalogRow($candidateId)['color'] . ', ' . $revealedState->catalogRow($candidateId)['baseValue'] . ')',
+                    ],
+                    array_map(intval(...), $field['candidate_card_ids'] ?? []),
+                );
+            }
             $result['field'] = $field;
         }
 

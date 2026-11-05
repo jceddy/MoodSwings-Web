@@ -9246,9 +9246,9 @@ in custom sets is.
   Batch 2 (migration 0498, 12 cards) adds the **turn-start triggers** and Resilience; batch 3 (migration
   0499, 7 cards) adds the **static value modifiers**, batch 4 (migration 0500, 3 cards) the **round-win
   count** cards and batch 5 (migration 0502, 2 cards) the **extra scoring** cards and batch 6 (migration 0503,
-  6 cards) Carelessness and the **hand-reveal** cards (all below). The later batches still need new hooks
-  (a colorless color, Grudge's chosen-opponent play grant, a private hand reveal to a chooser, picking from
-  revealed deck cards) and aren't implemented yet; until a card is in the
+  6 cards) Carelessness and the **hand-reveal** cards, and batch 7 (migration 0504, 4 cards) the
+  **reveal-then-pick** cards (all below). The later batches still need new hooks (a colorless color,
+  Grudge's chosen-opponent play grant, Schadenfreude's per-turn discard record) and aren't implemented yet; until a card is in the
   `cards` table it simply doesn't exist in the game.
 - **"At the start of each of your turns" (`TurnStartEffect`).** Brooding, Covetousness, Fairness, FOMO,
   Jealousy, Martyrdom, Maturity, Neglect, Rumination, Volatility and Wastefulness implement
@@ -9318,9 +9318,22 @@ in custom sets is.
   chosen player for Turmoil) reveal what they cycle. Candor adds no engine rule: a reveal is always to *all* players (the custom set repo's CLAUDE.md), so
   `buildGameState()` gives every seated player `you.revealed_hands` -- the hand of each non-teammate
   opponent of a Candor's owner other than the viewer, shown by the client like a teammate's (the owner sees
-  all of them, an opponent sees the other opponents', nobody sees the owner's hand through it). Not done: Greed/Nosiness/Entitlement (the whole hand is revealed to all, and the chooser picks from it)
-  and Inspiration (pick one of the revealed top-three deck cards) -- both need a decision
-  field that offers cards that aren't in a hand, the discard pile or play.
+  all of them, an opponent sees the other opponents', nobody sees the owner's hand through it).
+- **Reveal, then pick (`revealed_card` decisions).** Greed, Nosiness, Entitlement and Inspiration reveal cards to
+  the whole table (the log names them, via `recordRevealedCard()`) and then someone picks one of them. The
+  cards sit in no zone the client lists (an opponent's hand, the top of the deck), so the decision field type
+  is `revealed_card`: the effect supplies `candidate_card_ids` (`CustomEffectSupport::revealedCardRequest()`)
+  and `serializePendingDecision()` turns them into labelled `options` ("Apathy (black, 4)") that the client
+  renders as an ordinary select. All four are `RequiresOpponentDecision` effects; the pick is asked of the
+  *player who played the card* (a decision aimed at the acting player is already supported). Greed takes the
+  chosen card and the opponent draws one; Nosiness makes them discard it; Inspiration moves the chosen top-three
+  deck card into hand (`BoardState::moveDeckCardToHand()`/`moveDeckCardToBottom()` -- real `deck` card moves,
+  so the log and replay show them), shuffles the other two to the bottom and grants an extra play of only that
+  card. Entitlement (the restricted printing) runs up to three steps told apart by answer key: the target's
+  reveal-or-not choice, then either the owner's pick (with a play of only that card) or the target's choice
+  among their tied-highest moods (automatic when one is strictly highest). Bots always pick the highest
+  draft-priority card, and answer Entitlement's reveal by revealing while their best mood is worth 3 or more.
+
 
 ### Default selections mode (issue #274)
 
