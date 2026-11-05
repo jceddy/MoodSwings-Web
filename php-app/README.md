@@ -9424,6 +9424,19 @@ in custom sets is.
   - **Dejection**: every player with a card in hand, the acting player included, is asked for a discard and the
     discards happen together; an empty-handed player isn't asked. Bots answer all of these with their usual
     "lowest value" pick, and never use Vindictiveness's or Malevolence's optional targets.
+- **Grievance, Urgency and Restlessness (batch 13, the last tier-1 cards).**
+  - **Grievance**: each *opponent* (teammates excluded) holding more cards than you -- compared as the board
+    stands when it resolves, the played Grievance already out of your hand -- is asked for a hand card to put on
+    the bottom of the deck, and all of them move together once every answer is in. Equal is not more.
+  - **Urgency** follows the card's own ruling rather than the bare printed text: the play that put it in play
+    counts, plays from *before* it entered don't. It is a `reactToAnotherPlay()` reactor tallying its owner's
+    plays in its own `urgencyRound`/`urgencyPlays` effect state (so a new round starts the count over), plus one
+    for its own entry when it was played this round (the usual `playedInRound`/`playedByPlayerId` tag). Two or
+    more -- so it needs an extra play -- shows 6.
+  - **Restlessness** is another `CustomConditionalValueEffect` condition (`DISTINCT_OWN_VALUES_AT_LEAST`, 3):
+    different current values among its owner's moods, opposing moods never counted. A mood whose value *is*
+    this count -- Restlessness itself, and any other copy -- is counted at its printed 3, so the check cannot
+    chase its own tail (a card reading its own value, or two copies reading each other, would never finish).
 
 
 ### Default selections mode (issue #274)

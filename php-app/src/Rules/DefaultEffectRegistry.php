@@ -177,6 +177,8 @@ use MoodSwings\Rules\Effects\Custom\ReflectionEffect;
 use MoodSwings\Rules\Effects\Custom\ReverieEffect;
 use MoodSwings\Rules\Effects\Custom\WarinessEffect;
 use MoodSwings\Rules\Effects\Custom\LongingEffect;
+use MoodSwings\Rules\Effects\Custom\GrievanceEffect;
+use MoodSwings\Rules\Effects\Custom\UrgencyEffect;
 use MoodSwings\Rules\Effects\Custom\DejectionEffect;
 use MoodSwings\Rules\Effects\Custom\MalevolenceEffect;
 use MoodSwings\Rules\Effects\Custom\QualifyingPlayersDiscardMoodEffect;
@@ -566,6 +568,11 @@ final class DefaultEffectRegistry
         $registry->register('vindictiveness', new VindictivenessEffect());
         $registry->register('malevolence', new MalevolenceEffect());
         $registry->register('dejection', new DejectionEffect());
+
+        // Hand-size check, plays-this-round and distinct-values cards.
+        $registry->register('grievance', new GrievanceEffect());
+        $registry->register('urgency', new UrgencyEffect());
+        $registry->register('restlessness', new CustomConditionalValueEffect(CustomConditionalValueEffect::DISTINCT_OWN_VALUES_AT_LEAST, 3));
         $registry->register('adrenaline', new FirstEachTurnExtraPlayEffect(FirstEachTurnExtraPlayEffect::RED_MOOD));
         $registry->register('affinity', new FirstEachTurnExtraPlayEffect(FirstEachTurnExtraPlayEffect::MATCHING_NUMBER));
         $registry->register('dominance', new DominanceEffect());

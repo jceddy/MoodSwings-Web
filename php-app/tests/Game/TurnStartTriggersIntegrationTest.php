@@ -961,6 +961,49 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertTrue($this->state()->isInPlay($dejection));
     }
 
+    public function testUrgencyTalliesItsPlaysAcrossRequests(): void
+    {
+        $this->pdo->exec("UPDATE game_rounds SET plays_remaining = 3, pending_play_grants = '[null,null,null]' WHERE game_id = {$this->gameId}");
+        $urgency = $this->card('Urgency', 'hand', $this->p1);
+        $courage = $this->card('Courage', 'hand', $this->p1);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $urgency, []);
+        self::assertSame(3, $this->state()->valueOf($urgency));
+        $this->games->playMood($this->gameId, $this->p1, $courage, []);
+
+        self::assertSame(6, $this->state()->valueOf($urgency), 'the tally was saved with the mood and read back on a fresh load');
+    }
+
+    public function testGrievanceMakesAnOpponentWithMoreCardsPutOneOnTheBottomOfTheDeck(): void
+    {
+        $grievance = $this->card('Grievance', 'hand', $this->p1);
+        $this->card('Courage', 'hand', $this->p1); // one card left after playing Grievance
+        $this->card('Apathy', 'hand', $this->p2);
+        $sent = $this->card('Boredom', 'hand', $this->p2);
+        $this->card('Joy', 'hand', $this->p2); // three cards against one
+
+        $this->games->playMood($this->gameId, $this->p1, $grievance, []);
+        self::assertSame($this->p2, $this->pendingDecisionTarget());
+        $this->games->respondToDecision($this->gameId, $this->p2, ['bottom_card_id_' . $this->p2 => $sent]);
+
+        $state = $this->state();
+        self::assertCount(2, $state->hand($this->p2));
+        self::assertSame($sent, $state->deck($this->p2)[count($state->deck($this->p2)) - 1]);
+    }
+
+    public function testGrievanceDoesNothingWhenTheOpponentHasNoMoreCards(): void
+    {
+        $grievance = $this->card('Grievance', 'hand', $this->p1);
+        $this->card('Courage', 'hand', $this->p1);
+        $this->card('Apathy', 'hand', $this->p2); // one against one: equal is not more
+
+        $this->games->playMood($this->gameId, $this->p1, $grievance, []);
+
+        self::assertNull($this->pendingDecisionTarget());
+        self::assertCount(1, $this->state()->hand($this->p2));
+    }
+
     public function testSchadenfreudeBecomesSixWhenAnOpponentDiscardsAndStaysThatWayForTheRound(): void
     {
         $schadenfreude = $this->card('Schadenfreude', 'in_play', $this->p1);

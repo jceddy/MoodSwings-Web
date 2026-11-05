@@ -764,6 +764,76 @@ final class CustomSetEffectsTest extends TestCase
         $this->play($state, 1, 'Malevolence', ['parity' => 'even', 'target_mood_ids' => $this->ids('Anger', 'Apathy')]);
     }
 
+    public function testRestlessnessNeedsThreeDifferentValuesAmongYourMoods(): void
+    {
+        $state = $this->state([1 => ['Restlessness', 'Courage', 'Apathy'], 2 => ['Anger', 'Boredom']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Restlessness', 'Courage'); // itself counts as its printed 3, Courage is 1
+        $this->seat($state, 2, 'Anger', 'Boredom'); // opposing values never count
+        self::assertSame(3, $state->valueOf($this->id('Restlessness')), 'only two different values');
+
+        $this->seat($state, 1, 'Apathy'); // 4: three different values now
+        self::assertSame(6, $state->valueOf($this->id('Restlessness')));
+    }
+
+    public function testRestlessnessDoesNotCountRepeatedValuesAsDifferent(): void
+    {
+        $state = $this->state([1 => ['Restlessness', 'Courage', 'Joy']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Restlessness', 'Courage', 'Joy'); // 3, 1, 3: Joy repeats Restlessness's 3
+
+        self::assertSame(3, $state->valueOf($this->id('Restlessness')));
+    }
+
+    public function testUrgencyTurnsOnWithASecondPlayAfterItEnters(): void
+    {
+        $state = $this->state([1 => ['Urgency', 'Anger']]);
+        $state->startRound(1, 1);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Urgency');
+        self::assertSame(3, $state->valueOf($this->id('Urgency')), 'its own play is one play');
+
+        $state->grantExtraPlay();
+        $this->play($state, 1, 'Anger');
+        self::assertSame(6, $state->valueOf($this->id('Urgency')));
+    }
+
+    public function testUrgencyDoesNotCountPlaysFromBeforeItEntered(): void
+    {
+        $state = $this->state([1 => ['Anger', 'Urgency', 'Boredom']]);
+        $state->startRound(1, 1);
+        $state->startTurn(1);
+        $state->grantExtraPlay();
+        $state->grantExtraPlay();
+        $this->play($state, 1, 'Anger');
+        $this->play($state, 1, 'Urgency');
+        self::assertSame(3, $state->valueOf($this->id('Urgency')), 'the earlier Anger does not count');
+
+        $this->play($state, 1, 'Boredom');
+        self::assertSame(6, $state->valueOf($this->id('Urgency')));
+    }
+
+    public function testUrgencyIgnoresOtherPlayersPlaysAndStartsOverEachRound(): void
+    {
+        $state = $this->state([1 => ['Urgency'], 2 => ['Anger']]);
+        $state->startRound(1, 1);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Urgency');
+        $state->startTurn(2);
+        $this->play($state, 2, 'Anger');
+        self::assertSame(3, $state->valueOf($this->id('Urgency')), "an opponent's play isn't yours");
+
+        $second = $this->state([1 => ['Urgency', 'Anger']]);
+        $second->startRound(1, 1);
+        $second->startTurn(1);
+        $this->play($second, 1, 'Urgency');
+        $second->grantExtraPlay();
+        $this->play($second, 1, 'Anger');
+        self::assertSame(6, $second->valueOf($this->id('Urgency')));
+        $second->startRound(1, 2);
+        self::assertSame(3, $second->valueOf($this->id('Urgency')), 'the tally is for the round it was made in');
+    }
+
     // ---- static value modifiers ----
 
     public function testArdorAddsTheNumberOfRedMoodsToEachOwnRedMood(): void

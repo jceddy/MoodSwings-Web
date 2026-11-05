@@ -26,6 +26,7 @@ final class CustomConditionalValueEffect extends AbstractMoodEffect
     public const OTHER_OWN_RED_MOODS_AT_LEAST = 'other_own_red_moods_at_least';
     public const OWN_ROUND_WINS_FEWER_THAN_EACH_OTHER = 'own_round_wins_fewer_than_each_other';
     public const ANY_OPPONENT_DISCARDED_FROM_HAND_THIS_ROUND = 'any_opponent_discarded_from_hand_this_round';
+    public const DISTINCT_OWN_VALUES_AT_LEAST = 'distinct_own_values_at_least';
 
     public function __construct(private readonly string $condition, private readonly int $threshold = 0)
     {
@@ -53,7 +54,26 @@ final class CustomConditionalValueEffect extends AbstractMoodEffect
             self::OTHER_OWN_RED_MOODS_AT_LEAST => $this->otherOwnRedMoods($state, $cardId, $ownerId) >= $this->threshold,
             self::OWN_ROUND_WINS_FEWER_THAN_EACH_OTHER => CustomEffectSupport::hasWonFewerRoundsThanEachOther($state, $ownerId),
             self::ANY_OPPONENT_DISCARDED_FROM_HAND_THIS_ROUND => array_intersect($state->playersWhoDiscardedFromHandThisRound(), CustomEffectSupport::opponentIds($state, $ownerId)) !== [],
+            self::DISTINCT_OWN_VALUES_AT_LEAST => $this->distinctOwnValues($state, $cardId, $ownerId) >= $this->threshold,
         };
+    }
+
+    /**
+     * How many different values the owner's moods show (Restlessness). A mood whose own value reads this very
+     * count -- this one, and any other copy of the same card -- is counted at its printed value, so the check
+     * can't chase its own tail (a copy asking after the other would never finish); every other mood counts at
+     * its current value, modifiers included.
+     */
+    private function distinctOwnValues(BoardState $state, int $cardId, int $ownerId): int
+    {
+        $ownKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+        $values = [];
+        foreach ($state->moodsOwnedBy($ownerId) as $mood) {
+            $row = $state->catalogRow($state->effectiveCardId($mood->cardId));
+            $values[$row['effectKey'] === $ownKey ? $row['baseValue'] : $state->valueOf($mood->cardId)] = true;
+        }
+
+        return count($values);
     }
 
     private function anyOpponentHandEmpty(BoardState $state, int $ownerId): bool
