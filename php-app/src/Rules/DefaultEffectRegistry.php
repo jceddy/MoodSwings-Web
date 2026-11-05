@@ -177,6 +177,11 @@ use MoodSwings\Rules\Effects\Custom\ReflectionEffect;
 use MoodSwings\Rules\Effects\Custom\ReverieEffect;
 use MoodSwings\Rules\Effects\Custom\WarinessEffect;
 use MoodSwings\Rules\Effects\Custom\LongingEffect;
+use MoodSwings\Rules\Effects\Custom\DejectionEffect;
+use MoodSwings\Rules\Effects\Custom\MalevolenceEffect;
+use MoodSwings\Rules\Effects\Custom\QualifyingPlayersDiscardMoodEffect;
+use MoodSwings\Rules\Effects\Custom\VengeanceEffect;
+use MoodSwings\Rules\Effects\Custom\VindictivenessEffect;
 use MoodSwings\Rules\Effects\Custom\PremonitionEffect;
 use MoodSwings\Rules\Effects\Custom\RapportEffect;
 use MoodSwings\Rules\Effects\Custom\ResignationEffect;
@@ -553,6 +558,14 @@ final class DefaultEffectRegistry
         $registry->register('longing', new LongingEffect());
         $registry->register('premonition', new PremonitionEffect());
         $registry->register('resignation', new ResignationEffect());
+
+        // Removal cards.
+        $registry->register('vengeance', new VengeanceEffect());
+        $registry->register('heartlessness', new QualifyingPlayersDiscardMoodEffect(QualifyingPlayersDiscardMoodEffect::THREE_OR_MORE, 'Heartlessness'));
+        $registry->register('righteousness', new QualifyingPlayersDiscardMoodEffect(QualifyingPlayersDiscardMoodEffect::HIGHEST_TOTAL, 'Righteousness'));
+        $registry->register('vindictiveness', new VindictivenessEffect());
+        $registry->register('malevolence', new MalevolenceEffect());
+        $registry->register('dejection', new DejectionEffect());
         $registry->register('adrenaline', new FirstEachTurnExtraPlayEffect(FirstEachTurnExtraPlayEffect::RED_MOOD));
         $registry->register('affinity', new FirstEachTurnExtraPlayEffect(FirstEachTurnExtraPlayEffect::MATCHING_NUMBER));
         $registry->register('dominance', new DominanceEffect());

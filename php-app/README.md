@@ -9405,6 +9405,25 @@ in custom sets is.
   - **Resignation**: a to-play cost (`hand_card_id`, put on the bottom of the deck), like FOMO's discard -- it can't
     pay for itself, so it needs another card in hand. Bots never volunteer for Rapport's or Longing's optional
     choices.
+- **Removal (batch 12).** Six cards that put moods (or hand cards) into the discard pile, all on existing
+  machinery -- Fury's "each qualifying player answers their own decision, nothing moves until every answer is in"
+  shape for the multi-player ones:
+  - **Vengeance**: the acting player picks an opponent (`target_player_id`, with a mood in play, never a teammate);
+    that player is asked which of *their own* highest value moods goes (Fury's wording -- ties are theirs to break).
+    `CustomEffectSupport::highestValueMoodIds()` is shared with Righteousness.
+  - **Heartlessness** and **Righteousness** are one class, `QualifyingPlayersDiscardMoodEffect`, with two
+    conditions: every player with three or more moods (the played Heartlessness counts, and can be the one that
+    goes) picks any of their moods; every player tied for the highest *total* value (Anger's "total value", so the
+    played Righteousness's own value counts toward its owner's total) picks one of their highest value moods.
+    Qualifying players are worked out when the card resolves and again when the answers arrive.
+  - **Vindictiveness**: optional `discard_mood_id` (one of your *other* moods) and, only with it, an optional
+    `target_mood_id` (anyone's mood, Vindictiveness itself included) with a strictly lower value than the
+    sacrifice; both values are read before either mood leaves play.
+  - **Malevolence**: Spite with a chosen parity -- required `parity`, then up to two moods (one per player) whose
+    *printed* number has that parity (0 is even), exactly like Orderliness/Discernment.
+  - **Dejection**: every player with a card in hand, the acting player included, is asked for a discard and the
+    discards happen together; an empty-handed player isn't asked. Bots answer all of these with their usual
+    "lowest value" pick, and never use Vindictiveness's or Malevolence's optional targets.
 
 
 ### Default selections mode (issue #274)

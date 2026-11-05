@@ -671,6 +671,99 @@ final class CustomSetEffectsTest extends TestCase
         $this->play($state, 1, 'Resignation', []);
     }
 
+    public function testVindictivenessTradesAMoodForALowerValueOne(): void
+    {
+        $state = $this->state([1 => ['Vindictiveness', 'Apathy'], 2 => ['Courage', 'Joy']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Apathy'); // 4
+        $this->seat($state, 2, 'Courage', 'Joy'); // 1, 3
+        $this->play($state, 1, 'Vindictiveness', [
+            'discard_mood_id' => $this->id('Apathy'),
+            'target_mood_id' => $this->id('Joy'),
+        ]);
+
+        self::assertFalse($state->isInPlay($this->id('Apathy')));
+        self::assertFalse($state->isInPlay($this->id('Joy')));
+        self::assertTrue($state->isInPlay($this->id('Courage')));
+        self::assertTrue($state->isInPlay($this->id('Vindictiveness')));
+    }
+
+    public function testVindictivenessRefusesATargetThatIsNotLower(): void
+    {
+        $state = $this->state([1 => ['Vindictiveness', 'Apathy'], 2 => ['Boredom']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Apathy'); // 4
+        $this->seat($state, 2, 'Boredom'); // 4: equal, not lower
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($state, 1, 'Vindictiveness', [
+            'discard_mood_id' => $this->id('Apathy'),
+            'target_mood_id' => $this->id('Boredom'),
+        ]);
+    }
+
+    public function testVindictivenessSecondStepIsOptionalAndNeedsTheFirst(): void
+    {
+        $state = $this->state([1 => ['Vindictiveness', 'Apathy'], 2 => ['Courage']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Apathy');
+        $this->seat($state, 2, 'Courage');
+        $this->play($state, 1, 'Vindictiveness', ['discard_mood_id' => $this->id('Apathy')]);
+        self::assertFalse($state->isInPlay($this->id('Apathy')));
+        self::assertTrue($state->isInPlay($this->id('Courage')), 'sacrificing without a second target is allowed');
+
+        $second = $this->state([1 => ['Vindictiveness'], 2 => ['Courage']]);
+        $second->startTurn(1);
+        $this->seat($second, 2, 'Courage');
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($second, 1, 'Vindictiveness', ['target_mood_id' => $this->id('Courage')]);
+    }
+
+    public function testVindictivenessCannotSacrificeItself(): void
+    {
+        $state = $this->state([1 => ['Vindictiveness']]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($state, 1, 'Vindictiveness', ['discard_mood_id' => $this->id('Vindictiveness')]);
+    }
+
+    public function testMalevolenceRemovesAMoodOfTheChosenParityFromEachChosenPlayer(): void
+    {
+        $state = $this->state([1 => ['Malevolence'], 2 => ['Courage', 'Apathy'], 3 => ['Joy']]);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Courage', 'Apathy'); // printed 1, 4
+        $this->seat($state, 3, 'Joy'); // printed 3
+        $this->play($state, 1, 'Malevolence', [
+            'parity' => 'odd',
+            'target_mood_ids' => $this->ids('Courage', 'Joy'),
+        ]);
+
+        self::assertFalse($state->isInPlay($this->id('Courage')));
+        self::assertFalse($state->isInPlay($this->id('Joy')));
+        self::assertTrue($state->isInPlay($this->id('Apathy')), 'an even mood is left alone');
+    }
+
+    public function testMalevolenceRefusesAMoodOfTheOtherParity(): void
+    {
+        $state = $this->state([1 => ['Malevolence'], 2 => ['Apathy']]);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Apathy'); // 4 is even
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($state, 1, 'Malevolence', ['parity' => 'odd', 'target_mood_ids' => $this->ids('Apathy')]);
+    }
+
+    public function testMalevolenceTakesZeroAsEvenAndOneMoodPerPlayer(): void
+    {
+        $state = $this->state([1 => ['Malevolence'], 2 => ['Anger', 'Apathy']]);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Anger', 'Apathy'); // 0 and 4, both even
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($state, 1, 'Malevolence', ['parity' => 'even', 'target_mood_ids' => $this->ids('Anger', 'Apathy')]);
+    }
+
     // ---- static value modifiers ----
 
     public function testArdorAddsTheNumberOfRedMoodsToEachOwnRedMood(): void

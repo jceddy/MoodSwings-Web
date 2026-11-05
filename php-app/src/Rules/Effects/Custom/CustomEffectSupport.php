@@ -42,6 +42,27 @@ final class CustomEffectSupport
         ));
     }
 
+    /** The moods tied for $playerId's own highest value (empty when they have none). @return int[] */
+    public static function highestValueMoodIds(BoardState $state, int $playerId): array
+    {
+        $highest = null;
+        foreach ($state->moodsOwnedBy($playerId) as $mood) {
+            $value = $state->valueOf($mood->cardId);
+            if ($highest === null || $value > $highest) {
+                $highest = $value;
+            }
+        }
+
+        $candidates = [];
+        foreach ($state->moodsOwnedBy($playerId) as $mood) {
+            if ($state->valueOf($mood->cardId) === $highest) {
+                $candidates[] = $mood->cardId;
+            }
+        }
+
+        return $candidates;
+    }
+
     public static function handCount(BoardState $state, int $playerId): int
     {
         return count($state->hand($playerId));
