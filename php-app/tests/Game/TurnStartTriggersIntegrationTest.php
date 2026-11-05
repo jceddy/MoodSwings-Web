@@ -997,6 +997,73 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         return (int) $this->pdo->query("SELECT gc.id FROM game_cards gc JOIN cards c ON c.id = gc.card_id WHERE gc.game_id = {$this->gameId} AND gc.zone = 'hand' AND gc.owner_game_player_id = {$owner} AND c.name = " . $this->pdo->quote($name) . ' LIMIT 1')->fetchColumn();
     }
 
+    public function testPettinessTakesAwayTheTargetsTurnAcrossRequests(): void
+    {
+        $pettiness = $this->card('Pettiness', 'hand', $this->p1);
+        $discarded = $this->card('Complacency', 'hand', $this->p1);
+        $blocked = $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $pettiness, ['hand_card_id' => $discarded, 'target_player_id' => $this->p2]);
+
+        $state = $this->state(); // player 2's turn now
+        self::assertSame($this->p2, $state->currentPlayerId());
+        self::assertSame(['no_plays'], $state->turnRestrictions(), 'the ban came into force with their turn and was saved');
+        self::assertSame(0, $state->playsRemaining());
+        self::assertSame([], $state->pendingTurnRestrictionsByPlayer()[$this->p2] ?? [], 'it was consumed');
+
+        try {
+            $this->games->playMood($this->gameId, $this->p2, $blocked, []);
+            self::fail('a banned player played a mood');
+        } catch (\Throwable $e) {
+            self::assertInstanceOf(\MoodSwings\Rules\Exceptions\IllegalPlayException::class, $e);
+        }
+        self::assertSame([$blocked], $this->state()->hand($this->p2));
+    }
+
+    public function testOverconfidenceBanksTheNextTurnOnlyOnceAnExtraPlayIsUsed(): void
+    {
+        $overconfidence = $this->card('Overconfidence', 'hand', $this->p1);
+        $extra = $this->card('Courage', 'hand', $this->p1);
+        $this->card('Joy', 'hand', $this->p1);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $overconfidence, []);
+        self::assertSame(2, $this->state()->playsRemaining());
+        self::assertSame([], $this->state()->pendingTurnRestrictionsByPlayer()[$this->p1] ?? []);
+
+        $this->games->playMood($this->gameId, $this->p1, $extra, []);
+        self::assertSame(['no_plays'], $this->state()->pendingTurnRestrictionsByPlayer()[$this->p1] ?? [], 'saved with the player for their next turn');
+    }
+
+    public function testRudenessTurnSkipsAfterPlayingEffectsAcrossRequests(): void
+    {
+        $rudeness = $this->card('Rudeness', 'hand', $this->p1);
+        $longing = $this->card('Longing', 'hand', $this->p2);
+        $kept = $this->card('Complacency', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $rudeness, []);
+        $state = $this->state(); // player 2's turn
+        self::assertSame(['rudeness'], $state->turnRestrictions());
+
+        $this->games->playMood($this->gameId, $this->p2, $longing, ['hand_card_id' => $kept]);
+
+        self::assertSame([$kept], $this->state()->hand($this->p2), "Longing's after-playing effect didn't happen");
+        self::assertTrue($this->state()->isInPlay($longing));
+    }
+
+    public function testObstinacyEndsTheTurnAfterOneMood(): void
+    {
+        $this->pdo->exec("UPDATE game_rounds SET plays_remaining = 3, pending_play_grants = '[null,null,null]' WHERE game_id = {$this->gameId}");
+        $this->card('Obstinacy', 'in_play', $this->p1);
+        $first = $this->card('Courage', 'hand', $this->p1);
+        $this->card('Joy', 'hand', $this->p1);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $first, []);
+
+        self::assertSame($this->p2, $this->state()->currentPlayerId(), 'one mood per turn, so the turn passes on');
+    }
+
     public function testGrievanceMakesAnOpponentWithMoreCardsPutOneOnTheBottomOfTheDeck(): void
     {
         $grievance = $this->card('Grievance', 'hand', $this->p1);

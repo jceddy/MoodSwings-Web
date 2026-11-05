@@ -55,7 +55,7 @@ final class BoardStateRepository
             || in_array($gameRow['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'sealed_deck'], true);
 
         $playersStmt = $pdo->prepare(
-            'SELECT id, team_id, resigned_at, banked_extra_plays FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
+            'SELECT id, team_id, resigned_at, banked_extra_plays, pending_turn_restrictions FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
         );
         $playersStmt->execute(['game_id' => $gameId]);
         $playerRows = $playersStmt->fetchAll();
@@ -69,6 +69,8 @@ final class BoardStateRepository
         // See BoardState::bankExtraPlay() -- empty for every game with no
         // outstanding Joy/Generosity plays banked.
         $bankedExtraPlays = [];
+        // Pettiness/Overconfidence/Rudeness: what is waiting for each player's next turn (BoardState::addPendingTurnRestriction()).
+        $pendingTurnRestrictions = [];
         foreach ($playerRows as $row) {
             if ($row['team_id'] !== null) {
                 $teamIdByPlayer[(int) $row['id']] = (int) $row['team_id'];
@@ -78,6 +80,9 @@ final class BoardStateRepository
             }
             if ($row['banked_extra_plays'] !== null) {
                 $bankedExtraPlays[(int) $row['id']] = json_decode((string) $row['banked_extra_plays'], true);
+            }
+            if ($row['pending_turn_restrictions'] !== null) {
+                $pendingTurnRestrictions[(int) $row['id']] = json_decode((string) $row['pending_turn_restrictions'], true);
             }
         }
 
@@ -154,6 +159,7 @@ final class BoardStateRepository
         $deck = $hasSeparateDecks ? $deckByOwnerPosition : ($deckByOwnerPosition[BoardState::SHARED_DECK_KEY] ?? []);
 
         $state = new BoardState($catalog, $this->registry, $playerIds, $hands, $deck, $discard, $hasSeparateDecks, $discardOwners, $catalogCardIdFor, $teamIdByPlayer, $resignedPlayerIds, $bankedExtraPlays, $chaosCatalog, $this->chaosRegistry, $chaosEffectIdFor);
+        $state->restorePendingTurnRestrictions($pendingTurnRestrictions);
 
         $state->setRoundWins($this->roundWins($gameId));
 
@@ -168,7 +174,7 @@ final class BoardStateRepository
         }
 
         $roundStmt = $pdo->prepare(
-            "SELECT current_turn_game_player_id, first_game_player_id, team_turn_1_game_player_id, plays_remaining, pending_play_grants, loop_state_signature_counts, chaos_loop_state, round_number, discarded_this_round, skip_scoring, skip_scoring_first_player_game_player_id, skip_scoring_source_card_id, skip_scoring_owner_game_player_id, awards_extra_win, awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id, round_value_bonuses, round_hand_discards, round_mood_plays FROM game_rounds
+            "SELECT current_turn_game_player_id, first_game_player_id, team_turn_1_game_player_id, plays_remaining, pending_play_grants, loop_state_signature_counts, chaos_loop_state, round_number, discarded_this_round, skip_scoring, skip_scoring_first_player_game_player_id, skip_scoring_source_card_id, skip_scoring_owner_game_player_id, awards_extra_win, awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id, round_value_bonuses, round_hand_discards, round_mood_plays, turn_flags, hurt_feelings_game_player_id FROM game_rounds
              WHERE game_id = :game_id AND status = 'in_progress'
              ORDER BY round_number DESC LIMIT 1"
         );
@@ -209,6 +215,11 @@ final class BoardStateRepository
                 : (int) $roundRow['first_game_player_id'];
 
             $state->restoreRoundHandDiscards($roundRow['round_hand_discards'] !== null ? json_decode((string) $roundRow['round_hand_discards'], true) : []);
+            $turnFlags = $roundRow['turn_flags'] !== null ? json_decode((string) $roundRow['turn_flags'], true) : null;
+            // The turn's base plays are 2 only for Hurt Feelings' holder, which the round row already says, so only the
+            // plays made and the restrictions in force are stored.
+            $turnFlags['basePlays'] = $roundRow['hurt_feelings_game_player_id'] !== null && (int) $roundRow['hurt_feelings_game_player_id'] === (int) $roundRow['current_turn_game_player_id'] ? 2 : 1;
+            $state->restoreTurnFlags($turnFlags);
             $state->restoreRoundMoodPlays($roundRow['round_mood_plays'] !== null ? json_decode((string) $roundRow['round_mood_plays'], true) : []);
             $state->restoreRoundColorBonuses($roundRow['round_value_bonuses'] !== null ? json_decode((string) $roundRow['round_value_bonuses'], true) : []);
             $state->restoreTurnState(
@@ -403,15 +414,17 @@ final class BoardStateRepository
         // tracked per game_player_id rather than piggybacked on a card's
         // effect_state the way it used to be.
         $updatePlayer = $pdo->prepare(
-            'UPDATE game_players SET banked_extra_plays = :banked_extra_plays WHERE id = :id AND game_id = :game_id'
+            'UPDATE game_players SET banked_extra_plays = :banked_extra_plays, pending_turn_restrictions = :pending_turn_restrictions WHERE id = :id AND game_id = :game_id'
         );
         $bankedExtraPlays = $state->bankedExtraPlaysByPlayer();
+        $pendingRestrictions = $state->pendingTurnRestrictionsByPlayer();
         foreach ($state->playerOrder() as $playerId) {
             $banked = $bankedExtraPlays[$playerId] ?? [];
             $updatePlayer->execute([
                 'id' => $playerId,
                 'game_id' => $gameId,
                 'banked_extra_plays' => $banked === [] ? null : json_encode($banked),
+                'pending_turn_restrictions' => ($pendingRestrictions[$playerId] ?? []) === [] ? null : json_encode($pendingRestrictions[$playerId]),
             ]);
         }
     }

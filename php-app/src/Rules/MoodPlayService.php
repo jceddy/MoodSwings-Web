@@ -156,6 +156,8 @@ final class MoodPlayService
                 throw new InvalidChoiceException("Grant sourced from {$grantLabel} is not currently usable for playing {$cardLabel}");
             }
         }
+        // Asked before this play is counted: the turn's base plays are used up, so this mood is an additional one (Defensiveness).
+        $additionalPlay = $state->isAdditionalPlay();
         $consumedGrant = $state->useGrantFor($cardId, $playerId, $preferredGrantSourceCardId);
 
         if ($effectiveRow['hasToPlay']) {
@@ -172,6 +174,7 @@ final class MoodPlayService
             $state->moveHandToInPlay($playerId, $cardId, $copiedCardId);
         }
         $state->recordMoodPlayed($playerId);
+        $state->recordTurnPlay();
 
         // Gluttony/Insecurity tag whichever specific card ends up consuming
         // their granted extra play with effectState (e.g. "discard it after
@@ -201,6 +204,11 @@ final class MoodPlayService
             }
         }
 
+        // Overconfidence: spending one of the plays it granted costs the owner their next turn.
+        if ($consumedGrant !== null && isset($consumedGrant['onUsePendingTurnRestriction'])) {
+            $state->addPendingTurnRestriction($playerId, $consumedGrant['onUsePendingTurnRestriction']);
+        }
+
         if ($consumedGrant !== null && isset($consumedGrant['onUseEffectState'])) {
             foreach ($consumedGrant['onUseEffectState'] as $key => $value) {
                 if ($key === 'afterScoring' && is_array($value) && !isset($value['playerId'])) {
@@ -225,7 +233,7 @@ final class MoodPlayService
             $state->grantExtraPlay(1, ResilienceEffect::RESTRICTION, $cardId);
         }
 
-        return $this->resolveAfterPlayingChain($state, $cardId, $playerId, $choices, $choices, 0);
+        return $this->resolveAfterPlayingChain($state, $cardId, $playerId, $choices, $choices, 0, $state->afterPlayingSuppressedFor($playerId, $additionalPlay));
     }
 
     /**
@@ -267,11 +275,17 @@ final class MoodPlayService
         PlayerChoices $topLevelChoices,
         PlayerChoices $invocationChoices,
         int $invocationSeq,
+        bool $afterPlayingSuppressed = false,
     ): PlayResult {
         $reactorCandidateCardIds = array_values(array_map(
             static fn ($mood) => $mood->cardId,
             array_filter($state->moodsOwnedBy($playerId), static fn ($mood) => $mood->cardId !== $cardId),
         ));
+
+        // Defensiveness / Rudeness: this mood's after-playing effect doesn't happen (what it reacts to still does).
+        if ($afterPlayingSuppressed) {
+            return $this->finishAfterPlayingChain($state, $cardId, $playerId, $invocationChoices, $reactorCandidateCardIds);
+        }
 
         $effectiveRow = $state->catalogRow($state->effectiveCardId($cardId));
         if (!$effectiveRow['hasAfterPlaying']) {

@@ -493,6 +493,10 @@ final class CardChoiceSchema
             ['key' => 'parity', 'type' => 'mode', 'required' => true, 'options' => ['odd', 'even'], 'label' => 'Odd or even: which printed numbers (top right corner) you remove'],
             ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods with a number of that type to put into the discard pile (up to 2, one per player)', 'count' => ['max' => 2], 'constraint' => ['type' => 'distinct_owners'], 'includes_self' => true],
         ],
+        'pettiness' => [
+            ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => false, 'label' => "Card to discard from your hand (then choose a player who can't play moods during their next turn)"],
+            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => false, 'label' => "Player who can't play moods during their next turn (required if you discard a card above)"],
+        ],
         'resignation' => [
             ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => true, 'label' => 'Card to put on the bottom of the deck (cost to play this card)'],
         ],

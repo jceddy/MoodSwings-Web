@@ -855,6 +855,194 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame(3, $second->valueOf($this->id('Urgency')), 'a new round starts the count over');
     }
 
+    // ---- play restrictions: Obstinacy, Restraint, Defensiveness, Rudeness, Pettiness, Overconfidence ----
+
+    public function testObstinacyEndsItsOwnersTurnAfterOneMood(): void
+    {
+        $state = $this->state([1 => ['Obstinacy', 'Anger', 'Boredom']]);
+        $this->seat($state, 1, 'Obstinacy');
+        $state->startTurn(1);
+        $state->grantExtraPlay(1, null, $this->id('Anger'));
+        self::assertSame(2, $state->playsRemaining());
+
+        $this->play($state, 1, 'Anger');
+        self::assertSame(0, $state->playsRemaining(), 'one mood per turn, whatever grants are left');
+    }
+
+    public function testObstinacyDoesNotLimitOtherPlayers(): void
+    {
+        $state = $this->state([1 => ['Anger'], 2 => ['Obstinacy']]);
+        $this->seat($state, 2, 'Obstinacy');
+        $state->startTurn(1);
+        $state->grantExtraPlay(1, null, $this->id('Anger'));
+        $this->play($state, 1, 'Anger');
+
+        self::assertSame(1, $state->playsRemaining());
+    }
+
+    public function testRestraintKillsPlaysGrantedByMoodsButNotTheBasePlay(): void
+    {
+        $state = $this->state([1 => ['Anger', 'Boredom'], 2 => ['Restraint']]);
+        $this->seat($state, 2, 'Restraint');
+        $state->startTurn(1);
+        $state->grantExtraPlay(1, null, $this->id('Anger'));
+
+        self::assertSame(1, $state->playsRemaining(), 'only the turn\'s own play is left');
+        $this->play($state, 1, 'Anger');
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testRestraintSparesHurtFeelingsSecondBasePlay(): void
+    {
+        $state = $this->state([1 => ['Anger', 'Boredom'], 2 => ['Restraint']]);
+        $this->seat($state, 2, 'Restraint');
+        $state->startTurn(1, hasHurtFeelings: true);
+        $state->grantExtraPlay(1, null, $this->id('Anger'));
+
+        self::assertSame(2, $state->playsRemaining(), 'Hurt Feelings\' play stands, the granted one does not');
+    }
+
+    public function testRestraintComesBackWhenItLeavesPlay(): void
+    {
+        $state = $this->state([1 => ['Anger'], 2 => ['Restraint']]);
+        $this->seat($state, 2, 'Restraint');
+        $state->startTurn(1);
+        $state->grantExtraPlay(1, null, $this->id('Anger'));
+        self::assertSame(1, $state->playsRemaining());
+
+        $state->moveInPlayToDiscard($this->id('Restraint'));
+        self::assertSame(2, $state->playsRemaining());
+    }
+
+    public function testDefensivenessSkipsTheAfterPlayingEffectOfAnAdditionalMoodOnly(): void
+    {
+        $state = $this->state([1 => ['Anger', 'Longing', 'Complacency'], 2 => ['Defensiveness']]);
+        $this->seat($state, 2, 'Defensiveness');
+        $state->startTurn(1);
+        $state->grantExtraPlay(1, null, $this->id('Anger'));
+        $this->play($state, 1, 'Anger'); // the base play: unaffected
+        $this->play($state, 1, 'Longing', ['hand_card_id' => $this->id('Complacency')]); // additional: its effect doesn't happen
+
+        self::assertContains($this->id('Complacency'), $state->hand(1), 'Longing did nothing');
+        self::assertTrue($state->isInPlay($this->id('Longing')));
+    }
+
+    public function testDefensivenessLeavesTheFirstMoodOfTheTurnAlone(): void
+    {
+        $state = $this->state([1 => ['Longing', 'Complacency'], 2 => ['Defensiveness']]);
+        $this->seat($state, 2, 'Defensiveness');
+        $state->startTurn(1);
+        $this->play($state, 1, 'Longing', ['hand_card_id' => $this->id('Complacency')]);
+
+        self::assertSame([], $state->hand(1));
+        self::assertSame($this->ids('Complacency'), $state->discardPile());
+    }
+
+    public function testDefensivenessDoesNotAffectItsOwnersAdditionalMoodsOrHurtFeelings(): void
+    {
+        $own = $this->state([1 => ['Defensiveness', 'Anger', 'Longing', 'Complacency']]);
+        $this->seat($own, 1, 'Defensiveness');
+        $own->startTurn(1);
+        $own->grantExtraPlay(1, null, $this->id('Anger'));
+        $this->play($own, 1, 'Anger');
+        $this->play($own, 1, 'Longing', ['hand_card_id' => $this->id('Complacency')]);
+        self::assertSame($this->ids('Complacency'), $own->discardPile(), 'it spares you');
+
+        $hurt = $this->state([1 => ['Anger', 'Longing', 'Complacency'], 2 => ['Defensiveness']]);
+        $this->seat($hurt, 2, 'Defensiveness');
+        $hurt->startTurn(1, hasHurtFeelings: true);
+        $this->play($hurt, 1, 'Anger');
+        $this->play($hurt, 1, 'Longing', ['hand_card_id' => $this->id('Complacency')]);
+        self::assertSame($this->ids('Complacency'), $hurt->discardPile(), "Hurt Feelings' second play is a base play");
+    }
+
+    public function testRudenessWaitsForEachOtherPlayersNextTurn(): void
+    {
+        $state = $this->state([1 => ['Rudeness']]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Rudeness');
+
+        self::assertSame([BoardState::TURN_RUDENESS], $state->consumePendingTurnRestrictionsFor(2));
+        self::assertSame([BoardState::TURN_RUDENESS], $state->consumePendingTurnRestrictionsFor(3));
+        self::assertSame([], $state->consumePendingTurnRestrictionsFor(1), 'not the player who played it');
+        self::assertSame([], $state->consumePendingTurnRestrictionsFor(2), 'it is consumed once');
+    }
+
+    public function testRudenessTurnHasNoExtraPlaysAndNoAfterPlayingEffects(): void
+    {
+        $state = $this->state([2 => ['Longing', 'Complacency', 'Anger']]);
+        $state->startTurn(2);
+        $state->beginTurnFlags(1, [BoardState::TURN_RUDENESS]);
+        $state->grantExtraPlay(1, null, $this->id('Anger'));
+        self::assertSame(1, $state->playsRemaining(), 'no additional moods');
+
+        $this->play($state, 2, 'Longing', ['hand_card_id' => $this->id('Complacency')]);
+        self::assertContains($this->id('Complacency'), $state->hand(2), "even the turn's own mood has no after-playing effect");
+    }
+
+    public function testRudenessSparesHurtFeelingsSecondBasePlay(): void
+    {
+        $state = $this->state([2 => ['Anger', 'Boredom']]);
+        $state->startTurn(2, hasHurtFeelings: true);
+        $state->beginTurnFlags(2, [BoardState::TURN_RUDENESS]);
+
+        self::assertSame(2, $state->playsRemaining());
+    }
+
+    public function testPettinessBansTheChosenPlayersNextTurn(): void
+    {
+        $state = $this->state([1 => ['Pettiness', 'Complacency']]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Pettiness', ['hand_card_id' => $this->id('Complacency'), 'target_player_id' => 2]);
+
+        self::assertSame($this->ids('Complacency'), $state->discardPile());
+        self::assertSame([BoardState::TURN_NO_PLAYS], $state->consumePendingTurnRestrictionsFor(2));
+
+        $state->startTurn(2);
+        $state->beginTurnFlags(1, [BoardState::TURN_NO_PLAYS]);
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testPettinessIsOptionalAndNeedsAPlayerWithTheDiscard(): void
+    {
+        $state = $this->state([1 => ['Pettiness', 'Complacency']]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Pettiness');
+        self::assertSame([], $state->consumePendingTurnRestrictionsFor(2));
+
+        $second = $this->state([1 => ['Pettiness', 'Complacency']]);
+        $second->startTurn(1);
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($second, 1, 'Pettiness', ['hand_card_id' => $this->id('Complacency')]);
+    }
+
+    public function testOverconfidenceGrantsTwoPlaysAndCostsTheNextTurnOnlyOnceUsed(): void
+    {
+        $unused = $this->state([1 => ['Overconfidence']]);
+        $unused->startTurn(1);
+        $this->play($unused, 1, 'Overconfidence');
+        self::assertSame(2, $unused->playsRemaining());
+        self::assertSame([], $unused->consumePendingTurnRestrictionsFor(1), 'no extra play used, nothing owed');
+
+        $state = $this->state([1 => ['Overconfidence', 'Anger', 'Boredom']]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Overconfidence');
+        $this->play($state, 1, 'Anger');
+        self::assertSame(1, $state->playsRemaining());
+        self::assertSame([BoardState::TURN_NO_PLAYS], $state->consumePendingTurnRestrictionsFor(1), 'one extra play used: no plays next turn');
+    }
+
+    public function testOverconfidenceIsIdleUnderRestraint(): void
+    {
+        $state = $this->state([1 => ['Overconfidence'], 2 => ['Restraint']]);
+        $this->seat($state, 2, 'Restraint');
+        $state->startTurn(1);
+        $this->play($state, 1, 'Overconfidence');
+
+        self::assertSame(0, $state->playsRemaining());
+        self::assertSame([], $state->consumePendingTurnRestrictionsFor(1));
+    }
+
     // ---- static value modifiers ----
 
     public function testArdorAddsTheNumberOfRedMoodsToEachOwnRedMood(): void

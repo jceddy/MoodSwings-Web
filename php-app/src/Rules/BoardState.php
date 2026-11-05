@@ -204,6 +204,27 @@ final class BoardState
     /** See $awardsExtraWinSourceCardId's own docblock. */
     private ?int $awardsExtraWinOwnerId = null;
 
+    /** Pettiness/Overconfidence: the player may not play moods this turn. */
+    public const TURN_NO_PLAYS = 'no_plays';
+    /** Rudeness: no additional moods this turn, and no after-playing effects of the moods played in it. */
+    public const TURN_RUDENESS = 'rudeness';
+
+    /**
+     * How many moods the current turn's player has played so far this turn and how many of the turn's grants are
+     * its base plays (1, or 2 with Hurt Feelings) -- a mood is an "additional" one (Restraint, Defensiveness,
+     * Rudeness) once the base plays are used up. Which grant a play consumed can't tell them apart (the most
+     * restrictive usable grant is spent first), so it is counted. Persisted with the turn's grants
+     * (game_rounds.turn_flags) and started over by beginTurnFlags().
+     */
+    private int $turnPlaysMade = 0;
+    private int $turnBasePlays = 1;
+
+    /** @var list<string> TURN_* restrictions in force for the current turn, taken from pendingTurnRestrictions when it began. */
+    private array $turnRestrictions = [];
+
+    /** @var array<int, list<string>> playerId => TURN_* restrictions waiting for that player's next turn -- see addPendingTurnRestriction(). */
+    private array $pendingTurnRestrictions = [];
+
     /** @var array<int, array<string, mixed>> cardId => effectState staged during payToPlayCost(), before the card exists as a MoodInPlay -- see stagePrePlayEffectState(). */
     private array $pendingEffectState = [];
 
@@ -2266,6 +2287,7 @@ final class BoardState
         // as an indistinguishable second "your normal turn".
         $this->playGrants = $hasHurtFeelings ? [null, ['sourceLabel' => 'Hurt Feelings']] : [null];
         $this->turnStateSignatureCounts = [];
+        $this->beginTurnFlags($hasHurtFeelings ? 2 : 1, []);
     }
 
     /**
@@ -2867,6 +2889,123 @@ final class BoardState
         return $this->bankedExtraPlays;
     }
 
+    // --- turn flags: plays made this turn, base plays, and next-turn restrictions (Restraint, Rudeness, Pettiness...) ---
+
+    /** A turn starts: $basePlays base plays (2 with Hurt Feelings), none made yet, $restrictions in force. @param list<string> $restrictions */
+    public function beginTurnFlags(int $basePlays, array $restrictions): void
+    {
+        $this->turnPlaysMade = 0;
+        $this->turnBasePlays = $basePlays;
+        $this->turnRestrictions = array_values(array_unique($restrictions));
+    }
+
+    /** @return array{playsMade: int, basePlays: int, restrictions: list<string>} what is persisted with the turn's grants */
+    public function turnFlags(): array
+    {
+        return ['playsMade' => $this->turnPlaysMade, 'basePlays' => $this->turnBasePlays, 'restrictions' => $this->turnRestrictions];
+    }
+
+    /** @param ?array{playsMade?: int, basePlays?: int, restrictions?: list<string>} $flags */
+    public function restoreTurnFlags(?array $flags): void
+    {
+        $this->turnPlaysMade = (int) ($flags['playsMade'] ?? 0);
+        $this->turnBasePlays = (int) ($flags['basePlays'] ?? 1);
+        $this->turnRestrictions = array_values($flags['restrictions'] ?? []);
+    }
+
+    /** @return list<string> */
+    public function turnRestrictions(): array
+    {
+        return $this->turnRestrictions;
+    }
+
+    /** Whether the mood about to be played is an additional one -- the turn's base plays are already used up. */
+    public function isAdditionalPlay(): bool
+    {
+        return $this->turnPlaysMade >= $this->turnBasePlays;
+    }
+
+    /** A mood was played this turn (a play, not an effect putting one into play). */
+    public function recordTurnPlay(): void
+    {
+        $this->turnPlaysMade++;
+    }
+
+    /** Restraint in play anywhere, or Rudeness on this turn: moods can't let the current player play additional moods. */
+    public function extraPlaysBlocked(): bool
+    {
+        if (in_array(self::TURN_RUDENESS, $this->turnRestrictions, true)) {
+            return true;
+        }
+        foreach ($this->moodsInPlay as $mood) {
+            if ($this->catalogRow($this->effectiveCardId($mood->cardId))['effectKey'] === 'restraint') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Whether the after-playing effect of the mood $playerId is playing right now doesn't happen: any mood on a
+     * Rudeness turn, and an additional one (see isAdditionalPlay(), asked before the play is recorded) while an
+     * opponent of $playerId has Defensiveness in play.
+     */
+    public function afterPlayingSuppressedFor(int $playerId, bool $additionalPlay): bool
+    {
+        if (in_array(self::TURN_RUDENESS, $this->turnRestrictions, true)) {
+            return true;
+        }
+        if (!$additionalPlay) {
+            return false;
+        }
+        foreach ($this->moodsInPlay as $mood) {
+            if ($mood->ownerId !== $playerId
+                && !$this->isTeammate($playerId, $mood->ownerId)
+                && $this->catalogRow($this->effectiveCardId($mood->cardId))['effectKey'] === 'defensiveness') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** $restriction (a TURN_* constant) applies to $playerId's next turn. Idempotent -- a restriction is in force or it isn't. */
+    public function addPendingTurnRestriction(int $playerId, string $restriction): void
+    {
+        $list = $this->pendingTurnRestrictions[$playerId] ?? [];
+        if (!in_array($restriction, $list, true)) {
+            $list[] = $restriction;
+        }
+        $this->pendingTurnRestrictions[$playerId] = $list;
+    }
+
+    /**
+     * Returns and clears everything waiting for $playerId's next turn -- called once, as that turn's grants are
+     * computed (GameService::computeFreshGrants()).
+     *
+     * @return list<string>
+     */
+    public function consumePendingTurnRestrictionsFor(int $playerId): array
+    {
+        $list = $this->pendingTurnRestrictions[$playerId] ?? [];
+        unset($this->pendingTurnRestrictions[$playerId]);
+
+        return $list;
+    }
+
+    /** @return array<int, list<string>> playerId => restrictions waiting for their next turn (for BoardStateRepository to persist) */
+    public function pendingTurnRestrictionsByPlayer(): array
+    {
+        return $this->pendingTurnRestrictions;
+    }
+
+    /** @param array<int, list<string>> $byPlayer */
+    public function restorePendingTurnRestrictions(array $byPlayer): void
+    {
+        $this->pendingTurnRestrictions = $byPlayer;
+    }
+
     public function playsRemaining(): int
     {
         return count(array_filter($this->playGrants, fn (?array $g) => $this->grantIsActive($g)));
@@ -3109,6 +3248,19 @@ final class BoardState
      */
     private function grantIsActive(?array $restriction): bool
     {
+        if (in_array(self::TURN_NO_PLAYS, $this->turnRestrictions, true)) {
+            return false;
+        }
+        // Obstinacy: its owner can only play one mood per turn, so nothing more is playable once one has been.
+        if ($this->turnPlaysMade >= 1 && $this->currentPlayerId !== null && $this->countMoodsInPlayWithEffectiveKey($this->currentPlayerId, 'obstinacy') > 0) {
+            return false;
+        }
+        // Restraint / Rudeness: moods can't let a player play additional moods -- a grant from a card (it names its
+        // source) is dead, while the turn's own base plays (a bare null, or Hurt Feelings' labelled one) stand.
+        if ($restriction !== null && !isset($restriction['sourceLabel']) && $this->extraPlaysBlocked()) {
+            return false;
+        }
+
         if ($restriction === null) {
             return true;
         }

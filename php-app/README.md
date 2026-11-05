@@ -9440,6 +9440,31 @@ in custom sets is.
     itself made a board with a 1 and a 6 flip between 3 and 6 forever), so it needs three different values among the
     owner's *other* moods -- a board of at least four.
 
+- **Play restrictions (batch 14, tier 2).** Six cards that limit who may play what, built on a small per-turn
+  state in `BoardState` (`beginTurnFlags()`/`turnFlags()`): how many moods the turn's player has played, how many
+  of the turn's plays are base plays (1, or 2 with Hurt Feelings -- worked out from the round row, not stored), and
+  the restrictions in force. A mood is an *additional* one once the base plays are used up -- counted, because the
+  most restrictive usable grant is spent first and so which grant a play used can't tell base from extra. The flags
+  persist with the turn's grants (`game_rounds.turn_flags`, written by `updateRoundTurnState()` and the next-round
+  INSERTs); what waits for a player's next turn lives on `game_players.pending_turn_restrictions`, taken when
+  `computeFreshGrants()` builds that turn's grants (migration 0512).
+  - **Obstinacy**, **Restraint** and **Defensiveness** have no effect code (`PlayRuleMarkerEffect`): the engine reads
+    them off the board by effective effect key. Obstinacy: once its owner has played a mood this turn no grant is
+    active (`grantIsActive()`) -- Hurt Feelings' second play included, a literal reading of "one mood per turn".
+    Restraint: any grant that names a source card is inactive (`extraPlaysBlocked()`), so Hope/Charity/Premonition...
+    stop, while the bare base play and Hurt Feelings' labelled one stand; banked Joy/Generosity plays aren't spent
+    (`computeFreshGrants()` returns early), so they're still there when it leaves. Defensiveness: an additional mood
+    played while an *opponent* has it in play skips its after-playing effect (`afterPlayingSuppressedFor()`; what it
+    reacts to still happens), sparing its owner and every first/base play.
+  - **Rudeness** puts `TURN_RUDENESS` on each other player's next turn: extra plays dead and every mood played that
+    turn skips its after-playing effect (Hurt Feelings' second base play stands).
+  - **Pettiness**: optional discard + the chosen player (anyone, you included) gets `TURN_NO_PLAYS` for their next
+    turn -- this round's if they haven't gone yet (each player has one turn per round), else next round's.
+  - **Overconfidence** grants two extra plays tagged `onUsePendingTurnRestriction`; spending either (applied by
+    `MoodPlayService`) queues `TURN_NO_PLAYS` for the owner's next turn, once however many are used.
+  A player with no active grant simply has no legal play: bots pass, and a human with auto-pass on an empty hand is
+  passed automatically (otherwise they click Pass).
+
 
 ### Default selections mode (issue #274)
 

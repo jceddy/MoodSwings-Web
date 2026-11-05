@@ -13407,10 +13407,11 @@ final class GameService
         }
 
         $insertRound = $pdo->prepare(
-            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, hurt_feelings_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status, pre_after_scoring_event_id)
-             VALUES (:game_id, :round_number, :first_player, :hurt_feelings, :first_player_turn, :plays_remaining, :pending_play_grants, 'in_progress', :pre_after_scoring_event_id)"
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, hurt_feelings_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, turn_flags, status, pre_after_scoring_event_id)
+             VALUES (:game_id, :round_number, :first_player, :hurt_feelings, :first_player_turn, :plays_remaining, :pending_play_grants, :turn_flags, 'in_progress', :pre_after_scoring_event_id)"
         );
         $insertRound->execute([
+            'turn_flags' => json_encode($state->turnFlags()),
             'game_id' => $gameId,
             'round_number' => (int) $round['round_number'] + 1,
             'first_player' => $nextFirstPlayer,
@@ -15046,6 +15047,16 @@ final class GameService
         // second bare null.
         $grants = $baseCount > 1 ? [null, ['sourceLabel' => 'Hurt Feelings']] : [null];
 
+        // Pettiness/Overconfidence/Rudeness: whatever was waiting for this player's turn comes into force now, for
+        // this turn only (BoardState::beginTurnFlags(); persisted with the grants by updateRoundTurnState()).
+        $state->beginTurnFlags($baseCount, $state->consumePendingTurnRestrictionsFor($playerId));
+
+        // With Restraint in play, or on a Rudeness turn, no mood may let a player play an additional mood: only the
+        // base plays are left, and banked Joy/Generosity plays stay banked rather than being spent on nothing.
+        if ($state->extraPlaysBlocked()) {
+            return $grants;
+        }
+
         foreach ($this->effectiveSourceCardIds($state, $playerId, 'hope') as $hopeSourceCardId) {
             $grants[] = ['sourceCardId' => $hopeSourceCardId, 'requiresSourceInPlay' => true];
         }
@@ -15313,10 +15324,11 @@ final class GameService
                 $this->seatFirstPlayerOverride($gameId, $newRoundId, $nextFirstPlayer, $format);
             } else {
                 $insertRound = $pdo->prepare(
-                    "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
-                     VALUES (:game_id, :round_number, :first_player, :first_player_turn, :plays_remaining, :pending_play_grants, 'in_progress')"
+                    "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, turn_flags, status)
+                     VALUES (:game_id, :round_number, :first_player, :first_player_turn, :plays_remaining, :pending_play_grants, :turn_flags, 'in_progress')"
                 );
                 $insertRound->execute([
+                    'turn_flags' => json_encode($state->turnFlags()),
                     'game_id' => $gameId,
                     'round_number' => (int) $round['round_number'] + 1,
                     'first_player' => $nextFirstPlayer,
@@ -23318,9 +23330,10 @@ final class GameService
         }
 
         $stmt = $pdo->prepare(
-            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, loop_state_signature_counts = :loop_state_signature_counts, chaos_loop_state = :chaos_loop_state, discarded_this_round = :discarded_this_round, skip_scoring = :skip_scoring, skip_scoring_first_player_game_player_id = :skip_scoring_first_player_id, skip_scoring_source_card_id = :skip_scoring_source_card_id, skip_scoring_owner_game_player_id = :skip_scoring_owner_id, awards_extra_win = :awards_extra_win, awards_extra_win_source_card_id = :awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id = :awards_extra_win_owner_id WHERE id = :round_id'
+            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, loop_state_signature_counts = :loop_state_signature_counts, chaos_loop_state = :chaos_loop_state, discarded_this_round = :discarded_this_round, skip_scoring = :skip_scoring, skip_scoring_first_player_game_player_id = :skip_scoring_first_player_id, skip_scoring_source_card_id = :skip_scoring_source_card_id, skip_scoring_owner_game_player_id = :skip_scoring_owner_id, awards_extra_win = :awards_extra_win, awards_extra_win_source_card_id = :awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id = :awards_extra_win_owner_id, turn_flags = :turn_flags WHERE id = :round_id'
         );
         $stmt->execute([
+            'turn_flags' => json_encode($state->turnFlags()),
             'player_id' => $playerId,
             'plays_remaining' => count($playGrants),
             'pending_play_grants' => json_encode($persistedPlayGrants ?? $playGrants),
