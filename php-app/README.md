@@ -9334,16 +9334,15 @@ in custom sets is.
   reveal-or-not choice, then either the owner's pick (with a play of only that card) or the target's choice
   among their tied-highest moods (automatic when one is strictly highest). Bots always pick the highest
   draft-priority card, and answer Entitlement's reveal by revealing while their best mood is worth 3 or more.
-- **Schadenfreude and the turn's discards.** "If another player discarded a card or had a mood put into the
-  discard pile this turn" needs a turn-scoped record of who lost a card to the discard pile:
-  `BoardState` notes a player in `playersWhoDiscardedThisTurn()` when they discard from hand
-  (`moveHandToDiscard()`) or one of their moods is put into the discard pile (`moveInPlayToDiscard()`, by the
-  mood's owner at that moment). Any player other than the one playing Schadenfreude counts, a teammate
-  included, however it happened and whenever earlier in the turn -- Martyrdom/Jealousy at the start of the turn,
-  an earlier play -- but a mood bounced to a hand or the deck, and a card moved from the deck to the discard
-  pile (Carelessness), don't. It is persisted on the live round (`game_rounds.turn_discards`, migration 0505)
-  and reset whenever a turn begins (`updateRoundTurnState()` on a change of player) or a round ends. The value
-  is locked to 6 once, like Dignity.
+- **Schadenfreude and the round's hand discards.** A "while in play" 3->6 (a plain conditional value, like
+  Anticipation): 6 if an *opponent* (never a teammate, never you) discarded a card from their hand at any point
+  this round, including before it was played. `BoardState::moveHandToDiscard()` notes the player in
+  `playersWhoDiscardedFromHandThisRound()`; a mood put into the discard pile and a card moved from the deck
+  (Carelessness) don't count. The record is persisted on the live round (`game_rounds.round_hand_discards`,
+  migrations 0505/0507) and emptied when the round ends, so the card is worth 3 again at the start of the next
+  round. (It was first an after-playing check of the turn, then also counted moods; migration 0507 moved it to
+  this round-scoped record and rewrote the card.) A replayed board has no such record loaded, so a replay shows
+  Schadenfreude at 3.
 - **Colorless (batch 9).** `cards.color` gained a sixth value, `colorless` (migration 0506): Reverence,
   Detachment, Resentment, Impatience and Contentment (5-point moods that can only be played if *you* have a
   white/blue/black/red/green mood -- `ColorGatedPlayEffect::canPayToPlayCost()`, so the playability checks and

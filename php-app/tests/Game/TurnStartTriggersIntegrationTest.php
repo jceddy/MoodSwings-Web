@@ -701,48 +701,48 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertTrue($this->state()->isInPlay($inspiration));
     }
 
-    public function testSchadenfreudeSeesADiscardAnOpponentMadeEarlierThisTurnAcrossRequests(): void
+    public function testSchadenfreudeBecomesSixWhenAnOpponentDiscardsAndStaysThatWayForTheRound(): void
     {
-        $this->pdo->exec("UPDATE game_rounds SET plays_remaining = 2, pending_play_grants = '[null, null]'"); // two plays this turn
+        $schadenfreude = $this->card('Schadenfreude', 'in_play', $this->p1);
         $suspicion = $this->card('Suspicion', 'hand', $this->p1);
-        $schadenfreude = $this->card('Schadenfreude', 'hand', $this->p1);
+        $forced = $this->card('Apathy', 'hand', $this->p2);
+        $this->card('Creativity', 'hand', $this->p2);
+
+        self::assertSame(3, $this->state()->valueOf($schadenfreude));
+        $this->games->playMood($this->gameId, $this->p1, $suspicion, ['player_ids' => [$this->p2]]);
+        $this->games->respondToDecision($this->gameId, $this->p2, ['discarded_card_id_' . $this->p2 => $forced]);
+
+        self::assertSame(6, $this->state()->valueOf($schadenfreude), "player 2 discarded a card from hand; it's remembered across requests");
+        // The discard also counts on the next turn of the same round -- the record is round-scoped.
+        self::assertSame(6, $this->state()->valueOf($schadenfreude));
+    }
+
+    public function testSchadenfreudeIsThreeAgainAtTheStartOfTheNextRound(): void
+    {
+        $schadenfreude = $this->card('Schadenfreude', 'in_play', $this->p1);
+        $suspicion = $this->card('Suspicion', 'hand', $this->p1);
         $forced = $this->card('Apathy', 'hand', $this->p2);
         $this->card('Creativity', 'hand', $this->p2);
 
         $this->games->playMood($this->gameId, $this->p1, $suspicion, ['player_ids' => [$this->p2]]);
         $this->games->respondToDecision($this->gameId, $this->p2, ['discarded_card_id_' . $this->p2 => $forced]);
-        $this->games->playMood($this->gameId, $this->p1, $schadenfreude, []);
+        self::assertSame(6, $this->state()->valueOf($schadenfreude));
 
-        self::assertSame(6, $this->state()->valueOf($schadenfreude), "player 2 discarded a card from hand on player 1's turn");
+        $this->games->pass($this->gameId, $this->p2); // the round ends
+
+        self::assertSame(3, $this->state()->valueOf($schadenfreude), 'the record does not carry into the next round');
     }
 
-    public function testSchadenfreudeSeesAnOpponentsMoodDiscardedEarlierThisTurn(): void
+    public function testAnOpponentsMoodGoingToTheDiscardPileDoesNotTurnSchadenfreudeOn(): void
     {
-        $rashness = $this->card('Rashness', 'hand', $this->p1); // discards an opposing mood worth 1 or less, and grants an extra play
-        $schadenfreude = $this->card('Schadenfreude', 'hand', $this->p1);
+        $schadenfreude = $this->card('Schadenfreude', 'in_play', $this->p1);
+        $rashness = $this->card('Rashness', 'hand', $this->p1); // discards an opposing mood worth 1 or less
         $victim = $this->card('Creativity', 'in_play', $this->p2);
         $this->card('Boredom', 'hand', $this->p2);
 
         $this->games->playMood($this->gameId, $this->p1, $rashness, ['target_mood_id' => $victim]);
-        $this->games->playMood($this->gameId, $this->p1, $schadenfreude, []);
 
-        self::assertSame(6, $this->state()->valueOf($schadenfreude));
-    }
-
-    public function testSchadenfreudeDoesNotCarryADiscardIntoTheNextTurn(): void
-    {
-        $this->pdo->exec("UPDATE game_rounds SET plays_remaining = 2, pending_play_grants = '[null, null]'");
-        $suspicion = $this->card('Suspicion', 'hand', $this->p1);
-        $forced = $this->card('Apathy', 'hand', $this->p2);
-        $schadenfreude = $this->card('Schadenfreude', 'hand', $this->p2);
-        $this->card('Creativity', 'hand', $this->p2);
-
-        $this->games->playMood($this->gameId, $this->p1, $suspicion, ['player_ids' => [$this->p2]]);
-        $this->games->respondToDecision($this->gameId, $this->p2, ['discarded_card_id_' . $this->p2 => $forced]);
-        $this->games->pass($this->gameId, $this->p1); // player 2's turn begins
-        $this->games->playMood($this->gameId, $this->p2, $schadenfreude, []);
-
-        self::assertSame(3, $this->state()->valueOf($schadenfreude), "player 1 discarded nothing this turn; player 2's own earlier discard was last turn");
+        self::assertSame(3, $this->state()->valueOf($schadenfreude));
     }
 
     public function testUnityWinsTheRoundForItsOwnerRegardlessOfScore(): void

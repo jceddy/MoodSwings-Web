@@ -1000,78 +1000,58 @@ final class CustomSetEffectsTest extends TestCase
 
     // ---- Schadenfreude ----
 
-    public function testSchadenfreudeBecomesSixWhenAnotherPlayerDiscardedFromHandThisTurn(): void
+    public function testSchadenfreudeIsSixOnceAnOpponentHasDiscardedFromHandThisRound(): void
+    {
+        $state = $this->state([1 => ['Schadenfreude'], 2 => ['Apathy']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Schadenfreude');
+        self::assertSame(3, $state->valueOf($this->id('Schadenfreude')));
+
+        $state->moveHandToDiscard(2, $this->id('Apathy'));
+        self::assertSame(6, $state->valueOf($this->id('Schadenfreude')));
+    }
+
+    public function testSchadenfreudeCountsADiscardMadeBeforeItWasPlayed(): void
     {
         $state = $this->state([1 => ['Schadenfreude'], 2 => ['Apathy']]);
         $state->startTurn(1);
         $state->moveHandToDiscard(2, $this->id('Apathy'));
-        $this->play($state, 1, 'Schadenfreude');
+        $this->seat($state, 1, 'Schadenfreude');
 
         self::assertSame(6, $state->valueOf($this->id('Schadenfreude')));
     }
 
-    public function testSchadenfreudeAlsoCountsAnotherPlayersMoodPutIntoTheDiscardPile(): void
+    public function testSchadenfreudeIgnoresYourOwnDiscards(): void
     {
-        $state = $this->state([1 => ['Schadenfreude'], 2 => ['Creativity']]);
+        $state = $this->state([1 => ['Schadenfreude', 'Apathy'], 2 => []]);
         $state->startTurn(1);
+        $this->seat($state, 1, 'Schadenfreude');
+        $state->moveHandToDiscard(1, $this->id('Apathy'));
+
+        self::assertSame(3, $state->valueOf($this->id('Schadenfreude')));
+    }
+
+    public function testSchadenfreudeIgnoresMoodsPutIntoTheDiscardPileAndDeckCards(): void
+    {
+        $state = $this->state([1 => ['Schadenfreude'], 2 => ['Creativity']], deckNames: ['Apathy']);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Schadenfreude');
         $this->seat($state, 2, 'Creativity');
-        $state->moveInPlayToDiscard($this->id('Creativity'));
-        $this->play($state, 1, 'Schadenfreude');
-
-        self::assertSame(6, $state->valueOf($this->id('Schadenfreude')));
-    }
-
-    public function testSchadenfreudeIgnoresYourOwnDiscardsAndYourOwnMoods(): void
-    {
-        $state = $this->state([1 => ['Schadenfreude', 'Apathy', 'Creativity'], 2 => []]);
-        $state->startTurn(1);
-        $state->moveHandToDiscard(1, $this->id('Apathy')); // our own discard from hand
-        $this->seat($state, 1, 'Creativity');
-        $state->moveInPlayToDiscard($this->id('Creativity')); // our own mood
-        $this->play($state, 1, 'Schadenfreude');
+        $state->moveInPlayToDiscard($this->id('Creativity')); // an opponent's mood, not a card from hand
+        $state->moveDeckTopToDiscard(2); // a deck card, not a card from hand
 
         self::assertSame(3, $state->valueOf($this->id('Schadenfreude')));
     }
 
-    public function testSchadenfreudeIgnoresAMoodThatWasReturnedToHandInsteadOfDiscarded(): void
-    {
-        $state = $this->state([1 => ['Schadenfreude'], 2 => ['Creativity']]);
-        $state->startTurn(1);
-        $this->seat($state, 2, 'Creativity');
-        $state->moveInPlayToHand($this->id('Creativity')); // bounced
-        $this->play($state, 1, 'Schadenfreude');
-
-        self::assertSame(3, $state->valueOf($this->id('Schadenfreude')));
-    }
-
-    public function testSchadenfreudeIgnoresACardMovedFromTheDeckToTheDiscardPile(): void
-    {
-        $state = $this->state([1 => ['Schadenfreude'], 2 => []], deckNames: ['Apathy']);
-        $state->startTurn(1);
-        $state->moveDeckTopToDiscard(2);
-        $this->play($state, 1, 'Schadenfreude');
-
-        self::assertSame(3, $state->valueOf($this->id('Schadenfreude')));
-    }
-
-    public function testSchadenfreudeStaysThreeWhenNobodyDiscarded(): void
-    {
-        $state = $this->state([1 => ['Schadenfreude']]);
-        $state->startTurn(1);
-        $this->play($state, 1, 'Schadenfreude');
-
-        self::assertSame(3, $state->valueOf($this->id('Schadenfreude')));
-    }
-
-    public function testTheTurnsHandDiscardersCanBeResetAndRestored(): void
+    public function testTheRoundsHandDiscardsCanBeResetAndRestored(): void
     {
         $state = $this->state([1 => [], 2 => ['Apathy']]);
         $state->moveHandToDiscard(2, $this->id('Apathy'));
-        self::assertSame([2], $state->playersWhoDiscardedThisTurn());
-        $state->resetTurnDiscards();
-        self::assertSame([], $state->playersWhoDiscardedThisTurn());
-        $state->restoreTurnDiscards([2, 3]);
-        self::assertSame([2, 3], $state->playersWhoDiscardedThisTurn());
+        self::assertSame([2], $state->playersWhoDiscardedFromHandThisRound());
+        $state->resetRoundHandDiscards();
+        self::assertSame([], $state->playersWhoDiscardedFromHandThisRound());
+        $state->restoreRoundHandDiscards([2, 3]);
+        self::assertSame([2, 3], $state->playersWhoDiscardedFromHandThisRound());
     }
 
     // ---- extra scoring ----
