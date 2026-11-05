@@ -875,6 +875,50 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame($this->ids('Complacency'), $state->hand(1));
     }
 
+    // ---- Schadenfreude ----
+
+    public function testSchadenfreudeBecomesSixWhenAnotherPlayerDiscardedFromHandThisTurn(): void
+    {
+        $state = $this->state([1 => ['Schadenfreude'], 2 => ['Apathy']]);
+        $state->startTurn(1);
+        $state->moveHandToDiscard(2, $this->id('Apathy'));
+        $this->play($state, 1, 'Schadenfreude');
+
+        self::assertSame(6, $state->valueOf($this->id('Schadenfreude')));
+    }
+
+    public function testSchadenfreudeIgnoresYourOwnDiscardsAndMoodsGoingToTheDiscardPile(): void
+    {
+        $state = $this->state([1 => ['Schadenfreude', 'Apathy'], 2 => ['Creativity']]);
+        $state->startTurn(1);
+        $state->moveHandToDiscard(1, $this->id('Apathy')); // our own discard
+        $this->seat($state, 2, 'Creativity');
+        $state->moveInPlayToDiscard($this->id('Creativity')); // a mood, not a card from hand
+        $this->play($state, 1, 'Schadenfreude');
+
+        self::assertSame(3, $state->valueOf($this->id('Schadenfreude')));
+    }
+
+    public function testSchadenfreudeStaysThreeWhenNobodyDiscarded(): void
+    {
+        $state = $this->state([1 => ['Schadenfreude']]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Schadenfreude');
+
+        self::assertSame(3, $state->valueOf($this->id('Schadenfreude')));
+    }
+
+    public function testTheTurnsHandDiscardersCanBeResetAndRestored(): void
+    {
+        $state = $this->state([1 => [], 2 => ['Apathy']]);
+        $state->moveHandToDiscard(2, $this->id('Apathy'));
+        self::assertSame([2], $state->playersWhoDiscardedFromHandThisTurn());
+        $state->resetTurnHandDiscarders();
+        self::assertSame([], $state->playersWhoDiscardedFromHandThisTurn());
+        $state->restoreTurnHandDiscarders([2, 3]);
+        self::assertSame([2, 3], $state->playersWhoDiscardedFromHandThisTurn());
+    }
+
     // ---- extra scoring ----
 
     public function testFulfillmentScoresEachOwnMoodWorthSixOrMoreAnExtraTime(): void

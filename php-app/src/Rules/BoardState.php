@@ -114,6 +114,14 @@ final class BoardState
     /** Whoever took the first turn of the current round (e.g. for Chivalry/Triumph) -- distinct from currentPlayerId, which changes every turn. */
     private ?int $roundFirstPlayerId = null;
 
+    /**
+     * @var array<int, true> playerId => true for every player who discarded a card FROM THEIR HAND since the
+     * current turn began (Schadenfreude: "if another player discarded a card this turn"). Moods put into
+     * the discard pile don't count. Persisted on the live round (BoardStateRepository,
+     * game_rounds.turn_hand_discarders) and emptied whenever a turn begins -- see resetTurnHandDiscarders().
+     */
+    private array $turnHandDiscarders = [];
+
     /** @var list<array{playerId: int, color: string, amount: int}> Vitality's round-long color bonuses -- see addRoundColorBonus(). */
     private array $roundColorBonuses = [];
 
@@ -1159,6 +1167,7 @@ final class BoardState
         $this->discard[] = $cardId;
         $this->discardOwners[$cardId] = $playerId;
         $this->discardedThisRound = true;
+        $this->turnHandDiscarders[$playerId] = true;
         $this->recordMove($cardId, 'hand', 'discard', fromPlayerId: $playerId);
     }
 
@@ -2556,6 +2565,24 @@ final class BoardState
         $effect = $this->registry->for($effectKey);
 
         return $effect instanceof ScoringBonusEffect ? $effect->scoringBonus($this, $cardId, $this->ownerOf($cardId)) : 0;
+    }
+
+    /** @return int[] the players who have discarded a card from their hand during the current turn */
+    public function playersWhoDiscardedFromHandThisTurn(): array
+    {
+        return array_keys($this->turnHandDiscarders);
+    }
+
+    /** @param int[] $playerIds */
+    public function restoreTurnHandDiscarders(array $playerIds): void
+    {
+        $this->turnHandDiscarders = array_fill_keys(array_map(intval(...), $playerIds), true);
+    }
+
+    /** A turn (or round) begins: nobody has discarded from hand yet this turn. */
+    public function resetTurnHandDiscarders(): void
+    {
+        $this->turnHandDiscarders = [];
     }
 
     public function currentRoundNumber(): ?int

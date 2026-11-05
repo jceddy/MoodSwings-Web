@@ -701,6 +701,37 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertTrue($this->state()->isInPlay($inspiration));
     }
 
+    public function testSchadenfreudeSeesADiscardAnOpponentMadeEarlierThisTurnAcrossRequests(): void
+    {
+        $this->pdo->exec("UPDATE game_rounds SET plays_remaining = 2, pending_play_grants = '[null, null]'"); // two plays this turn
+        $suspicion = $this->card('Suspicion', 'hand', $this->p1);
+        $schadenfreude = $this->card('Schadenfreude', 'hand', $this->p1);
+        $forced = $this->card('Apathy', 'hand', $this->p2);
+        $this->card('Creativity', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $suspicion, ['player_ids' => [$this->p2]]);
+        $this->games->respondToDecision($this->gameId, $this->p2, ['discarded_card_id_' . $this->p2 => $forced]);
+        $this->games->playMood($this->gameId, $this->p1, $schadenfreude, []);
+
+        self::assertSame(6, $this->state()->valueOf($schadenfreude), "player 2 discarded a card from hand on player 1's turn");
+    }
+
+    public function testSchadenfreudeDoesNotCarryADiscardIntoTheNextTurn(): void
+    {
+        $this->pdo->exec("UPDATE game_rounds SET plays_remaining = 2, pending_play_grants = '[null, null]'");
+        $suspicion = $this->card('Suspicion', 'hand', $this->p1);
+        $forced = $this->card('Apathy', 'hand', $this->p2);
+        $schadenfreude = $this->card('Schadenfreude', 'hand', $this->p2);
+        $this->card('Creativity', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $suspicion, ['player_ids' => [$this->p2]]);
+        $this->games->respondToDecision($this->gameId, $this->p2, ['discarded_card_id_' . $this->p2 => $forced]);
+        $this->games->pass($this->gameId, $this->p1); // player 2's turn begins
+        $this->games->playMood($this->gameId, $this->p2, $schadenfreude, []);
+
+        self::assertSame(3, $this->state()->valueOf($schadenfreude), "player 1 discarded nothing this turn; player 2's own earlier discard was last turn");
+    }
+
     public function testReplayFollowsAWastefulnessCardFromTheDeckToTheDiscardPile(): void
     {
         $this->card('Wastefulness', 'in_play', $this->p2);

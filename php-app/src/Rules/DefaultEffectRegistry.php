@@ -166,6 +166,7 @@ use MoodSwings\Rules\Effects\Custom\WhimsyEffect;
 use MoodSwings\Rules\Effects\Custom\EntitlementEffect;
 use MoodSwings\Rules\Effects\Custom\InspirationEffect;
 use MoodSwings\Rules\Effects\Custom\RevealHandPickEffect;
+use MoodSwings\Rules\Effects\Custom\SchadenfreudeEffect;
 
 /**
  * Wires up every MoodEffect for the full 133-card pool -- every card with
@@ -517,6 +518,7 @@ final class DefaultEffectRegistry
         $registry->register('nosiness', new RevealHandPickEffect(RevealHandPickEffect::DISCARD, 'Nosiness'));
         $registry->register('entitlement', new EntitlementEffect());
         $registry->register('inspiration', new InspirationEffect());
+        $registry->register('schadenfreude', new SchadenfreudeEffect());
 
         return $registry;
     }

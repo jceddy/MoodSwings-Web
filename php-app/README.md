@@ -9247,8 +9247,8 @@ in custom sets is.
   0499, 7 cards) adds the **static value modifiers**, batch 4 (migration 0500, 3 cards) the **round-win
   count** cards and batch 5 (migration 0502, 2 cards) the **extra scoring** cards and batch 6 (migration 0503,
   6 cards) Carelessness and the **hand-reveal** cards, and batch 7 (migration 0504, 4 cards) the
-  **reveal-then-pick** cards (all below). The later batches still need new hooks (a colorless color,
-  Grudge's chosen-opponent play grant, Schadenfreude's per-turn discard record) and aren't implemented yet; until a card is in the
+  **reveal-then-pick** cards and batch 8 (migration 0505) Schadenfreude (all below). The later batches still
+  need new hooks (a colorless color, Grudge's chosen-opponent play grant) and aren't implemented yet; until a card is in the
   `cards` table it simply doesn't exist in the game.
 - **"At the start of each of your turns" (`TurnStartEffect`).** Brooding, Covetousness, Fairness, FOMO,
   Jealousy, Martyrdom, Maturity, Neglect, Rumination, Volatility and Wastefulness implement
@@ -9333,6 +9333,13 @@ in custom sets is.
   reveal-or-not choice, then either the owner's pick (with a play of only that card) or the target's choice
   among their tied-highest moods (automatic when one is strictly highest). Bots always pick the highest
   draft-priority card, and answer Entitlement's reveal by revealing while their best mood is worth 3 or more.
+- **Schadenfreude and the turn's hand-discarders.** "If another player discarded a card this turn" needs a
+  turn-scoped record of who discarded from hand: `BoardState::moveHandToDiscard()` notes the player in
+  `playersWhoDiscardedFromHandThisTurn()` (a mood going to the discard pile doesn't count; any discard by a
+  player other than the one playing Schadenfreude does, a teammate's included, one made at the start of the
+  turn by Martyrdom or earlier in the turn by another play). It is persisted on the live round
+  (`game_rounds.turn_hand_discarders`, migration 0505) and reset whenever a turn begins
+  (`updateRoundTurnState()` on a change of player) or a round ends. The value is locked to 6 once, like Dignity.
 
 
 ### Default selections mode (issue #274)
