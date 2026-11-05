@@ -12,7 +12,7 @@ use MoodSwings\Game\Exceptions\GameStateException;
  * DecklistParser, GameService::submitCustomDuelDeck()) must satisfy: a
  * minimum total card count, an optional maximum total count per rarity,
  * an optional maximum copies-of-a-single-card count per rarity, and an
- * optional "must be split evenly across all 5 colors" flag per rarity.
+ * optional "must be split evenly across all 5 colors" flag per rarity (a colorless card is a wildcard that can stand in for any color's share).
  * Omitting a rarity from $rarityLimits or $duplicateLimits means "no
  * restriction for that rarity"; omitting it from
  * $evenColorDistributionRarities means "no even-split requirement for
@@ -128,16 +128,20 @@ final class DuelDeckRules
         }
 
         foreach ($this->evenColorDistributionRarities as $rarity) {
+            // A colorless card is a wildcard: it can stand in for a card of any color, so it only counts
+            // toward the rarity's total, and the colored cards just may not exceed their color's share.
             $countsByColor = array_fill_keys(self::COLORS, 0);
+            $total = 0;
             foreach ($cardIds as $cardId) {
-                if ($catalogById[$cardId]['rarity'] === $rarity) {
-                    // A colorless card gets its own bucket, which can never hit the per-color quota: a deck
-                    // that must be split evenly across the five colors can't hold one.
-                    $countsByColor[$catalogById[$cardId]['color']] = ($countsByColor[$catalogById[$cardId]['color']] ?? 0) + 1;
+                if ($catalogById[$cardId]['rarity'] !== $rarity) {
+                    continue;
+                }
+                $total++;
+                if (isset($countsByColor[$catalogById[$cardId]['color']])) {
+                    $countsByColor[$catalogById[$cardId]['color']]++;
                 }
             }
 
-            $total = array_sum($countsByColor);
             if ($total % count(self::COLORS) !== 0) {
                 throw new GameStateException(
                     "{$deckLabel} has {$total} {$rarity} card(s), which can't be split evenly across the " . count(self::COLORS) . ' colors.'
@@ -146,7 +150,7 @@ final class DuelDeckRules
 
             $expectedPerColor = intdiv($total, count(self::COLORS));
             foreach ($countsByColor as $color => $count) {
-                if ($count !== $expectedPerColor) {
+                if ($count > $expectedPerColor) {
                     throw new GameStateException(
                         "{$deckLabel} must have exactly {$expectedPerColor} {$color} {$rarity} card(s) for an even distribution across colors (has {$count})."
                     );

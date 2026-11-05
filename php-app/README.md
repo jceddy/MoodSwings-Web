@@ -9352,8 +9352,13 @@ in custom sets is.
   Imagination every mood (colorless included) is the declared color. Anything keyed by the five colors guards
   the new bucket (Even Color Distribution deck rules can never be met by a deck holding one; league and stats
   sorts put it last; the deck builder's color filter lists it). Structure decks (the generator and the `structure` duel preset) only count rarities, never colors,
-  so they include colorless cards like any other; jceddy's 75/150 decks are built to a per-color quota by design
-  and so never contain one.
+  so they include colorless cards like any other. jceddy's 75/150 decks keep their per-color quota, but a
+  colorless card is a **wildcard** that can stand in for any color's share: the generator
+  (`randomCardIdsWithCopyLimit()`) offers a rarity's colorless cards as candidates for every color's slot,
+  tracking copies deck-wide so a colorless card never exceeds its rarity's copy cap, and
+  `DuelDeckRules::validate()`'s even-color-distribution check counts a colorless card toward the rarity's
+  total (which must still divide by five) while only requiring that no color exceed its share -- the same
+  rule applies to a user-defined duel's even-distribution rarities.
   Unity is the first **`RoundWinEffect`**: `determineRoundWinner()` asks every in-play one after scoring (and
   after the score swaps) and, if any owner qualifies, the winner is chosen among the qualifying owners --
   or their team -- by the usual scores and tiebreak instead of among everyone. It counts only your own

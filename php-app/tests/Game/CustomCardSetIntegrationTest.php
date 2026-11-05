@@ -318,6 +318,76 @@ final class CustomCardSetIntegrationTest extends TestCase
         self::assertContains($customIds[0], $this->dealtCardIds($gameId));
     }
 
+    /** @return array<string, int[]> rarity => ids of the first $n stand-in cards of that rarity, which become colorless */
+    private function makeFirstCardsOfEachRarityColorless(int $n): array
+    {
+        $colorless = [];
+        foreach (['common', 'uncommon', 'rare', 'mythic'] as $rarity) {
+            $ids = array_map(intval(...), $this->pdo->query(
+                "SELECT id FROM cards WHERE art_set_code = 'XEMB' AND id >= " . self::FIRST_TEST_CARD_ID . " AND rarity = '{$rarity}' ORDER BY id LIMIT {$n}"
+            )->fetchAll(PDO::FETCH_COLUMN));
+            $this->pdo->exec('UPDATE cards SET color = \'colorless\' WHERE id IN (' . implode(',', $ids) . ')');
+            $colorless[$rarity] = $ids;
+        }
+
+        return $colorless;
+    }
+
+    private function buildJceddysDeck(string $method): array
+    {
+        $build = new \ReflectionMethod($this->games, $method);
+
+        return $build->invoke($this->games, ['XEMB']);
+    }
+
+    public function testJceddys75CanUseAColorlessCardInAnyColorsSlotAndStillValidates(): void
+    {
+        // Per color: 3 mythics, 4 rares, 6 uncommons, 8 commons; plus five colorless of each rarity (the first five of each).
+        $this->insertCustomSetCards(['mythic' => 20, 'rare' => 25, 'uncommon' => 35, 'common' => 45]);
+        $colorless = $this->makeFirstCardsOfEachRarityColorless(5);
+        $colorlessIds = array_merge(...array_values($colorless));
+        $rows = CardCatalog::load()['rowsById'];
+        $rules = \MoodSwings\Game\DuelDeckRules::forPreset('jceddys_75');
+
+        $sawColorless = false;
+        for ($attempt = 0; $attempt < 12; $attempt++) {
+            $deck = $this->buildJceddysDeck('buildJceddys75DeckCardIds');
+            self::assertCount(75, $deck);
+            $rules->validate($deck, $rows); // exact rarity split, copy caps, colors at most their share
+            $sawColorless = $sawColorless || array_intersect($deck, $colorlessIds) !== [];
+        }
+
+        self::assertTrue($sawColorless, 'a colorless card fills a color slot now and then');
+    }
+
+    public function testJceddys75NeverRepeatsAColorlessCardBeyondTheDeckWideCopyCap(): void
+    {
+        // A colorless card is a candidate in all five colors' slots, so without a deck-wide cap it could repeat
+        // across colors beyond its rarity's copy limit; the limits (1 mythic/rare, 2 uncommon, 3 common) must hold.
+        $this->insertCustomSetCards(['mythic' => 20, 'rare' => 25, 'uncommon' => 35, 'common' => 45]);
+        $this->makeFirstCardsOfEachRarityColorless(5);
+
+        for ($attempt = 0; $attempt < 12; $attempt++) {
+            $deck = $this->buildJceddysDeck('buildJceddys75DeckCardIds');
+            $copies = array_count_values($deck);
+            $rows = CardCatalog::load()['rowsById'];
+            foreach ($copies as $cardId => $count) {
+                $cap = ['mythic' => 1, 'rare' => 1, 'uncommon' => 2, 'common' => 3][$rows[$cardId]['rarity']];
+                self::assertLessThanOrEqual($cap, $count, "{$rows[$cardId]['name']} appears {$count} times");
+            }
+        }
+    }
+
+    public function testJceddys150AlsoAllowsColorlessWildcards(): void
+    {
+        $this->insertCustomSetCards(['mythic' => 20, 'rare' => 25, 'uncommon' => 35, 'common' => 45]);
+        $this->makeFirstCardsOfEachRarityColorless(5);
+
+        $deck = $this->buildJceddysDeck('buildJceddys150DeckCardIds');
+
+        self::assertCount(150, $deck);
+    }
+
     public function testPickingBothSetsDrawsFromBoth(): void
     {
         $customIds = $this->insertFullCustomSet();

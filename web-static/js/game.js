@@ -1228,8 +1228,11 @@
     // same reference DuelDeckRules/GameService::RARITIES already use),
     // rather than plain alphabetical, since neither color nor rarity
     // names sort alphabetically into a meaningful order.
+    // JCEDDYS_75_DECK_COLORS' order with colorless last (an unknown color would otherwise sort first, at -1).
+    const DECK_BUILDER_COLOR_ORDER = ['white', 'blue', 'black', 'red', 'green', 'colorless'];
+
     const DECK_BUILDER_SORT_COMPARATORS = {
-        color: (a, b) => JCEDDYS_75_DECK_COLORS.indexOf(a.color) - JCEDDYS_75_DECK_COLORS.indexOf(b.color),
+        color: (a, b) => DECK_BUILDER_COLOR_ORDER.indexOf(a.color) - DECK_BUILDER_COLOR_ORDER.indexOf(b.color),
         rarity: (a, b) => RARITIES.indexOf(a.rarity) - RARITIES.indexOf(b.rarity),
         name: (a, b) => a.name.localeCompare(b.name),
     };
@@ -2106,7 +2109,7 @@
     const DECK_TYPE_DESCRIPTIONS = {
         structure: 'A 45-card deck matching a new physical box’s printed rarity mix: 23 common, 14 uncommon, 6 rare, and 2 mythic moods.',
         power: 'A fast 15-card deck: 1 random mythic mood plus 14 other random moods.',
-        jceddys_75: 'A 75-card deck: for each color, 1 random mythic, 2 different random rares, 4 random uncommons (up to 2 copies of any one), and 8 random commons (up to 3 copies of any one).',
+        jceddys_75: 'A 75-card deck: for each color, 1 random mythic, 2 different random rares, 4 random uncommons (up to 2 copies of any one), and 8 random commons (up to 3 copies of any one). A colorless card can fill any color\'s slot.',
         custom: 'Upload or paste your own decklist: at least 15 cards, plus 15 more per player beyond the first two.',
         custom_duel: 'Each player uploads/pastes their own decklist, validated against deck-building rules you choose below.',
         quick_draft: '2-4 players each draft their own deck live from a shared card pool (16 cards for 2 or 4 players, 18 for 3), trim it down to at least 12. A 2-player draft plays a best-of-three match, sideboarding freely between games; a 3-4 player draft plays a single game.',
@@ -2420,7 +2423,7 @@
     const DUEL_RULES_PRESET_SUMMARIES = {
         structure: 'Exactly 45 cards: 23 common, 14 uncommon, 6 rare, 2 mythic. No duplicate cards.',
         power: 'At least 15 cards, at most 1 mythic. No duplicate cards.',
-        jceddys_75: 'Exactly 75 cards: 40 common (up to 3 copies of any one), 20 uncommon (up to 2 copies of any one), 10 rare, 5 mythic. No duplicate rare or mythic cards. Every rarity split evenly across all 5 colors.',
+        jceddys_75: 'Exactly 75 cards: 40 common (up to 3 copies of any one), 20 uncommon (up to 2 copies of any one), 10 rare, 5 mythic. No duplicate rare or mythic cards. Every rarity split evenly across all 5 colors (a colorless card can stand in for any color).',
     };
 
     function updateDeckTypeDescription() {

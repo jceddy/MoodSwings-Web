@@ -5084,11 +5084,12 @@ final class GameService
     private function buildJceddys75DeckCardIds(?array $setCodes = null): array
     {
         $cardIds = [];
+        $copiesUsed = [];
         foreach (self::JCEDDYS_75_DECK_COLORS as $color) {
             foreach (self::JCEDDYS_75_DECK_RARITY_SPEC as $rarity => $spec) {
                 $cardIds = [
                     ...$cardIds,
-                    ...$this->randomCardIdsWithCopyLimit($setCodes, $color, $rarity, $spec['count'], $spec['max_copies']),
+                    ...$this->randomCardIdsWithCopyLimit($setCodes, $color, $rarity, $spec['count'], $spec['max_copies'], $copiesUsed),
                 ];
             }
         }
@@ -5112,11 +5113,12 @@ final class GameService
     private function buildJceddys150DeckCardIds(?array $setCodes = null): array
     {
         $cardIds = [];
+        $copiesUsed = [];
         foreach (self::JCEDDYS_75_DECK_COLORS as $color) {
             foreach (self::JCEDDYS_150_DECK_RARITY_SPEC as $rarity => $spec) {
                 $cardIds = [
                     ...$cardIds,
-                    ...$this->randomCardIdsWithCopyLimit($setCodes, $color, $rarity, $spec['count'], $spec['max_copies']),
+                    ...$this->randomCardIdsWithCopyLimit($setCodes, $color, $rarity, $spec['count'], $spec['max_copies'], $copiesUsed),
                 ];
             }
         }
@@ -5135,17 +5137,33 @@ final class GameService
      *
      * @return int[]
      */
-    private function randomCardIdsWithCopyLimit(?array $setCodes, string $color, string $rarity, int $count, int $maxCopies): array
+    private function randomCardIdsWithCopyLimit(?array $setCodes, string $color, string $rarity, int $count, int $maxCopies, array &$copiesUsed = []): array
     {
-        $poolCardIds = $this->poolCardIds($setCodes, rarity: $rarity, color: $color);
-        if (count($poolCardIds) * $maxCopies < $count) {
+        // A colorless card can fill any color's slot, so it is a candidate for every color -- but no card may
+        // appear more than $maxCopies times in the whole deck, so the copies already taken for earlier colors
+        // ($copiesUsed, shared across the whole build) come off what a colorless card has left.
+        $poolCardIds = array_values(array_unique([
+            ...$this->poolCardIds($setCodes, rarity: $rarity, color: $color),
+            ...$this->poolCardIds($setCodes, rarity: $rarity, color: 'colorless'),
+        ]));
+
+        $expandedPool = [];
+        foreach ($poolCardIds as $cardId) {
+            for ($copy = $maxCopies - ($copiesUsed[$cardId] ?? 0); $copy > 0; $copy--) {
+                $expandedPool[] = $cardId;
+            }
+        }
+        if (count($expandedPool) < $count) {
             throw new GameStateException("The selected card set(s) don't have enough {$color} {$rarity} cards to build that pool");
         }
 
-        $expandedPool = array_merge(...array_fill(0, $maxCopies, $poolCardIds));
         shuffle($expandedPool);
+        $picked = array_slice($expandedPool, 0, $count);
+        foreach ($picked as $cardId) {
+            $copiesUsed[$cardId] = ($copiesUsed[$cardId] ?? 0) + 1;
+        }
 
-        return array_slice($expandedPool, 0, $count);
+        return $picked;
     }
 
     // -- Quick Draft (issue #88) -------------------------------------------

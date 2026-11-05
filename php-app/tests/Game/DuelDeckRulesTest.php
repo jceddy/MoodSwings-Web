@@ -113,14 +113,51 @@ final class DuelDeckRulesTest extends TestCase
         $this->addToAssertionCount(1);
     }
 
-    public function testAColorlessCardCanNeverSatisfyAnEvenColorDistribution(): void
+    public function testAColorlessCardStandsInForAnyColorsShareOfAnEvenDistribution(): void
     {
         $catalog = $this->catalog();
         $catalog[1]['color'] = 'colorless'; // one of the ten commons (two per color) is now colorless
         $rules = new DuelDeckRules(7, [], [], ['common']);
 
-        $this->expectException(GameStateException::class);
+        // Cards 2-10 are 1 white (card 6 is the other white) -- the colorless one fills a white slot.
         $rules->validate([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], $catalog);
+        $this->addToAssertionCount(1);
+    }
+
+    public function testColorlessCardsStillCannotLetAColorExceedItsShare(): void
+    {
+        $catalog = $this->catalog();
+        $catalog[1]['color'] = 'colorless';
+        $catalog[2]['color'] = 'white';
+        $catalog[3]['color'] = 'white'; // white now has cards 2, 3 and 6 -- one more than its share of 2
+        $rules = new DuelDeckRules(7, [], [], ['common']);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('must have exactly 2 white common card(s)');
+        $rules->validate(range(1, 10), $catalog);
+    }
+
+    public function testManyColorlessCardsCanFillEveryShareOfAnEvenDistribution(): void
+    {
+        $catalog = $this->catalog();
+        foreach (range(1, 10) as $id) {
+            $catalog[$id]['color'] = 'colorless';
+        }
+        $rules = new DuelDeckRules(7, [], [], ['common']);
+
+        $rules->validate(range(1, 10), $catalog);
+        $this->addToAssertionCount(1);
+    }
+
+    public function testAColorlessCardDoesNotFixAnUnevenTotal(): void
+    {
+        $catalog = $this->catalog();
+        $catalog[1]['color'] = 'colorless';
+        $rules = new DuelDeckRules(7, [], [], ['common']);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("can't be split evenly");
+        $rules->validate([1, 2, 3, 4, 5, 6, 7, 8, 9], $catalog); // 9 commons
     }
 
     public function testAnUnrestrictedRarityHasNoCapAtAll(): void
