@@ -998,6 +998,196 @@ final class CustomSetEffectsTest extends TestCase
         self::assertTrue($effect->winsRoundAfterScoring($state, $this->id('Unity'), 1));
     }
 
+    // ---- extra plays and "each time you play another mood" reactions ----
+
+    public function testFamiliarityOnlyAllowsAnExtraMoodWithTheSameNumberAsOneOfYourMoods(): void
+    {
+        $state = $this->state([1 => ['Familiarity', 'Complacency', 'Creativity', 'Apathy']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Apathy'); // printed 4
+        $this->play($state, 1, 'Familiarity'); // printed 2
+        self::assertSame(1, $state->playsRemaining());
+
+        try {
+            $this->play($state, 1, 'Creativity'); // printed 0: matches nothing
+            self::fail('A non-matching card was playable with the grant');
+        } catch (IllegalPlayException) {
+            self::assertTrue(true);
+        }
+        $this->play($state, 1, 'Complacency'); // printed 4, like Apathy
+        self::assertTrue($state->isInPlay($this->id('Complacency')));
+    }
+
+    public function testImpulseTagsItselfToReturnToHandOnlyOnceItsExtraPlayIsUsed(): void
+    {
+        $unused = $this->state([1 => ['Impulse', 'Apathy']]);
+        $unused->startTurn(1);
+        $this->play($unused, 1, 'Impulse');
+        self::assertNull($unused->effectState($this->id('Impulse'), 'afterScoring'), 'no tag until the extra play is spent');
+
+        $used = $this->state([1 => ['Impulse', 'Apathy']]);
+        $used->startTurn(1);
+        $this->play($used, 1, 'Impulse');
+        $this->play($used, 1, 'Apathy');
+        self::assertSame(['action' => 'return_to_hand', 'condition' => 'always', 'playerId' => 1], $used->effectState($this->id('Impulse'), 'afterScoring'));
+        self::assertNull($used->effectState($this->id('Apathy'), 'afterScoring'), 'the extra mood itself is not tagged');
+    }
+
+    public function testWarinessGivesACardAndGrantsAnExtraPlayWithTwoBlueOrBlackMoods(): void
+    {
+        $state = $this->state([1 => ['Wariness', 'Apathy'], 2 => ['Creativity', 'Hate']]);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Creativity', 'Hate'); // blue, black
+        $this->play($state, 1, 'Wariness', ['give_card_id' => $this->id('Apathy'), 'recipient_player_id' => 2]);
+
+        self::assertContains($this->id('Apathy'), $state->hand(2));
+        self::assertSame(1, $state->playsRemaining());
+    }
+
+    public function testWarinessRefusesToGiveWithFewerThanTwoBlueOrBlackMoods(): void
+    {
+        $state = $this->state([1 => ['Wariness', 'Apathy'], 2 => ['Creativity']]);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Creativity');
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($state, 1, 'Wariness', ['give_card_id' => $this->id('Apathy'), 'recipient_player_id' => 2]);
+    }
+
+    public function testWarinessIsOptional(): void
+    {
+        $state = $this->state([1 => ['Wariness']]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Wariness');
+
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testAdrenalineGrantsAnExtraPlayOnTheFirstRedMoodEachTurnOnly(): void
+    {
+        $state = $this->state([1 => ['Adrenaline', 'Anger', 'Boredom', 'Apathy']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Adrenaline');
+
+        $this->play($state, 1, 'Apathy'); // black: no trigger
+        self::assertSame(0, $state->playsRemaining());
+
+        $state = $this->state([1 => ['Adrenaline', 'Anger', 'Boredom']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Adrenaline');
+        $this->play($state, 1, 'Anger');
+        self::assertSame(1, $state->playsRemaining(), 'the first red mood grants a play');
+        $this->play($state, 1, 'Boredom');
+        self::assertSame(0, $state->playsRemaining(), 'a second red mood the same turn does not');
+    }
+
+    public function testAdrenalineFiresAgainOnceTheTurnResets(): void
+    {
+        $state = $this->state([1 => ['Adrenaline', 'Anger', 'Boredom']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Adrenaline');
+        $this->play($state, 1, 'Anger');
+        $state->resetTurnReactions();
+        $state->startTurn(1);
+        $this->play($state, 1, 'Boredom');
+
+        self::assertSame(1, $state->playsRemaining(), 'a new turn: the first red mood grants a play again');
+    }
+
+    public function testAffinityTriggersOnAMoodWithTheSameNumberAsAnotherOfYours(): void
+    {
+        $state = $this->state([1 => ['Affinity', 'Apathy', 'Complacency', 'Creativity']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Affinity', 'Apathy'); // printed 1 and 4
+
+        $this->play($state, 1, 'Creativity'); // printed 0: no match
+        self::assertSame(0, $state->playsRemaining());
+
+        $state = $this->state([1 => ['Affinity', 'Apathy', 'Complacency']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Affinity', 'Apathy');
+        $this->play($state, 1, 'Complacency'); // printed 4, like Apathy
+        self::assertSame(1, $state->playsRemaining());
+    }
+
+    public function testDominanceDiscardsAnOpposingMoodLowerThanTheRedMoodPlayed(): void
+    {
+        $state = $this->state([1 => ['Dominance', 'Boredom'], 2 => ['Creativity', 'Apathy']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Dominance');
+        $this->seat($state, 2, 'Creativity', 'Apathy'); // 0 and 4
+        $this->play($state, 1, 'Boredom', ['dominance_target_mood_id' => $this->id('Creativity')]); // Boredom is a red 4
+
+        self::assertFalse($state->isInPlay($this->id('Creativity')));
+        self::assertTrue($state->isInPlay($this->id('Apathy')));
+    }
+
+    public function testDominanceRefusesAMoodNotLowerThanTheRedMood(): void
+    {
+        $state = $this->state([1 => ['Dominance', 'Boredom'], 2 => ['Apathy']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Dominance');
+        $this->seat($state, 2, 'Apathy'); // 4, the same as Boredom
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($state, 1, 'Boredom', ['dominance_target_mood_id' => $this->id('Apathy')]);
+    }
+
+    public function testDominanceIgnoresAMoodThatIsNotRed(): void
+    {
+        $state = $this->state([1 => ['Dominance', 'Apathy'], 2 => ['Creativity']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Dominance');
+        $this->seat($state, 2, 'Creativity');
+        $this->play($state, 1, 'Apathy', ['dominance_target_mood_id' => $this->id('Creativity')]);
+
+        self::assertTrue($state->isInPlay($this->id('Creativity')), 'Apathy is black, so Dominance does not react');
+    }
+
+    public function testReflectionLootsOnAnotherPlay(): void
+    {
+        $state = $this->state([1 => ['Reflection', 'Apathy', 'Complacency']], deckNames: ['Creativity']);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Reflection');
+        $this->play($state, 1, 'Apathy', ['reflection_discard_card_id' => $this->id('Complacency')]);
+
+        self::assertSame([$this->id('Complacency')], $state->discardPile());
+        self::assertSame($this->ids('Creativity'), $state->hand(1));
+    }
+
+    public function testReflectionIsOptional(): void
+    {
+        $state = $this->state([1 => ['Reflection', 'Apathy', 'Complacency']], deckNames: ['Creativity']);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Reflection');
+        $this->play($state, 1, 'Apathy');
+
+        self::assertSame([], $state->discardPile());
+    }
+
+    public function testReverieCyclesADiscardCardWhenItIsPlayed(): void
+    {
+        $state = $this->state([1 => ['Reverie']], deckNames: ['Creativity', 'Courage'], discardNames: ['Complacency']);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Reverie', ['discard_card_id' => $this->id('Complacency')]); // its own after-playing half
+
+        self::assertSame([], $state->discardPile());
+        self::assertSame($this->ids('Creativity'), $state->hand(1), 'drew a card');
+        self::assertSame($this->ids('Complacency'), array_slice($state->deck(), -1));
+    }
+
+    public function testReverieReactionCyclesADiscardCardWhenAnotherMoodIsPlayed(): void
+    {
+        $state = $this->state([1 => ['Reverie', 'Apathy']], deckNames: ['Creativity'], discardNames: ['Complacency']);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Reverie');
+        $this->play($state, 1, 'Apathy', ['reverie_discard_card_id' => $this->id('Complacency')]);
+
+        self::assertSame([], $state->discardPile());
+        self::assertSame($this->ids('Complacency'), array_slice($state->deck(), -1), 'on the bottom of the deck');
+        self::assertSame($this->ids('Creativity'), $state->hand(1), 'and a card drawn');
+    }
+
     // ---- Schadenfreude ----
 
     public function testSchadenfreudeIsSixOnceAnOpponentHasDiscardedFromHandThisRound(): void

@@ -189,6 +189,17 @@ final class MoodPlayService
         // happened to own it BY THEN instead of "your hand" as the
         // card's own text means it -- the player who actually played it
         // via this grant.
+        // Impulse tags the mood that GRANTED the play (not the one that used it) -- "if you do, after scoring, put
+        // this mood into your hand" -- once the grant is actually spent, if that mood is still in play.
+        if ($consumedGrant !== null && isset($consumedGrant['onUseSourceEffectState'], $consumedGrant['sourceCardId']) && $state->isInPlay($consumedGrant['sourceCardId'])) {
+            foreach ($consumedGrant['onUseSourceEffectState'] as $key => $value) {
+                if ($key === 'afterScoring' && is_array($value) && !isset($value['playerId'])) {
+                    $value['playerId'] = $playerId;
+                }
+                $state->setEffectState($consumedGrant['sourceCardId'], $key, $value);
+            }
+        }
+
         if ($consumedGrant !== null && isset($consumedGrant['onUseEffectState'])) {
             foreach ($consumedGrant['onUseEffectState'] as $key => $value) {
                 if ($key === 'afterScoring' && is_array($value) && !isset($value['playerId'])) {

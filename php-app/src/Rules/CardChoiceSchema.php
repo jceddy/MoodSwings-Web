@@ -465,6 +465,13 @@ final class CardChoiceSchema
         'entitlement' => [
             ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'other', 'required' => true, 'label' => 'Opponent with cards in hand and a mood in play (they may reveal their hand, or lose a highest value mood)', 'excludes_teammate' => true, 'filter' => ['min_hand_count' => 1, 'min_mood_count' => 1], 'optional_if_no_targets' => true],
         ],
+        'wariness' => [
+            ['key' => 'give_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to give to another player (needs two or more blue and/or black moods; you may then play an additional mood)'],
+            ['key' => 'recipient_player_id', 'type' => 'player', 'scope' => 'other', 'required' => false, 'label' => 'Player to give it to (required if you give a card)'],
+        ],
+        'reverie' => [
+            ['key' => 'discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => 'Discard-pile card to put on the bottom of the deck (then draw a card)'],
+        ],
         'rashness' => [
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => false, 'label' => "An opponent's mood valued 1 or less to put into the discard pile", 'excludes_teammate' => true, 'filter' => ['max_value' => 1]],
         ],
@@ -555,6 +562,28 @@ final class CardChoiceSchema
             'scope' => 'any',
             'required' => false,
             'label' => "Scorn's reaction: mood to suppress until end of round (must share this card's color)",
+        ],
+        // Emotional Baggage: "each time you play another mood, you may ..." -- all optional, offered with the
+        // triggering play only while the reacting mood is in play (GameService::reactionFields()).
+        'dominance' => [
+            'key' => 'dominance_target_mood_id',
+            'type' => 'mood',
+            'scope' => 'other',
+            'required' => false,
+            'excludes_teammate' => true,
+            'label' => "Dominance's reaction (a red mood): one of your opponents' moods with a lower value than the mood you're playing, to put into the discard pile",
+        ],
+        'reflection' => [
+            'key' => 'reflection_discard_card_id',
+            'type' => 'hand_card',
+            'required' => false,
+            'label' => "Reflection's reaction: a card to discard from your hand (then you draw a card)",
+        ],
+        'reverie' => [
+            'key' => 'reverie_discard_card_id',
+            'type' => 'discard_card',
+            'required' => false,
+            'label' => "Reverie's reaction: a discard-pile card to put on the bottom of the deck (then you draw a card)",
         ],
         'duplicity' => [
             'key' => 'duplicity_repeat',

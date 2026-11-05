@@ -2586,6 +2586,17 @@ final class BoardState
         $this->roundHandDiscards = [];
     }
 
+    /**
+     * "The first time each turn ..." reactions (Adrenaline, Affinity) remember on their own mood that they
+     * already fired this turn (the 'reactionUsedThisTurn' effectState key); a turn or round beginning lifts it.
+     */
+    public function resetTurnReactions(): void
+    {
+        foreach (array_keys($this->moodsInPlay) as $cardId) {
+            $this->clearEffectState($cardId, 'reactionUsedThisTurn');
+        }
+    }
+
     public function currentRoundNumber(): ?int
     {
         return $this->currentRoundNumber;
@@ -2962,7 +2973,7 @@ final class BoardState
         $typeRank = match ($type) {
             'specific_card_ids' => 0,
             'base_value_in' => 1,
-            'shares_color_with_your_moods', 'does_not_share_color_with_your_moods' => 2,
+            'shares_color_with_your_moods', 'does_not_share_color_with_your_moods', 'matches_a_number_of_your_moods' => 2,
             default => 3,
         };
 
@@ -3130,6 +3141,7 @@ final class BoardState
 
         return match ($restriction['type']) {
             'shares_color_with_your_moods' => $this->sharesColorWithOwnMoods($cardId, $playerId),
+            'matches_a_number_of_your_moods' => $this->matchesANumberOfOwnMoods($cardId, $playerId),
             'does_not_share_color_with_your_moods' => !$this->sharesColorWithOwnMoods($cardId, $playerId),
             'base_value_in' => in_array($this->catalogRow($cardId)['baseValue'], $restriction['values'], true),
             // Intimidation: the grant only ever covers the one specific
@@ -3137,6 +3149,19 @@ final class BoardState
             'specific_card_ids' => in_array($cardId, $restriction['values'], true),
             default => throw new InvalidArgumentException("Unknown play grant restriction type '{$restriction['type']}'"),
         };
+    }
+
+    /** Familiarity: whether $cardId's printed number (top right corner) is the same as one of $playerId's own moods' printed numbers. */
+    private function matchesANumberOfOwnMoods(int $cardId, int $playerId): bool
+    {
+        $number = $this->catalogRow($this->effectiveCardId($cardId))['baseValue'];
+        foreach ($this->moodsOwnedBy($playerId) as $mood) {
+            if ($this->catalogRow($this->effectiveCardId($mood->cardId))['baseValue'] === $number) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function sharesColorWithOwnMoods(int $cardId, int $playerId): bool
