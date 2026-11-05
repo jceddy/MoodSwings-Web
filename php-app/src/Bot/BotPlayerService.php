@@ -804,6 +804,36 @@ final class BotPlayerService
             }
         }
 
+        // "At the start of each of your turns" moods (TurnStartEffect) whose optional choice is free or
+        // plainly worth taking -- the generic resolver below never fills an optional field. Anything not
+        // listed (Brooding, Martyrdom, Rumination, Wastefulness) is left declined, the conservative default.
+        if ($decisionType === 'turn_start_trigger' && $sourceCardId !== null && $state->isInPlay($sourceCardId)) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($sourceCardId))['effectKey'];
+            if ($effectKey === 'covetousness' && isset($field['candidate_card_ids'])) {
+                // Taking an opponent's mood costs nothing: take the one worth the most.
+                $best = null;
+                foreach ($field['candidate_card_ids'] as $candidateId) {
+                    if ($state->isInPlay($candidateId) && ($best === null || $state->valueOf($candidateId) > $state->valueOf($best))) {
+                        $best = $candidateId;
+                    }
+                }
+
+                return $best === null ? [] : [$field['key'] => $best];
+            }
+            if ($effectKey === 'fomo' && $field['type'] === 'hand_card') {
+                // Keep FOMO (a 7) by discarding the least useful card in hand.
+                $worst = null;
+                foreach ($state->hand($botGamePlayerId) as $handCardId) {
+                    $score = $state->catalogRow($state->effectiveCardId($handCardId))['draftPriorityScore'];
+                    if ($worst === null || $score < $worst['score']) {
+                        $worst = ['id' => $handCardId, 'score' => $score];
+                    }
+                }
+
+                return $worst === null ? [] : [$field['key'] => $worst['id']];
+            }
+        }
+
         $value = $this->resolver->resolve($state, $field, $botGamePlayerId, 0, '');
 
         return $value === null ? [] : [$field['key'] => $value];

@@ -23,6 +23,7 @@ use MoodSwings\Rules\CardChoiceSchema;
 use MoodSwings\Rules\ChaosCardChoiceSchema;
 use MoodSwings\Rules\ChaosEffectRegistry;
 use MoodSwings\Rules\ChaosLoopShortcut;
+use MoodSwings\Rules\Effects\Custom\ResilienceEffect;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\MoodInPlay;
 use MoodSwings\Rules\MoodPlayService;
@@ -30,6 +31,7 @@ use MoodSwings\Rules\PendingDecisionRequest;
 use MoodSwings\Rules\PlayerChoices;
 use MoodSwings\Rules\PlayResult;
 use MoodSwings\Rules\RoundScorer;
+use MoodSwings\Rules\TurnStartEffect;
 use MoodSwings\Stats\CardStatsService;
 use MoodSwings\Tournament\TournamentMatchObserver;
 use PDO;
@@ -401,6 +403,13 @@ final class GameService
      * and determineRoundWinner().
      */
     private const AFTER_SCORING_ORDER_DECISION_TYPE = 'after_scoring_order';
+
+    /**
+     * The decision type every "at the start of each of your turns" trigger asks its questions under
+     * (see TurnStartEffect and runTurnStartTriggers()). Not a scoring decision: answering one never
+     * re-enters scoring, it resumes the remaining turn-start triggers instead.
+     */
+    private const TURN_START_DECISION_TYPE = 'turn_start_trigger';
 
     /**
      * Quick Draft (issue #88, format 'draft' only; multiplayer 2-4 player
@@ -9796,7 +9805,7 @@ final class GameService
         foreach ($stmt->fetchAll() as $row) {
             if ($row['event_type'] === 'pending_decision_resolved') {
                 $details = json_decode((string) $row['details'], true) ?? [];
-                if ($details['scoring_trigger'] ?? false) {
+                if (($details['scoring_trigger'] ?? false) || ($details['turn_start_trigger'] ?? false)) {
                     continue;
                 }
             }
@@ -10642,6 +10651,15 @@ final class GameService
 
                 $scoringDecisions = $this->resolvedScoringDecisionBonuses($state, $roundId);
                 $result = $this->finishScoringAndAdvance($gameId, $round, $turnOrder, $state, $scoringDecisions, $gamePlayerId);
+                $pdo->commit();
+
+                return $result;
+            }
+
+            if ($decisionRow['decision_type'] === self::TURN_START_DECISION_TYPE) {
+                // An "at the start of your turn" trigger (see runTurnStartTriggers()): apply it and carry on
+                // with the rest of the turn's triggers -- no MoodPlayService chain to resume.
+                $result = $this->resumeTurnStartTriggers($gameId, $roundId, $batchRow, $gamePlayerId, $choices);
                 $pdo->commit();
 
                 return $result;
@@ -13385,6 +13403,7 @@ final class GameService
         // first turn, Awe's skip-scoring round creation) always leaves it
         // at its default of false.
         $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer, $afterScoringHooksChangedTheBoard);
+        $this->runTurnStartTriggers($gameId, $newRoundId, $nextFirstPlayer, $state);
 
         return ['round_scored' => true, 'game_completed' => false];
     }
@@ -14951,6 +14970,10 @@ final class GameService
             ];
         }
 
+        foreach ($this->effectiveSourceCardIds($state, $playerId, 'resilience') as $resilienceSourceCardId) {
+            $grants[] = [...ResilienceEffect::RESTRICTION, 'sourceCardId' => $resilienceSourceCardId];
+        }
+
         if ($this->anotherPlayerHasMoreMoods($state, $playerId)) {
             foreach ($this->effectiveSourceCardIds($state, $playerId, 'stubbornness') as $stubbornnessSourceCardId) {
                 $grants[] = ['sourceCardId' => $stubbornnessSourceCardId];
@@ -15217,6 +15240,7 @@ final class GameService
                 // go first -- see advancePuzzleTurn() -- so no notification.)
                 if ($turnPlayerId === null) {
                     $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer);
+                    $this->runTurnStartTriggers($gameId, $newRoundId, $nextFirstPlayer, $state);
                 }
             }
 
@@ -20883,6 +20907,8 @@ final class GameService
                 ? "{$actor} passed automatically (no legal play)"
                 : "{$actor} passed",
             $row['event_type'] === 'pending_decision_created' && ($details['scoring_trigger'] ?? false) => "{$cardName}'s scoring effect triggered, waiting on a response from {$actor}",
+            $row['event_type'] === 'pending_decision_created' && ($details['turn_start_trigger'] ?? false) => "{$cardName} triggered at the start of {$actor}'s turn, waiting on a response",
+            $row['event_type'] === 'turn_start_triggered' => "{$cardName} triggered at the start of {$actor}'s turn",
             $row['event_type'] === 'pending_decision_created' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}, waiting on a response",
             // Disillusionment's own per-player color pick (see
             // respondToDecision()'s own docblock comment) -- logged the
@@ -23178,6 +23204,7 @@ final class GameService
 
         if ($previousPlayerId !== $playerId) {
             $this->notifyItsYourTurn($roundId, $playerId);
+            $this->runTurnStartTriggers($this->gameIdOfRound($roundId), $roundId, $playerId, $state);
         }
 
         return ['exactCount' => $occurrenceCount, 'chaosLoopAutoPass' => $chaosLoopAutoPass];
@@ -23340,6 +23367,136 @@ final class GameService
         if ($userId !== false) {
             $this->notifications->clearQueuedForGame((int) $userId, $gameId);
         }
+    }
+
+    /**
+     * "At the start of each of your turns" (TurnStartEffect): runs every such mood $gamePlayerId owns,
+     * in the order they entered play, as a turn begins. An automatic trigger just applies; one that
+     * needs input writes a pending-decision batch and PAUSES the round (returns true) -- the player
+     * can't act until respondToDecision() has answered it and resumed the rest via
+     * resumeTurnStartTriggers(). The moods still waiting to fire are persisted on the round
+     * (game_rounds.turn_start_pending_card_ids) so a pause survives between requests.
+     *
+     * Called at each place a turn begins -- updateRoundTurnState() whenever the turn changes hands, and
+     * the two spots that open a fresh round (finishScoringAndAdvance(), skipScoringAndAdvance()). A
+     * game's very first turn needs no call: nothing is in play yet. Triggers fire in play order; the
+     * turn's owner doesn't get to choose the order. A mood that arrives mid-resolution (Covetousness
+     * taking one) does NOT fire this turn -- the list is fixed when the turn begins.
+     *
+     * @return bool whether the round is now paused on a turn-start decision
+     */
+    private function runTurnStartTriggers(int $gameId, int $roundId, int $gamePlayerId, BoardState $state, bool $turnBegins = true): bool
+    {
+        $pdo = Connection::get();
+
+        if ($turnBegins) {
+            $pending = [];
+            foreach ($state->moodsOwnedBy($gamePlayerId) as $mood) {
+                if ($this->turnStartEffectFor($state, $mood->cardId) !== null) {
+                    $pending[] = $mood->cardId;
+                }
+            }
+            if ($pending === []) {
+                return false;
+            }
+        } else {
+            $stmt = $pdo->prepare('SELECT turn_start_pending_card_ids FROM game_rounds WHERE id = :round_id');
+            $stmt->execute(['round_id' => $roundId]);
+            $stored = $stmt->fetchColumn();
+            $pending = $stored !== false && $stored !== null ? array_map(intval(...), json_decode((string) $stored, true)) : [];
+        }
+
+        $paused = false;
+        while ($pending !== []) {
+            $cardId = array_shift($pending);
+            // Gone, or no longer this player's, since the turn began (an earlier trigger discarded or took it).
+            if (!$state->isInPlay($cardId) || $state->ownerOf($cardId) !== $gamePlayerId) {
+                continue;
+            }
+            $effect = $this->turnStartEffectFor($state, $cardId);
+            if ($effect === null) {
+                continue;
+            }
+
+            $requests = $effect->turnStartRequests($state, $cardId, $gamePlayerId);
+            if ($requests === []) {
+                continue;
+            }
+            if ($requests === null) {
+                $requests = $effect->applyTurnStart($state, $cardId, $gamePlayerId, []);
+                $this->logEvent($gameId, $roundId, $gamePlayerId, 'turn_start_triggered', $cardId, [], $state);
+                if ($requests === []) {
+                    continue;
+                }
+            } else {
+                $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, ['turn_start_trigger' => true], $state);
+            }
+
+            $this->boardStates->save($gameId, $state);
+            $this->writePendingBatch($gameId, $roundId, $gamePlayerId, new PlayerChoices([]), new PlayerChoices([]), PlayResult::pending($requests, $cardId, 0, new PlayerChoices([]), 0));
+            $paused = true;
+            break;
+        }
+
+        $this->boardStates->save($gameId, $state);
+        $pdo->prepare('UPDATE game_rounds SET turn_start_pending_card_ids = :pending WHERE id = :round_id')
+            ->execute(['pending' => $pending === [] ? null : json_encode($pending), 'round_id' => $roundId]);
+
+        return $paused;
+    }
+
+    private function gameIdOfRound(int $roundId): int
+    {
+        $stmt = Connection::get()->prepare('SELECT game_id FROM game_rounds WHERE id = :round_id');
+        $stmt->execute(['round_id' => $roundId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /** The TurnStartEffect behind $cardId's effective (Creativity-copied, if any) effect key, or null. */
+    private function turnStartEffectFor(BoardState $state, int $cardId): ?TurnStartEffect
+    {
+        $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+        $registry = $this->plays->registry();
+
+        if (!$registry->has($effectKey)) {
+            return null;
+        }
+        $effect = $registry->for($effectKey);
+
+        return $effect instanceof TurnStartEffect ? $effect : null;
+    }
+
+    /**
+     * respondToDecision()'s branch for a fully-answered turn-start batch: applies the trigger, then
+     * either pauses again (the effect has a follow-up decision, or the next trigger needs input) or
+     * lets the turn proceed. Runs inside respondToDecisionLocked()'s own transaction.
+     *
+     * @param array<string, mixed> $choices the last responder's raw answer, for the log
+     * @return array{round_scored: bool, game_completed: bool, pending_decision?: bool}
+     */
+    private function resumeTurnStartTriggers(int $gameId, int $roundId, array $batchRow, int $responderGamePlayerId, array $choices): array
+    {
+        $cardId = (int) $batchRow['played_card_id'];
+        $turnPlayerId = (int) $batchRow['initiating_game_player_id'];
+        $state = $this->boardStates->load($gameId);
+
+        $effect = $this->turnStartEffectFor($state, $cardId);
+        $followUps = $effect === null ? [] : $effect->applyTurnStart($state, $cardId, $turnPlayerId, $this->collectAnswers((int) $batchRow['id']));
+
+        $this->logEvent($gameId, $roundId, $responderGamePlayerId, 'pending_decision_resolved', $cardId, [...$choices, 'turn_start_trigger' => true, 'initiating_game_player_id' => $turnPlayerId], $state);
+
+        if ($followUps !== []) {
+            $this->boardStates->save($gameId, $state);
+            $this->writePendingBatch($gameId, $roundId, $turnPlayerId, new PlayerChoices([]), new PlayerChoices([]), PlayResult::pending($followUps, $cardId, 0, new PlayerChoices([]), 0));
+            $this->logEvent($gameId, $roundId, $turnPlayerId, 'pending_decision_created', $cardId, ['turn_start_trigger' => true], $state);
+
+            return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+        }
+
+        $paused = $this->runTurnStartTriggers($gameId, $roundId, $turnPlayerId, $state, turnBegins: false);
+
+        return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => $paused];
     }
 
     private function assertNoPendingDecision(int $roundId): void

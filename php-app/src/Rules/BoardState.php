@@ -1156,6 +1156,26 @@ final class BoardState
         $this->recordMove($cardId, 'hand', 'discard', fromPlayerId: $playerId);
     }
 
+    /**
+     * "Put the top card of the deck into the discard pile" (Wastefulness, Carelessness): moves the top
+     * card of $playerId's deck -- the shared deck, or that player's own in a 'duel' game -- straight to
+     * the discard pile without it ever being drawn. Returns the card, or null when that deck is empty.
+     */
+    public function moveDeckTopToDiscard(int $playerId): ?int
+    {
+        $key = $this->deckKeyFor($playerId);
+        $cardId = isset($this->decks[$key]) ? array_shift($this->decks[$key]) : null;
+        if ($cardId === null) {
+            return null;
+        }
+        $this->discard[] = $cardId;
+        $this->discardOwners[$cardId] = $playerId;
+        $this->discardedThisRound = true;
+        $this->recordMove($cardId, 'deck', 'discard', fromPlayerId: $playerId);
+
+        return $cardId;
+    }
+
     public function moveHandToBottomOfDeck(int $playerId, int $cardId): void
     {
         $this->removeFromHand($playerId, $cardId);

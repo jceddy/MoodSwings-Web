@@ -442,6 +442,9 @@ final class CardChoiceSchema
             ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard from your hand'],
             ['key' => 'discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => 'Discard-pile card to put into your hand (needs two or more blue and/or red moods)'],
         ],
+        'fomo' => [
+            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => true, 'label' => 'Card to discard (cost to play this card)'],
+        ],
         'rashness' => [
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => false, 'label' => "An opponent's mood valued 1 or less to put into the discard pile", 'excludes_teammate' => true, 'filter' => ['max_value' => 1]],
         ],

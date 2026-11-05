@@ -9243,9 +9243,32 @@ in custom sets is.
   `LargesseEffect`, `BulkMoodMoveEffect` (Belligerence, Chagrin), `AtonementEffect`, `IntuitionEffect`,
   `ImpartialityEffect`, `DiscardToDeckBottomEffect` (Reminiscence, Remorse), `LevityEffect`,
   `PairedColorTargetEffect` (Distrust, Disdain, Indignation, Vigilance), `WarmthEffect`, `YearningEffect`.
-  The later batches need new hooks (start-of-turn triggers, static value modifiers on other moods,
+  Batch 2 (migration 0498, 12 cards) adds the **turn-start triggers** and Resilience (below). The later
+  batches still need new hooks (static value modifiers on other moods -- Vitality is waiting on that --
   round-win counts, extra scoring, a colorless color) and aren't implemented yet; until a card is in the
   `cards` table it simply doesn't exist in the game.
+- **"At the start of each of your turns" (`TurnStartEffect`).** Brooding, Covetousness, Fairness, FOMO,
+  Jealousy, Martyrdom, Maturity, Neglect, Rumination, Volatility and Wastefulness implement
+  `Rules/TurnStartEffect` (`turnStartRequests()` -- null = automatic, `[]` = nothing to decide, otherwise
+  the `PendingDecisionRequest`s to ask; `applyTurnStart()` -- applies the answers and may return follow-up
+  decisions, e.g. Brooding's discard once the card is in hand). `GameService::runTurnStartTriggers()` runs
+  a player's triggers in play order whenever a turn begins -- from `updateRoundTurnState()` whenever the
+  turn changes hands, and from the two places that open a new round (`finishScoringAndAdvance()`,
+  `skipScoringAndAdvance()`); a game's very first turn has nothing in play to trigger. A trigger that needs
+  input pauses the round like any other pending decision (decision type `turn_start_trigger`, so nobody can
+  play or pass until it's answered) and `respondToDecision()` resumes the rest through
+  `resumeTurnStartTriggers()`; the moods still waiting to fire are kept in
+  `game_rounds.turn_start_pending_card_ids`. The list is fixed when the turn begins (a mood that arrives
+  mid-resolution doesn't fire until next turn), and the turn's owner doesn't choose the order. Decisions can
+  belong to other players (Jealousy/Neglect ask the affected opponent; Martyrdom asks each opponent for a
+  discard). Mood choices carry a server-computed `candidate_card_ids`, so the client and bots only offer
+  legal moods. Fairness only asks when several moods tie for highest; Maturity uses the permanent value delta
+  (`adjustChaosValueDelta()`); Wastefulness uses the new `BoardState::moveDeckTopToDiscard()` (a
+  `deck`-to-`discard` card move, which `ReplayStateBuilder` replays). Bots decline the optional triggers,
+  except that they take Covetousness's best target and keep FOMO by discarding their weakest card.
+- **Resilience** is Hope-shaped: the same-turn play is granted by `MoodPlayService` and every later turn's by
+  `computeFreshGrants()`, both from `ResilienceEffect::RESTRICTION` (a 0-3 mood from the discard pile, lost
+  if Resilience leaves play first).
 
 ### Default selections mode (issue #274)
 

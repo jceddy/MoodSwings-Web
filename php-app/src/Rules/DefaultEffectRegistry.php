@@ -134,6 +134,18 @@ use MoodSwings\Rules\Effects\Custom\RashnessEffect;
 use MoodSwings\Rules\Effects\Custom\SolidarityEffect;
 use MoodSwings\Rules\Effects\Custom\WarmthEffect;
 use MoodSwings\Rules\Effects\Custom\YearningEffect;
+use MoodSwings\Rules\Effects\Custom\BroodingEffect;
+use MoodSwings\Rules\Effects\Custom\CovetousnessEffect;
+use MoodSwings\Rules\Effects\Custom\FairnessEffect;
+use MoodSwings\Rules\Effects\Custom\FomoEffect;
+use MoodSwings\Rules\Effects\Custom\JealousyEffect;
+use MoodSwings\Rules\Effects\Custom\MartyrdomEffect;
+use MoodSwings\Rules\Effects\Custom\MaturityEffect;
+use MoodSwings\Rules\Effects\Custom\NeglectEffect;
+use MoodSwings\Rules\Effects\Custom\ResilienceEffect;
+use MoodSwings\Rules\Effects\Custom\RuminationEffect;
+use MoodSwings\Rules\Effects\Custom\VolatilityEffect;
+use MoodSwings\Rules\Effects\Custom\WastefulnessEffect;
 
 /**
  * Wires up every MoodEffect for the full 133-card pool -- every card with
@@ -439,6 +451,20 @@ final class DefaultEffectRegistry
         $registry->register('vigilance', new PairedColorTargetEffect('black', 'red', 'suppress'));
         $registry->register('warmth', new WarmthEffect());
         $registry->register('yearning', new YearningEffect());
+
+        // Turn-start triggers (TurnStartEffect) and Resilience.
+        $registry->register('brooding', new BroodingEffect());
+        $registry->register('covetousness', new CovetousnessEffect());
+        $registry->register('fairness', new FairnessEffect());
+        $registry->register('fomo', new FomoEffect());
+        $registry->register('jealousy', new JealousyEffect());
+        $registry->register('martyrdom', new MartyrdomEffect());
+        $registry->register('maturity', new MaturityEffect());
+        $registry->register('neglect', new NeglectEffect());
+        $registry->register('resilience', new ResilienceEffect());
+        $registry->register('rumination', new RuminationEffect());
+        $registry->register('volatility', new VolatilityEffect());
+        $registry->register('wastefulness', new WastefulnessEffect());
 
         return $registry;
     }

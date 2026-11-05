@@ -12588,6 +12588,9 @@
             enthusiasm_extra_score: "Enthusiasm's bonus",
             passion_score_opponent_mood: "Passion's bonus",
             after_scoring_order: 'Order your after-scoring effects',
+            // An "at the start of each of your turns" mood (Brooding, Jealousy, ...) -- asked of
+            // whoever its effect needs, which isn't always the turn's owner.
+            turn_start_trigger: (pendingDecision.played_card_name || 'A mood') + ' triggered at the start of a turn',
         };
         document.getElementById('pending-decision-title').textContent =
             titlesByDecisionType[pendingDecision.decision_type] || 'Respond to ' + (pendingDecision.played_card_name || 'a mood');
