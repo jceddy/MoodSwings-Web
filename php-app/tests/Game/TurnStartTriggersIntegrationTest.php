@@ -701,6 +701,331 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertTrue($this->state()->isInPlay($inspiration));
     }
 
+    public function testRapportLoopsOnceWithoutAlliedMoods(): void
+    {
+        $rapport = $this->card('Rapport', 'hand', $this->p1);
+        $cycled = $this->card('Complacency', 'hand', $this->p1);
+        $drawn = $this->card('Apathy', 'deck', $this->p1, 0);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $rapport, ['hand_card_id' => $cycled]);
+
+        self::assertNull($this->pendingDecisionTarget(), 'no second loot without two white and/or black moods');
+        $state = $this->state();
+        self::assertSame([$drawn], $state->hand($this->p1));
+        self::assertSame([$cycled], $state->deck($this->p1));
+        self::assertTrue($state->isInPlay($rapport));
+    }
+
+    public function testRapportOffersASecondLootWithTwoWhiteOrBlackMoods(): void
+    {
+        $this->card('Complacency', 'in_play', $this->p2); // white
+        $this->card('Grief', 'in_play', $this->p2); // black
+        $rapport = $this->card('Rapport', 'hand', $this->p1);
+        $first = $this->card('Courage', 'hand', $this->p1);
+        $drawnFirst = $this->card('Apathy', 'deck', $this->p1, 0);
+        $drawnSecond = $this->card('Creativity', 'deck', $this->p1, 1);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $rapport, ['hand_card_id' => $first]);
+
+        self::assertSame($this->p1, $this->pendingDecisionTarget(), 'the second loot is asked of the player');
+        // The card drawn by the first loot is in hand now, so it can be the one put back.
+        $this->games->respondToDecision($this->gameId, $this->p1, ['second_hand_card_id' => $drawnFirst]);
+
+        $state = $this->state();
+        self::assertSame([$drawnSecond], $state->hand($this->p1));
+        self::assertSame([$first, $drawnFirst], $state->deck($this->p1));
+    }
+
+    public function testRapportSecondLootCanBeDeclined(): void
+    {
+        $this->card('Complacency', 'in_play', $this->p2);
+        $this->card('Grief', 'in_play', $this->p2);
+        $rapport = $this->card('Rapport', 'hand', $this->p1);
+        $first = $this->card('Courage', 'hand', $this->p1);
+        $drawn = $this->card('Apathy', 'deck', $this->p1, 0);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $rapport, ['hand_card_id' => $first]);
+        $this->games->respondToDecision($this->gameId, $this->p1, []);
+
+        self::assertNull($this->pendingDecisionTarget());
+        self::assertSame([$drawn], $this->state()->hand($this->p1));
+    }
+
+    public function testPremonitionDrawsThenPutsThatManyBackAndGrantsAnExtraPlay(): void
+    {
+        $premonition = $this->card('Premonition', 'hand', $this->p1);
+        $kept = $this->card('Courage', 'hand', $this->p1);
+        $first = $this->card('Apathy', 'deck', $this->p1, 0);
+        $second = $this->card('Creativity', 'deck', $this->p1, 1);
+        $this->card('Boredom', 'deck', $this->p1, 2);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $premonition, ['draw_count' => 2]);
+
+        self::assertSame($this->p1, $this->pendingDecisionTarget());
+        $pending = $this->games->getState($this->gameId, $this->userIdOf($this->p1))['round']['pending_decision'];
+        self::assertSame(2, $pending['field']['count']['min']);
+        self::assertSame(2, $pending['field']['count']['max']);
+
+        // Keep the fresh Creativity, put back the old Courage and the other new card.
+        $this->games->respondToDecision($this->gameId, $this->p1, ['bottom_card_ids' => [$kept, $first]]);
+
+        $state = $this->state();
+        self::assertSame([$second], $state->hand($this->p1));
+        self::assertSame($kept, $state->deck($this->p1)[1]);
+        self::assertSame($first, $state->deck($this->p1)[2]);
+        $this->games->playMood($this->gameId, $this->p1, $second, []); // the granted extra play
+        self::assertTrue($this->state()->isInPlay($second));
+    }
+
+    public function testPremonitionRejectsTheWrongNumberOfCards(): void
+    {
+        $premonition = $this->card('Premonition', 'hand', $this->p1);
+        $kept = $this->card('Courage', 'hand', $this->p1);
+        $this->card('Apathy', 'deck', $this->p1, 0);
+        $this->card('Creativity', 'deck', $this->p1, 1);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $premonition, ['draw_count' => 2]);
+
+        $this->expectException(\MoodSwings\Rules\Exceptions\InvalidChoiceException::class);
+        $this->games->respondToDecision($this->gameId, $this->p1, ['bottom_card_ids' => [$kept]]);
+    }
+
+    public function testPremonitionDrawingNothingStillGrantsAnExtraPlay(): void
+    {
+        $premonition = $this->card('Premonition', 'hand', $this->p1);
+        $other = $this->card('Courage', 'hand', $this->p1);
+        $this->card('Apathy', 'deck', $this->p1, 0);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $premonition, ['draw_count' => 0]);
+
+        self::assertNull($this->pendingDecisionTarget());
+        $this->games->playMood($this->gameId, $this->p1, $other, []);
+        self::assertTrue($this->state()->isInPlay($other));
+    }
+
+    public function testPremonitionWithAShortDeckPutsBackOnlyWhatItDrew(): void
+    {
+        $premonition = $this->card('Premonition', 'hand', $this->p1);
+        $held = $this->card('Courage', 'hand', $this->p1);
+        $drawn = $this->card('Apathy', 'deck', $this->p1, 0);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $premonition, ['draw_count' => 3]);
+
+        $pending = $this->games->getState($this->gameId, $this->userIdOf($this->p1))['round']['pending_decision'];
+        self::assertSame(1, $pending['field']['count']['max'], 'only one card could be drawn, so one goes back');
+        $this->games->respondToDecision($this->gameId, $this->p1, ['bottom_card_ids' => [$drawn]]);
+
+        self::assertSame([$held], $this->state()->hand($this->p1));
+        self::assertSame([$drawn], $this->state()->deck($this->p1));
+    }
+
+    /** @param array<int, array<string, int>> $answers pending player id => the answer to give when that player is asked */
+    private function answerEveryPendingDecision(array $answers): int
+    {
+        $asked = 0;
+        while (($target = $this->pendingDecisionTarget()) !== null) {
+            $this->games->respondToDecision($this->gameId, $target, $answers[$target] ?? self::fail("Player {$target} was asked unexpectedly"));
+            $asked++;
+        }
+
+        return $asked;
+    }
+
+    public function testVengeanceMakesTheChosenOpponentDiscardOneOfTheirHighestMoods(): void
+    {
+        $vengeance = $this->card('Vengeance', 'hand', $this->p1);
+        $apathy = $this->card('Apathy', 'in_play', $this->p2); // 4
+        $boredom = $this->card('Boredom', 'in_play', $this->p2); // 4
+        $courage = $this->card('Courage', 'in_play', $this->p2); // 1
+
+        $this->games->playMood($this->gameId, $this->p1, $vengeance, ['target_player_id' => $this->p2]);
+        self::assertSame($this->p2, $this->pendingDecisionTarget(), 'the opponent chooses, not the player who played it');
+        $pending = $this->games->getState($this->gameId, $this->userIdOf($this->p2))['round']['pending_decision'];
+        self::assertEqualsCanonicalizing([$apathy, $boredom], $pending['field']['candidate_card_ids'], 'only the tied highest moods are offered');
+
+        $this->games->respondToDecision($this->gameId, $this->p2, ['discarded_mood_id' => $boredom]);
+
+        $state = $this->state();
+        self::assertFalse($state->isInPlay($boredom));
+        self::assertTrue($state->isInPlay($apathy));
+        self::assertTrue($state->isInPlay($courage));
+    }
+
+    public function testVengeanceRejectsALowerValueMood(): void
+    {
+        $vengeance = $this->card('Vengeance', 'hand', $this->p1);
+        $this->card('Apathy', 'in_play', $this->p2);
+        $courage = $this->card('Courage', 'in_play', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $vengeance, ['target_player_id' => $this->p2]);
+
+        $this->expectException(\MoodSwings\Rules\Exceptions\InvalidChoiceException::class);
+        $this->games->respondToDecision($this->gameId, $this->p2, ['discarded_mood_id' => $courage]);
+    }
+
+    public function testHeartlessnessOnlyAsksPlayersWithThreeOrMoreMoods(): void
+    {
+        $heartlessness = $this->card('Heartlessness', 'hand', $this->p1);
+        $this->card('Apathy', 'in_play', $this->p1); // with Heartlessness itself that is only two
+        $this->card('Courage', 'in_play', $this->p2);
+        $joy = $this->card('Joy', 'in_play', $this->p2);
+        $this->card('Boredom', 'in_play', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $heartlessness, []);
+
+        self::assertSame(1, $this->answerEveryPendingDecision([$this->p2 => ['discarded_mood_id_' . $this->p2 => $joy]]));
+        self::assertFalse($this->state()->isInPlay($joy));
+    }
+
+    public function testHeartlessnessAlsoMakesTheActingPlayerLoseAMoodAndCountsItself(): void
+    {
+        $heartlessness = $this->card('Heartlessness', 'hand', $this->p1);
+        $apathy = $this->card('Apathy', 'in_play', $this->p1);
+        $this->card('Courage', 'in_play', $this->p1); // Apathy, Courage and Heartlessness: three
+        $this->card('Joy', 'in_play', $this->p2);
+        $this->card('Boredom', 'in_play', $this->p2); // only two: not asked
+
+        $this->games->playMood($this->gameId, $this->p1, $heartlessness, []);
+
+        self::assertSame(1, $this->answerEveryPendingDecision([$this->p1 => ['discarded_mood_id_' . $this->p1 => $heartlessness]]));
+        $state = $this->state();
+        self::assertFalse($state->isInPlay($heartlessness), 'it may be the mood that goes');
+        self::assertTrue($state->isInPlay($apathy));
+    }
+
+    public function testRighteousnessHitsTheLeaderOnlyAndTheyChooseAmongTheirHighestMoods(): void
+    {
+        $righteousness = $this->card('Righteousness', 'hand', $this->p1); // 3
+        $this->card('Courage', 'in_play', $this->p1); // total 4
+        $apathy = $this->card('Apathy', 'in_play', $this->p2); // 4
+        $this->card('Joy', 'in_play', $this->p2); // total 7: the leader
+
+        $this->games->playMood($this->gameId, $this->p1, $righteousness, []);
+
+        self::assertSame(1, $this->answerEveryPendingDecision([$this->p2 => ['discarded_mood_id_' . $this->p2 => $apathy]]));
+        self::assertFalse($this->state()->isInPlay($apathy));
+    }
+
+    public function testRighteousnessHitsEveryTiedLeader(): void
+    {
+        $righteousness = $this->card('Righteousness', 'hand', $this->p1); // 3
+        $mine = $this->card('Apathy', 'in_play', $this->p1); // total 7
+        $theirs = $this->card('Boredom', 'in_play', $this->p2); // 4
+        $this->card('Joy', 'in_play', $this->p2); // total 7: tied
+
+        $this->games->playMood($this->gameId, $this->p1, $righteousness, []);
+
+        self::assertSame(2, $this->answerEveryPendingDecision([
+            $this->p1 => ['discarded_mood_id_' . $this->p1 => $mine],
+            $this->p2 => ['discarded_mood_id_' . $this->p2 => $theirs],
+        ]));
+        $state = $this->state();
+        self::assertFalse($state->isInPlay($mine));
+        self::assertFalse($state->isInPlay($theirs));
+    }
+
+    public function testDejectionMakesEveryPlayerWithACardDiscardOne(): void
+    {
+        $dejection = $this->card('Dejection', 'hand', $this->p1);
+        $mine = $this->card('Courage', 'hand', $this->p1);
+        $keptMine = $this->card('Joy', 'hand', $this->p1);
+        $theirs = $this->card('Apathy', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $dejection, []);
+
+        self::assertSame(2, $this->answerEveryPendingDecision([
+            $this->p1 => ['discarded_card_id_' . $this->p1 => $mine],
+            $this->p2 => ['discarded_card_id_' . $this->p2 => $theirs],
+        ]));
+        $state = $this->state();
+        self::assertSame([$keptMine], $state->hand($this->p1));
+        self::assertSame([], $state->hand($this->p2));
+        self::assertEqualsCanonicalizing([$mine, $theirs], $state->discardPile());
+    }
+
+    public function testDejectionSkipsAnEmptyHandedPlayer(): void
+    {
+        $dejection = $this->card('Dejection', 'hand', $this->p1);
+        $mine = $this->card('Courage', 'hand', $this->p1);
+
+        $this->games->playMood($this->gameId, $this->p1, $dejection, []);
+
+        self::assertSame(1, $this->answerEveryPendingDecision([$this->p1 => ['discarded_card_id_' . $this->p1 => $mine]]));
+        self::assertTrue($this->state()->isInPlay($dejection));
+    }
+
+    public function testUrgencyCountsTheRoundsPlaysAcrossRequestsIncludingEarlierOnes(): void
+    {
+        $this->pdo->exec("UPDATE game_rounds SET plays_remaining = 3, pending_play_grants = '[null,null,null]' WHERE game_id = {$this->gameId}");
+        $urgency = $this->card('Urgency', 'hand', $this->p1);
+        $courage = $this->card('Courage', 'hand', $this->p1);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $courage, []);
+        self::assertSame(1, $this->state()->moodsPlayedThisRound($this->p1), 'the play record is saved with the round');
+        $this->games->playMood($this->gameId, $this->p1, $urgency, []);
+
+        self::assertSame(6, $this->state()->valueOf($urgency), 'the Courage played before Urgency counts');
+    }
+
+    public function testUrgencysCountStartsOverInTheNextRound(): void
+    {
+        $this->pdo->exec("UPDATE game_rounds SET plays_remaining = 3, pending_play_grants = '[null,null,null]' WHERE game_id = {$this->gameId}");
+        $urgency = $this->card('Urgency', 'hand', $this->p1);
+        $this->card('Courage', 'hand', $this->p1);
+        $this->card('Boredom', 'hand', $this->p2);
+        $this->games->playMood($this->gameId, $this->p1, $this->catalogCardInHand('Courage', $this->p1), []);
+        $this->games->playMood($this->gameId, $this->p1, $urgency, []);
+        self::assertSame(6, $this->state()->valueOf($urgency));
+
+        $this->games->pass($this->gameId, $this->p1);
+        $this->games->pass($this->gameId, $this->p2); // the round ends
+
+        self::assertSame([], $this->state()->roundMoodPlays(), 'nobody has played a mood yet in the new round');
+        self::assertSame(3, $this->state()->valueOf($urgency));
+    }
+
+    private function catalogCardInHand(string $name, int $owner): int
+    {
+        return (int) $this->pdo->query("SELECT gc.id FROM game_cards gc JOIN cards c ON c.id = gc.card_id WHERE gc.game_id = {$this->gameId} AND gc.zone = 'hand' AND gc.owner_game_player_id = {$owner} AND c.name = " . $this->pdo->quote($name) . ' LIMIT 1')->fetchColumn();
+    }
+
+    public function testGrievanceMakesAnOpponentWithMoreCardsPutOneOnTheBottomOfTheDeck(): void
+    {
+        $grievance = $this->card('Grievance', 'hand', $this->p1);
+        $this->card('Courage', 'hand', $this->p1); // one card left after playing Grievance
+        $this->card('Apathy', 'hand', $this->p2);
+        $sent = $this->card('Boredom', 'hand', $this->p2);
+        $this->card('Joy', 'hand', $this->p2); // three cards against one
+
+        $this->games->playMood($this->gameId, $this->p1, $grievance, []);
+        self::assertSame($this->p2, $this->pendingDecisionTarget());
+        $this->games->respondToDecision($this->gameId, $this->p2, ['bottom_card_id_' . $this->p2 => $sent]);
+
+        $state = $this->state();
+        self::assertCount(2, $state->hand($this->p2));
+        self::assertSame($sent, $state->deck($this->p2)[count($state->deck($this->p2)) - 1]);
+    }
+
+    public function testGrievanceDoesNothingWhenTheOpponentHasNoMoreCards(): void
+    {
+        $grievance = $this->card('Grievance', 'hand', $this->p1);
+        $this->card('Courage', 'hand', $this->p1);
+        $this->card('Apathy', 'hand', $this->p2); // one against one: equal is not more
+
+        $this->games->playMood($this->gameId, $this->p1, $grievance, []);
+
+        self::assertNull($this->pendingDecisionTarget());
+        self::assertCount(1, $this->state()->hand($this->p2));
+    }
+
     public function testSchadenfreudeBecomesSixWhenAnOpponentDiscardsAndStaysThatWayForTheRound(): void
     {
         $schadenfreude = $this->card('Schadenfreude', 'in_play', $this->p1);

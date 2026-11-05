@@ -13275,6 +13275,7 @@ final class GameService
         $state->clearEndOfRoundSuppressions();
         $state->clearEndOfRoundValueBonuses();
         $state->resetRoundHandDiscards();
+        $state->resetRoundMoodPlays();
         $state->resetTurnReactions();
 
         // A single source of truth for "who won" -- see its own docblock
@@ -15259,6 +15260,7 @@ final class GameService
         $state->clearEndOfRoundSuppressions();
         $state->clearEndOfRoundValueBonuses();
         $state->resetRoundHandDiscards();
+        $state->resetRoundMoodPlays();
         $state->resetTurnReactions();
 
         $format = $this->fetchGame($gameId)['format'];

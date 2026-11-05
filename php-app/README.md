@@ -9386,6 +9386,59 @@ in custom sets is.
     adds the field to a hand card's choices only while the reactor is in play (Dominance only for a red card), and a
     choice whose card is already gone (a second Reflection sharing it) is skipped. Reverie's own after-playing half
     is Reminiscence's. Bots never take these optional reactions.
+- **Draw and cycle (batch 11).** Rapport, Longing, Premonition and Resignation are all Zeal/Yearning-shaped, so
+  no new engine hook -- but two of them draw and then need a pick from the *new* hand, which the play-time choice
+  can't express, so they use the existing follow-up decision machinery (`RequiresOpponentDecision` with the acting
+  player as the target; `pendingDecisionsFor()` stays pure and returns `[]`, and `resolveDecisions()` is called with
+  no answers to do the draw before asking):
+  - **Rapport**: the first loot (bottom a hand card, draw) is the optional `hand_card_id`; with two or more
+    white and/or black moods in play (any player's) a follow-up `second_hand_card_id` decision offers the second,
+    chosen from the hand as it stands then, so the card the first loot drew can go straight back. Skipping it is a
+    normal answer.
+  - **Longing**: optional `hand_card_id` to discard plus up to two `discard_card_ids` from the pile; the discarded
+    card is already in the pile, so it can be taken straight back.
+  - **Premonition**: `draw_count` (0-3, required) is the play-time choice. The draws happen, the extra play is
+    granted, and a `bottom_card_ids` decision (exactly as many cards as were *actually* drawn -- a short deck draws
+    fewer -- from the whole hand) puts them back. The drawn count rides in the mood's `premonitionDrawn` effect
+    state until the answer arrives. Bots draw the maximum (`BotChoiceResolver::MAX_VALUE_FIELD_EFFECT_KEYS`) and put
+    back their lowest cards.
+  - **Resignation**: a to-play cost (`hand_card_id`, put on the bottom of the deck), like FOMO's discard -- it can't
+    pay for itself, so it needs another card in hand. Bots never volunteer for Rapport's or Longing's optional
+    choices.
+- **Removal (batch 12).** Six cards that put moods (or hand cards) into the discard pile, all on existing
+  machinery -- Fury's "each qualifying player answers their own decision, nothing moves until every answer is in"
+  shape for the multi-player ones:
+  - **Vengeance**: the acting player picks an opponent (`target_player_id`, with a mood in play, never a teammate);
+    that player is asked which of *their own* highest value moods goes (Fury's wording -- ties are theirs to break).
+    `CustomEffectSupport::highestValueMoodIds()` is shared with Righteousness.
+  - **Heartlessness** and **Righteousness** are one class, `QualifyingPlayersDiscardMoodEffect`, with two
+    conditions: every player with three or more moods (the played Heartlessness counts, and can be the one that
+    goes) picks any of their moods; every player tied for the highest *total* value (Anger's "total value", so the
+    played Righteousness's own value counts toward its owner's total) picks one of their highest value moods.
+    Qualifying players are worked out when the card resolves and again when the answers arrive.
+  - **Vindictiveness**: optional `discard_mood_id` (one of your *other* moods) and, only with it, an optional
+    `target_mood_id` (anyone's mood, Vindictiveness itself included) with a strictly lower value than the
+    sacrifice; both values are read before either mood leaves play.
+  - **Malevolence**: Spite with a chosen parity -- required `parity`, then up to two moods (one per player) whose
+    *printed* number has that parity (0 is even), exactly like Orderliness/Discernment.
+  - **Dejection**: every player with a card in hand, the acting player included, is asked for a discard and the
+    discards happen together; an empty-handed player isn't asked. Bots answer all of these with their usual
+    "lowest value" pick, and never use Vindictiveness's or Malevolence's optional targets.
+- **Grievance, Urgency and Restlessness (batch 13, the last tier-1 cards).**
+  - **Grievance**: each *opponent* (teammates excluded) holding more cards than you -- compared as the board
+    stands when it resolves, the played Grievance already out of your hand -- is asked for a hand card to put on
+    the bottom of the deck, and all of them move together once every answer is in. Equal is not more.
+  - **Urgency** counts every mood its owner has played this round -- Urgency's own play, plays from *before* it
+    entered, and moods that have since left play -- from a per-round play record: `BoardState::recordMoodPlayed()`
+    (called by `MoodPlayService` when a mood is played, not when an effect merely puts one into play),
+    `moodsPlayedThisRound()`, persisted as `game_rounds.round_mood_plays` (migration 0511) and emptied at the same
+    round-end sites as the hand-discard record. Two or more -- so it needs an extra play or an earlier play this
+    round -- shows 6; "you" is whoever owns it now. (Like the other round records, replays don't load it.)
+  - **Restlessness** is another `CustomConditionalValueEffect` condition (`DISTINCT_OWN_VALUES_AT_LEAST`, 3):
+    different current values among its owner's moods *that don't have this ability*, opposing moods never counted.
+    Restlessness itself, any other copy and a Creativity copying it are all ignored (the card's own loop fix: counting
+    itself made a board with a 1 and a 6 flip between 3 and 6 forever), so it needs three different values among the
+    owner's *other* moods -- a board of at least four.
 
 
 ### Default selections mode (issue #274)

@@ -69,6 +69,15 @@ final class BotChoiceResolverTest extends TestCase
         self::assertSame(0, $this->resolver->resolve($state, $field, 1, 0, 'rebellion'));
     }
 
+    public function testPremonitionsDrawCountPicksTheMaximumInsteadOfTheMinimum(): void
+    {
+        $state = $this->boardState();
+        $field = ['key' => 'draw_count', 'type' => 'value', 'required' => true, 'min' => 0, 'max' => 3];
+
+        self::assertSame(3, $this->resolver->resolve($state, $field, 1, 0, 'premonition'));
+        self::assertSame(0, $this->resolver->resolve($state, $field, 1, 0, 'other_card'));
+    }
+
     public function testMoodFieldOwnScopePicksTheLowestValueCandidate(): void
     {
         $state = $this->boardState(hands: [1 => [8, 55]]); // Dignity (value 3), Apathy (value 4)
