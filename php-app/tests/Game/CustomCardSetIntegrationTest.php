@@ -378,6 +378,46 @@ final class CustomCardSetIntegrationTest extends TestCase
         }
     }
 
+    public function testJceddys75PicksAColorlessCardAsOftenAsAnyOtherCard(): void
+    {
+        // 8 colored commons per color and 5 colorless ones (the first five): one card, colored or not, should
+        // turn up about equally often across many decks, rather than a colorless card appearing ~5x as often
+        // for being a candidate in every color's draw.
+        $this->insertCustomSetCards(['mythic' => 20, 'rare' => 25, 'uncommon' => 35, 'common' => 45]);
+        $colorless = $this->makeFirstCardsOfEachRarityColorless(5)['common'];
+        $coloredCommons = array_map(intval(...), $this->pdo->query(
+            "SELECT id FROM cards WHERE art_set_code = 'XEMB' AND rarity = 'common' AND color != 'colorless' AND id >= " . self::FIRST_TEST_CARD_ID
+        )->fetchAll(PDO::FETCH_COLUMN));
+
+        $appearances = [];
+        $decks = 250;
+        for ($i = 0; $i < $decks; $i++) {
+            foreach ($this->buildJceddysDeck('buildJceddys75DeckCardIds') as $cardId) {
+                $appearances[$cardId] = ($appearances[$cardId] ?? 0) + 1;
+            }
+        }
+
+        $average = static fn (array $ids): float => array_sum(array_map(static fn (int $id): int => $appearances[$id] ?? 0, $ids)) / count($ids) / $decks;
+        $ratio = $average($colorless) / $average($coloredCommons);
+        self::assertGreaterThan(0.75, $ratio, 'a colorless common is picked about as often as a colored one (was ' . round($ratio, 2) . 'x)');
+        self::assertLessThan(1.35, $ratio);
+    }
+
+    public function testAPowerDeckCanUseAColorlessMythicAsItsMythic(): void
+    {
+        // The set's only mythic is colorless: a Power deck must pick it as its one Mythic.
+        $this->insertCustomSetCards(['mythic' => 1, 'rare' => 5, 'uncommon' => 5, 'common' => 10]);
+        $mythic = (int) $this->pdo->query("SELECT id FROM cards WHERE art_set_code = 'XEMB' AND rarity = 'mythic' AND id >= " . self::FIRST_TEST_CARD_ID)->fetchColumn();
+        $this->pdo->exec("UPDATE cards SET color = 'colorless' WHERE id = {$mythic}");
+        $alice = $this->insertUser('alice', true);
+        $bob = $this->insertUser('bob', true);
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], deckType: 'power', cardSetCodes: ['XEMB']);
+        $this->games->startGame($gameId);
+
+        self::assertContains($mythic, $this->dealtCardIds($gameId));
+    }
+
     public function testJceddys150AlsoAllowsColorlessWildcards(): void
     {
         $this->insertCustomSetCards(['mythic' => 20, 'rare' => 25, 'uncommon' => 35, 'common' => 45]);

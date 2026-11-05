@@ -5127,38 +5127,47 @@ final class GameService
     }
 
     /**
-     * $count random card ids matching $color/$rarity, allowing up to
-     * $maxCopies repeats of any single id -- built by expanding that
-     * color/rarity's own card pool into $maxCopies copies of each id,
-     * shuffling, then taking the first $count, so no id can ever appear
-     * more than $maxCopies times while every id still has an equal chance
-     * of being picked. $maxCopies=1 (jceddys_75's Mythic/Rare slots)
-     * degenerates to an ordinary without-replacement draw.
+     * $count random card ids matching $color/$rarity, allowing up to $maxCopies repeats of any single id --
+     * each id is put in the draw $maxCopies times (less whatever the deck already holds, see below), the
+     * copies are drawn without replacement, so no id can ever appear more than $maxCopies times while every id
+     * still has an equal chance of being picked. $maxCopies=1 (jceddys_75's Mythic/Rare slots) degenerates to
+     * an ordinary without-replacement draw.
      *
+     * A colorless card can fill ANY color's slot, so it is also a candidate here -- but it is a candidate in
+     * all five colors' draws, so each of its copies counts for only 1/5 (one over the number of colors): across the
+     * deck's five slots a colorless card is then as likely to be picked as a card of a single color.
+     * $copiesUsed is shared by the whole deck build: no card may appear more than $maxCopies times in the
+     * deck, so copies taken for earlier colors come off what a colorless card has left. The weighted draw is
+     * the Efraimidis-Spirakis one (sort by log(u) / weight), which is a plain uniform shuffle when every
+     * weight is 1.
+     *
+     * @param array<int, int> $copiesUsed card id => copies already taken by this deck build
      * @return int[]
      */
     private function randomCardIdsWithCopyLimit(?array $setCodes, string $color, string $rarity, int $count, int $maxCopies, array &$copiesUsed = []): array
     {
-        // A colorless card can fill any color's slot, so it is a candidate for every color -- but no card may
-        // appear more than $maxCopies times in the whole deck, so the copies already taken for earlier colors
-        // ($copiesUsed, shared across the whole build) come off what a colorless card has left.
-        $poolCardIds = array_values(array_unique([
-            ...$this->poolCardIds($setCodes, rarity: $rarity, color: $color),
-            ...$this->poolCardIds($setCodes, rarity: $rarity, color: 'colorless'),
-        ]));
+        $candidates = [];
+        foreach ($this->poolCardIds($setCodes, rarity: $rarity, color: $color) as $cardId) {
+            $candidates[$cardId] = 1.0;
+        }
+        foreach ($this->poolCardIds($setCodes, rarity: $rarity, color: 'colorless') as $cardId) {
+            $candidates[$cardId] = 1.0 / count(self::JCEDDYS_75_DECK_COLORS);
+        }
 
-        $expandedPool = [];
-        foreach ($poolCardIds as $cardId) {
+        $draw = [];
+        foreach ($candidates as $cardId => $weight) {
             for ($copy = $maxCopies - ($copiesUsed[$cardId] ?? 0); $copy > 0; $copy--) {
-                $expandedPool[] = $cardId;
+                // lcg_value() is in (0, 1), so log() is finite and negative; dividing by the weight makes a
+                // lighter copy's key more negative, i.e. less likely to be among the highest.
+                $draw[] = ['id' => $cardId, 'key' => log(lcg_value()) / $weight];
             }
         }
-        if (count($expandedPool) < $count) {
+        if (count($draw) < $count) {
             throw new GameStateException("The selected card set(s) don't have enough {$color} {$rarity} cards to build that pool");
         }
 
-        shuffle($expandedPool);
-        $picked = array_slice($expandedPool, 0, $count);
+        usort($draw, static fn (array $a, array $b): int => $b['key'] <=> $a['key']);
+        $picked = array_map(static fn (array $entry): int => $entry['id'], array_slice($draw, 0, $count));
         foreach ($picked as $cardId) {
             $copiesUsed[$cardId] = ($copiesUsed[$cardId] ?? 0) + 1;
         }
