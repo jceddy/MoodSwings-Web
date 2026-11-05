@@ -875,6 +875,129 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame($this->ids('Complacency'), $state->hand(1));
     }
 
+    // ---- colorless ----
+
+    public function testAColorlessGateCardNeedsAMoodOfItsColorOfYourOwn(): void
+    {
+        $state = $this->state([1 => ['Reverence', 'Anger'], 2 => ['Creativity']]);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Creativity');
+        $this->seat($state, 1, 'Anger'); // red -- Reverence wants white
+
+        $this->expectException(IllegalPlayException::class);
+        $this->play($state, 1, 'Reverence');
+    }
+
+    public function testAnOpponentsMoodOfTheColorDoesNotOpenTheGate(): void
+    {
+        $state = $this->state([1 => ['Detachment'], 2 => ['Creativity']]); // Creativity is blue
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Creativity');
+
+        $this->expectException(IllegalPlayException::class);
+        $this->play($state, 1, 'Detachment');
+    }
+
+    public function testAColorlessGateCardPlaysOnceYouHaveAMoodOfItsColor(): void
+    {
+        $state = $this->state([1 => ['Resentment', 'Hate']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Hate'); // black
+        $this->play($state, 1, 'Resentment');
+
+        self::assertTrue($state->isInPlay($this->id('Resentment')));
+        self::assertSame('colorless', $state->colorOf($this->id('Resentment')));
+        self::assertSame(5, $state->valueOf($this->id('Resentment')));
+    }
+
+    public function testASuppressedMoodStillOpensTheGate(): void
+    {
+        $state = $this->state([1 => ['Impatience', 'Anger']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Anger');
+        $state->suppress($this->id('Anger'), 'end_of_round');
+        $this->play($state, 1, 'Impatience');
+
+        self::assertTrue($state->isInPlay($this->id('Impatience')));
+    }
+
+    public function testEveryGateCardChecksItsOwnColor(): void
+    {
+        foreach (['Reverence' => 'Charity', 'Detachment' => 'Creativity', 'Resentment' => 'Apathy', 'Impatience' => 'Anger', 'Contentment' => 'Laziness'] as $gate => $enabler) {
+            $state = $this->state([1 => [$gate, $enabler]]);
+            $state->startTurn(1);
+            $this->seat($state, 1, $enabler);
+            $this->play($state, 1, $gate);
+            self::assertTrue($state->isInPlay($this->id($gate)), "{$gate} should play with a {$enabler}");
+        }
+    }
+
+    public function testEmptinessCountsTheColorsAmongAllMoodsButNotColorless(): void
+    {
+        $state = $this->state([1 => ['Emptiness', 'Creativity', 'Apathy', 'Reverence'], 2 => ['Anger', 'Hate']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Emptiness', 'Creativity', 'Apathy', 'Reverence'); // blue, black (two colorless)
+        self::assertSame(1 + 2, $state->valueOf($this->id('Emptiness')));
+
+        $this->seat($state, 2, 'Anger', 'Hate'); // red, black (black already counted)
+        self::assertSame(1 + 3, $state->valueOf($this->id('Emptiness')), "an opponent's colors count");
+    }
+
+    public function testNeutralityGainsTwoPerOtherColorlessMood(): void
+    {
+        $state = $this->state([1 => ['Neutrality', 'Reverence', 'Apathy'], 2 => ['Detachment']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Neutrality', 'Reverence', 'Apathy');
+        $this->seat($state, 2, 'Detachment');
+
+        self::assertSame(1 + 2 * 2, $state->valueOf($this->id('Neutrality')), "Reverence and the opponent's Detachment; not itself, not Apathy");
+    }
+
+    public function testUnderImaginationEveryMoodHasAColorSoColorlessCardsStopCounting(): void
+    {
+        $state = $this->state([1 => ['Neutrality', 'Reverence', 'Imagination']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Neutrality', 'Reverence', 'Imagination');
+        self::assertSame(1 + 2, $state->valueOf($this->id('Neutrality')));
+        $state->setEffectState($this->id('Imagination'), 'color', 'green');
+
+        self::assertSame('green', $state->colorOf($this->id('Reverence')));
+        self::assertSame(1, $state->valueOf($this->id('Neutrality')));
+    }
+
+    public function testColorlessMoodsShareNoColorSoKinshipIgnoresThem(): void
+    {
+        $state = $this->state([1 => ['Kinship', 'Reverence', 'Detachment']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Kinship', 'Reverence', 'Detachment');
+
+        self::assertSame(5, $state->valueOf($this->id('Reverence')), 'two colorless moods do not share a color');
+    }
+
+    public function testAColorlessMoodNeverCountsAsAColorForCelebration(): void
+    {
+        $state = $this->state([1 => ['Celebration', 'Reverence'], 2 => ['Anger']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Celebration', 'Reverence'); // green + colorless = 1 color
+        $this->seat($state, 2, 'Anger'); // 1 color: not fewer than ours
+
+        self::assertSame(3, $state->valueOf($this->id('Celebration')), 'a colorless mood is not a second color');
+    }
+
+    public function testUnityIsTrueWithFiveMoodsOfOneColorAndNeverCountsItself(): void
+    {
+        $effect = DefaultEffectRegistry::build()->for('unity');
+        $reds = array_values(array_filter(array_keys(self::$idByName), fn (string $n) => self::$catalog[self::$idByName[$n]]['color'] === 'red'));
+        $five = array_slice($reds, 0, 5);
+        $state = $this->state([1 => array_merge(['Unity'], $five)]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Unity', ...array_slice($five, 0, 4));
+        self::assertFalse($effect->winsRoundAfterScoring($state, $this->id('Unity'), 1), 'four red moods, and Unity is colorless');
+
+        $this->seat($state, 1, $five[4]);
+        self::assertTrue($effect->winsRoundAfterScoring($state, $this->id('Unity'), 1));
+    }
+
     // ---- Schadenfreude ----
 
     public function testSchadenfreudeBecomesSixWhenAnotherPlayerDiscardedFromHandThisTurn(): void

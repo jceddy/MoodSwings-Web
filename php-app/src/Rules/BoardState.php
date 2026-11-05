@@ -3141,6 +3141,10 @@ final class BoardState
     private function sharesColorWithOwnMoods(int $cardId, int $playerId): bool
     {
         $color = $this->colorOf($cardId);
+        // A colorless card has no color to share (and no color-sharing grant covers one).
+        if ($color === 'colorless') {
+            return false;
+        }
         foreach ($this->moodsOwnedBy($playerId) as $mood) {
             if ($this->colorOf($mood->cardId) === $color) {
                 return true;

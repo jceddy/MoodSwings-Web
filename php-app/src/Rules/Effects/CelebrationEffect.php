@@ -29,7 +29,9 @@ final class CelebrationEffect extends AbstractMoodEffect
     {
         $colors = [];
         foreach ($state->moodsOwnedBy($playerId) as $mood) {
-            $colors[$state->colorOf($mood->cardId)] = true;
+            if ($state->colorOf($mood->cardId) !== 'colorless') {
+                $colors[$state->colorOf($mood->cardId)] = true;
+            }
         }
 
         return count($colors);

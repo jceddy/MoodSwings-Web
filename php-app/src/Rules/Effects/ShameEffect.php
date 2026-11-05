@@ -32,7 +32,7 @@ final class ShameEffect extends AbstractMoodEffect
 
         $targets = [];
         foreach ($state->moodsInPlay() as $mood) {
-            if ($mood->cardId !== $cardId && $state->colorOf($mood->cardId) === $color) {
+            if ($color !== 'colorless' && $mood->cardId !== $cardId && $state->colorOf($mood->cardId) === $color) {
                 $targets[] = $mood->cardId;
             }
         }

@@ -22,7 +22,9 @@ final class HonestyEffect extends AbstractMoodEffect
     {
         $moodColors = [];
         foreach ($state->moodsOwnedBy($playerId) as $mood) {
-            $moodColors[$state->colorOf($mood->cardId)] = true;
+            if ($state->colorOf($mood->cardId) !== 'colorless') {
+                $moodColors[$state->colorOf($mood->cardId)] = true;
+            }
         }
 
         $everyCardShares = true;

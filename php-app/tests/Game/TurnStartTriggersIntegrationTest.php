@@ -732,6 +732,42 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertSame(3, $this->state()->valueOf($schadenfreude), "player 1 discarded nothing this turn; player 2's own earlier discard was last turn");
     }
 
+    public function testUnityWinsTheRoundForItsOwnerRegardlessOfScore(): void
+    {
+        $this->card('Unity', 'in_play', $this->p1);
+        foreach (['Anger', 'Rashness', 'Belligerence', 'Intuition', 'Exuberance'] as $red) {
+            $this->card($red, 'in_play', $this->p1); // five red moods, worth very little
+        }
+        foreach (['Bashfulness', 'Neurosis', 'Apathy'] as $big) {
+            $this->card($big, 'in_play', $this->p2); // 15 points against p1's 9
+        }
+        $this->card('Creativity', 'hand', $this->p1);
+        $this->card('Creativity', 'hand', $this->p2);
+
+        $this->games->pass($this->gameId, $this->p1);
+        $this->games->pass($this->gameId, $this->p2); // round 1 scores
+
+        self::assertSame(1, $this->state()->roundWinsOf($this->p1), 'Unity made player 1 the winner');
+        self::assertSame(0, $this->state()->roundWinsOf($this->p2));
+    }
+
+    public function testWithoutUnityTheHigherScoreWins(): void
+    {
+        foreach (['Anger', 'Rashness', 'Belligerence', 'Intuition', 'Exuberance'] as $red) {
+            $this->card($red, 'in_play', $this->p1);
+        }
+        foreach (['Bashfulness', 'Neurosis', 'Apathy'] as $big) {
+            $this->card($big, 'in_play', $this->p2);
+        }
+        $this->card('Creativity', 'hand', $this->p1);
+        $this->card('Creativity', 'hand', $this->p2);
+
+        $this->games->pass($this->gameId, $this->p1);
+        $this->games->pass($this->gameId, $this->p2);
+
+        self::assertSame(1, $this->state()->roundWinsOf($this->p2));
+    }
+
     public function testReplayFollowsAWastefulnessCardFromTheDeckToTheDiscardPile(): void
     {
         $this->card('Wastefulness', 'in_play', $this->p2);

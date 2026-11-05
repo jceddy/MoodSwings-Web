@@ -39,7 +39,7 @@ final class ScornEffect extends AbstractMoodEffect
         if (!$state->isInPlay($targetCardId)) {
             throw new InvalidChoiceException("Card {$targetCardId} is not in play");
         }
-        if ($state->colorOf($targetCardId) !== $state->colorOf($playedCardId)) {
+        if ($state->colorOf($playedCardId) === 'colorless' || $state->colorOf($targetCardId) !== $state->colorOf($playedCardId)) {
             throw new InvalidChoiceException("Scorn can only suppress a mood sharing a color with card {$playedCardId}");
         }
 

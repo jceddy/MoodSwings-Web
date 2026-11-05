@@ -99,6 +99,16 @@ final class DuelDeckRulesTest extends TestCase
         $rules->validate([19, 19, 1, 2, 3, 4, 5], $this->catalog());
     }
 
+    public function testAColorlessCardCanNeverSatisfyAnEvenColorDistribution(): void
+    {
+        $catalog = $this->catalog();
+        $catalog[1]['color'] = 'colorless'; // one of the ten commons (two per color) is now colorless
+        $rules = new DuelDeckRules(7, [], [], ['common']);
+
+        $this->expectException(GameStateException::class);
+        $rules->validate([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], $catalog);
+    }
+
     public function testAnUnrestrictedRarityHasNoCapAtAll(): void
     {
         $rules = new DuelDeckRules(7, ['mythic' => 1]);

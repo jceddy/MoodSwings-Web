@@ -131,7 +131,9 @@ final class DuelDeckRules
             $countsByColor = array_fill_keys(self::COLORS, 0);
             foreach ($cardIds as $cardId) {
                 if ($catalogById[$cardId]['rarity'] === $rarity) {
-                    $countsByColor[$catalogById[$cardId]['color']]++;
+                    // A colorless card gets its own bucket, which can never hit the per-color quota: a deck
+                    // that must be split evenly across the five colors can't hold one.
+                    $countsByColor[$catalogById[$cardId]['color']] = ($countsByColor[$catalogById[$cardId]['color']] ?? 0) + 1;
                 }
             }
 

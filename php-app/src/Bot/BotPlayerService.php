@@ -1187,12 +1187,16 @@ final class BotPlayerService
     {
         $counts = array_fill_keys(self::DISILLUSIONMENT_COLORS, 0);
         foreach ($state->moodsInPlay() as $mood) {
-            $counts[$state->colorOf($mood->cardId)]++;
+            if (isset($counts[$state->colorOf($mood->cardId)])) {
+                $counts[$state->colorOf($mood->cardId)]++;
+            }
         }
         foreach ($state->discardPile() as $discardedCardId) {
-            $counts[$state->colorOf($discardedCardId)]++;
+            if (isset($counts[$state->colorOf($discardedCardId)])) {
+                $counts[$state->colorOf($discardedCardId)]++;
+            }
         }
-        if (!$state->isInPlay($cardId)) {
+        if (!$state->isInPlay($cardId) && isset($counts[$state->colorOf($cardId)])) {
             $counts[$state->colorOf($cardId)]++;
         }
 

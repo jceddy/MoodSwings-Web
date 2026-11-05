@@ -22,6 +22,9 @@ final class KinshipEffect extends AbstractMoodEffect implements ValueModifyingEf
         }
 
         $color = $state->colorOf($targetCardId);
+        if ($color === 'colorless') {
+            return 0; // no color to share
+        }
         foreach ($state->moodsOwnedBy($ownerId) as $mood) {
             if ($mood->cardId !== $targetCardId && $state->colorOf($mood->cardId) === $color) {
                 return 1;

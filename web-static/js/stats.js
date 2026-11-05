@@ -38,7 +38,7 @@
     // Color sorts by the game's own WUBRG-style wheel order rather than
     // alphabetically (black, blue, green, red, white would carry no
     // meaning to a player).
-    const COLOR_RANK = { white: 0, blue: 1, black: 2, red: 3, green: 4 };
+    const COLOR_RANK = { white: 0, blue: 1, black: 2, red: 3, green: 4, colorless: 5 };
 
     // The four draft-format columns hold {average, count} rather than a
     // plain number (see CardStatsService::averagePick()) -- sorting by

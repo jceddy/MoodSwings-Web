@@ -87,7 +87,7 @@ final class RoundScorer
 
     private function sumOwnMoodsSharingColor(BoardState $state, int $ownerId, ?string $color): int
     {
-        if ($color === null) {
+        if ($color === null || $color === 'colorless') {
             return 0;
         }
 

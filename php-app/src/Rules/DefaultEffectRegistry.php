@@ -167,6 +167,10 @@ use MoodSwings\Rules\Effects\Custom\EntitlementEffect;
 use MoodSwings\Rules\Effects\Custom\InspirationEffect;
 use MoodSwings\Rules\Effects\Custom\RevealHandPickEffect;
 use MoodSwings\Rules\Effects\Custom\SchadenfreudeEffect;
+use MoodSwings\Rules\Effects\Custom\ColorGatedPlayEffect;
+use MoodSwings\Rules\Effects\Custom\EmptinessEffect;
+use MoodSwings\Rules\Effects\Custom\NeutralityEffect;
+use MoodSwings\Rules\Effects\Custom\UnityEffect;
 
 /**
  * Wires up every MoodEffect for the full 133-card pool -- every card with
@@ -519,6 +523,16 @@ final class DefaultEffectRegistry
         $registry->register('entitlement', new EntitlementEffect());
         $registry->register('inspiration', new InspirationEffect());
         $registry->register('schadenfreude', new SchadenfreudeEffect());
+
+        // Colorless cards.
+        $registry->register('reverence', new ColorGatedPlayEffect('white'));
+        $registry->register('detachment', new ColorGatedPlayEffect('blue'));
+        $registry->register('resentment', new ColorGatedPlayEffect('black'));
+        $registry->register('impatience', new ColorGatedPlayEffect('red'));
+        $registry->register('contentment', new ColorGatedPlayEffect('green'));
+        $registry->register('emptiness', new EmptinessEffect());
+        $registry->register('neutrality', new NeutralityEffect());
+        $registry->register('unity', new UnityEffect());
 
         return $registry;
     }

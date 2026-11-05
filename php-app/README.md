@@ -9247,8 +9247,9 @@ in custom sets is.
   0499, 7 cards) adds the **static value modifiers**, batch 4 (migration 0500, 3 cards) the **round-win
   count** cards and batch 5 (migration 0502, 2 cards) the **extra scoring** cards and batch 6 (migration 0503,
   6 cards) Carelessness and the **hand-reveal** cards, and batch 7 (migration 0504, 4 cards) the
-  **reveal-then-pick** cards and batch 8 (migration 0505) Schadenfreude (all below). The later batches still
-  need new hooks (a colorless color, Grudge's chosen-opponent play grant) and aren't implemented yet; until a card is in the
+  **reveal-then-pick** cards, batch 8 (migration 0505) Schadenfreude and batch 9 (migration 0506) the
+  **colorless** cards (all below). The later batches still need new hooks (Grudge's chosen-opponent play
+  grant); Levelheadedness, Forgetfulness and Compassion are tier 2 and aren't implemented yet; until a card is in the
   `cards` table it simply doesn't exist in the game.
 - **"At the start of each of your turns" (`TurnStartEffect`).** Brooding, Covetousness, Fairness, FOMO,
   Jealousy, Martyrdom, Maturity, Neglect, Rumination, Volatility and Wastefulness implement
@@ -9340,6 +9341,23 @@ in custom sets is.
   turn by Martyrdom or earlier in the turn by another play). It is persisted on the live round
   (`game_rounds.turn_hand_discarders`, migration 0505) and reset whenever a turn begins
   (`updateRoundTurnState()` on a change of player) or a round ends. The value is locked to 6 once, like Dignity.
+- **Colorless (batch 9).** `cards.color` gained a sixth value, `colorless` (migration 0506): Reverence,
+  Detachment, Resentment, Impatience and Contentment (5-point moods that can only be played if *you* have a
+  white/blue/black/red/green mood -- `ColorGatedPlayEffect::canPayToPlayCost()`, so the playability checks and
+  bots honor it; a suppressed mood still counts), Emptiness (+1 per color among all moods), Neutrality (+2
+  per other colorless mood) and Unity. `BoardState::colorOf()` is unchanged -- a colorless mood simply has
+  `'colorless'` -- but a colorless mood has **no color to share or count**, so the places that compare or tally
+  colors skip it: color-sharing play grants (`sharesColorWithOwnMoods`), Scorn, Denial/Rejection, Shame,
+  Curiosity, Celebration, Fickleness/Bitterness, Bliss, Kinship, Honesty and the Chaos color counters; under
+  Imagination every mood (colorless included) is the declared color. Anything keyed by the five colors guards
+  the new bucket (Even Color Distribution deck rules can never be met by a deck holding one; league and stats
+  sorts put it last; the deck builder's color filter lists it). Pool generation is by color-and-rarity quota
+  for Structure/jceddy's decks, so colorless cards only appear where a pool is drawn without a color
+  (random drafts, One of Each, Power's non-mythic cards, sealed pools).
+  Unity is the first **`RoundWinEffect`**: `determineRoundWinner()` asks every in-play one after scoring (and
+  after the score swaps) and, if any owner qualifies, the winner is chosen among the qualifying owners --
+  or their team -- by the usual scores and tiebreak instead of among everyone. It counts only your own
+  moods that share a color (colorless ones, itself included, share none).
 
 
 ### Default selections mode (issue #274)

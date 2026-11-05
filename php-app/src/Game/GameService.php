@@ -32,6 +32,7 @@ use MoodSwings\Rules\PendingDecisionRequest;
 use MoodSwings\Rules\PlayerChoices;
 use MoodSwings\Rules\PlayResult;
 use MoodSwings\Rules\RoundScorer;
+use MoodSwings\Rules\RoundWinEffect;
 use MoodSwings\Rules\TurnStartEffect;
 use MoodSwings\Stats\CardStatsService;
 use MoodSwings\Tournament\TournamentMatchObserver;
@@ -13251,7 +13252,7 @@ final class GameService
         // A single source of truth for "who won" -- see its own docblock
         // for why the order-decision check below and whichever tail
         // actually runs must never derive this two different ways.
-        $outcome = $this->determineRoundWinner($gameId, $round, $scores, $turnOrder);
+        $outcome = $this->determineRoundWinner($gameId, $round, $scores, $turnOrder, $state);
 
         // Skip the pause entirely once this round is about to finish the
         // game -- see roundWouldCompleteGame()'s own docblock. Every
@@ -14852,8 +14853,10 @@ final class GameService
      * @param int[] $turnOrder
      * @return array{winnerGamePlayerId:int, winnerTeamId:?int, winningGamePlayerIds:int[]}
      */
-    private function determineRoundWinner(int $gameId, array $round, array $scores, array $turnOrder): array
+    private function determineRoundWinner(int $gameId, array $round, array $scores, array $turnOrder, BoardState $state): array
     {
+        $outright = $this->playersWhoWinTheRoundOutright($state);
+
         if (self::isTeamFormat($this->fetchGame($gameId)['format'])) {
             $teamIdByPlayer = $this->teamIdByGamePlayer($gameId);
             $teamScores = [0 => 0, 1 => 0];
@@ -14865,6 +14868,13 @@ final class GameService
             $otherTeamId = $firstTeamId === 0 ? 1 : 0;
             // Ties go to whoever played first this round.
             $winningTeamId = $teamScores[$firstTeamId] >= $teamScores[$otherTeamId] ? $firstTeamId : $otherTeamId;
+            if ($outright !== []) {
+                // Unity: a team with a qualifying member wins outright; both qualifying -> the usual comparison.
+                $qualifyingTeams = array_values(array_unique(array_map(static fn (int $id): int => $teamIdByPlayer[$id], $outright)));
+                if (count($qualifyingTeams) === 1) {
+                    $winningTeamId = $qualifyingTeams[0];
+                }
+            }
 
             $winningTeamMembers = $this->teamMembers($gameId, $winningTeamId); // seat_order ASC
             // A representative teammate for winner_game_player_id's own FK/
@@ -14894,9 +14904,40 @@ final class GameService
         // the round's winner even if it happens to be the highest in
         // $scores.
         $activeScores = array_intersect_key($scores, array_flip($turnOrder));
+        if ($outright !== []) {
+            // Unity: only the players whose moods win the round outright can win it; the usual scores and
+            // turn-order tiebreak pick among them when more than one qualifies.
+            $qualifying = array_intersect_key($activeScores, array_flip($outright));
+            if ($qualifying !== []) {
+                $activeScores = $qualifying;
+                $turnOrder = array_values(array_filter($turnOrder, static fn (int $id): bool => isset($qualifying[$id])));
+            }
+        }
         $winnerId = $this->scorer->winner($activeScores, $turnOrder);
 
         return ['winnerGamePlayerId' => $winnerId, 'winnerTeamId' => null, 'winningGamePlayerIds' => [$winnerId]];
+    }
+
+    /**
+     * The owners of an in-play RoundWinEffect (Unity) whose condition holds right now, as game_player_ids.
+     *
+     * @return int[]
+     */
+    private function playersWhoWinTheRoundOutright(BoardState $state): array
+    {
+        $owners = [];
+        foreach ($state->moodsInPlay() as $mood) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            if (!$this->plays->registry()->has($effectKey)) {
+                continue;
+            }
+            $effect = $this->plays->registry()->for($effectKey);
+            if ($effect instanceof RoundWinEffect && $effect->winsRoundAfterScoring($state, $mood->cardId, $mood->ownerId)) {
+                $owners[$mood->ownerId] = $mood->ownerId;
+            }
+        }
+
+        return array_values($owners);
     }
 
     private function bottomOfDeckAndDraw(BoardState $state, int $cardId, int $ownerId): void
@@ -23859,6 +23900,7 @@ final class GameService
                     : null,
                 'enthusiasm' => "{$ownerName} may score their highest-valued mood an extra time ({$cardName}).",
                 'passion' => "{$ownerName} may score one of an opponent's moods as their own ({$cardName}).",
+                'unity' => "{$ownerName}'s {$cardName} wins the round for them after scoring if they have five or more moods that share a color.",
                 'fulfillment' => "{$ownerName}'s {$cardName} scores each of their moods with a value of 6 or more an extra time.",
                 'gratitude' => "{$ownerName}'s {$cardName} scores each of their moods with a value of 2 or less an extra time.",
                 default => null,
