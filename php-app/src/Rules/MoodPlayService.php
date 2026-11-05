@@ -90,6 +90,9 @@ final class MoodPlayService
         if (in_array($state->colorOf($cardId), $state->bannedColorsThisRound(), true)) {
             throw new IllegalPlayException("Card {$cardId}'s color is banned from being played this round");
         }
+        if ($state->isNameBannedThisTurn($cardId)) {
+            throw new IllegalPlayException("Card {$cardId} can't be played this turn: a card with its name was returned to its player's hand");
+        }
         if (!$state->hasUsablePlayGrant($cardId, $playerId)) {
             throw new IllegalPlayException("Player {$playerId} has no plays remaining this turn that allow playing card {$cardId}");
         }

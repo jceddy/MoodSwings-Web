@@ -1159,6 +1159,89 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame([], $state->discardPile());
     }
 
+    // ---- name bans and banked plays: Deflection, Haunting ----
+
+    public function testDeflectionBouncesAnOpposingMoodAndBansItsNameForTheNextTurn(): void
+    {
+        $state = $this->state([1 => ['Deflection'], 2 => ['Apathy', 'Boredom']]);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Apathy');
+        $this->play($state, 1, 'Deflection', ['target_mood_id' => $this->id('Apathy')]);
+
+        self::assertContains($this->id('Apathy'), $state->hand(2), "back in its player's hand");
+        self::assertSame([BoardState::nameBanRestriction('apathy')], $state->consumePendingTurnRestrictionsFor(2));
+    }
+
+    public function testDeflectionNameBanStopsThatCardOnlyAndOnlyForThatTurn(): void
+    {
+        $state = $this->state([2 => ['Apathy', 'Boredom']]);
+        $state->startTurn(2);
+        $state->beginTurnFlags(1, [BoardState::nameBanRestriction('apathy')]);
+
+        self::assertTrue($state->isNameBannedThisTurn($this->id('Apathy')));
+        self::assertFalse($state->isNameBannedThisTurn($this->id('Boredom')));
+        $this->expectException(IllegalPlayException::class);
+        $this->play($state, 2, 'Apathy');
+    }
+
+    public function testDeflectionNameBanLapsesWithTheTurn(): void
+    {
+        $state = $this->state([1 => ['Apathy'], 2 => ['Boredom']]);
+        $state->startTurn(1);
+        $state->beginTurnFlags(1, [BoardState::nameBanRestriction('apathy')]);
+        $state->beginTurnFlags(1, []); // the next turn starts with nothing carried over
+        $this->play($state, 1, 'Apathy');
+
+        self::assertTrue($state->isInPlay($this->id('Apathy')));
+    }
+
+    public function testDeflectionCannotTargetYourOwnMoodOrNothing(): void
+    {
+        $state = $this->state([1 => ['Deflection', 'Apathy']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Apathy');
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($state, 1, 'Deflection', ['target_mood_id' => $this->id('Apathy')]);
+    }
+
+    public function testDeflectionIsFineWithNoOpposingMood(): void
+    {
+        $state = $this->state([1 => ['Deflection']]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Deflection');
+
+        self::assertTrue($state->isInPlay($this->id('Deflection')));
+        self::assertSame([], $state->consumePendingTurnRestrictionsFor(2));
+    }
+
+    public function testHauntingBanksOneDiscardOnlyPlayPerDiscardedCard(): void
+    {
+        $state = $this->state([1 => ['Haunting', 'Apathy', 'Boredom', 'Complacency']]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Haunting', ['discard_card_ids' => $this->ids('Apathy', 'Boredom')]);
+
+        self::assertEqualsCanonicalizing($this->ids('Apathy', 'Boredom'), $state->discardPile());
+        $banked = $state->consumeBankedExtraPlaysFor(1);
+        self::assertCount(2, $banked);
+        self::assertSame(['source' => 'discard'], $banked[0]['restriction']);
+        self::assertSame($this->id('Haunting'), $banked[0]['sourceCardId']);
+        self::assertSame([], $state->consumeBankedExtraPlaysFor(1), 'consumed once');
+    }
+
+    public function testHauntingIsOptionalAndRefusesACardNotInHand(): void
+    {
+        $state = $this->state([1 => ['Haunting', 'Apathy']]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Haunting');
+        self::assertSame([], $state->consumeBankedExtraPlaysFor(1));
+
+        $second = $this->state([1 => ['Haunting'], 2 => ['Boredom']]);
+        $second->startTurn(1);
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($second, 1, 'Haunting', ['discard_card_ids' => $this->ids('Boredom')]);
+    }
+
     // ---- static value modifiers ----
 
     public function testArdorAddsTheNumberOfRedMoodsToEachOwnRedMood(): void

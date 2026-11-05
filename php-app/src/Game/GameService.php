@@ -15085,7 +15085,7 @@ final class GameService
         }
 
         foreach ($state->consumeBankedExtraPlaysFor($playerId) as $banked) {
-            $grants[] = ['sourceCardId' => $state->effectiveCardId($banked['sourceCardId'])];
+            $grants[] = [...($banked['restriction'] ?? []), 'sourceCardId' => $state->effectiveCardId($banked['sourceCardId'])];
         }
 
         // Chaos Draft (issue #405): every one of $playerId's own in-play

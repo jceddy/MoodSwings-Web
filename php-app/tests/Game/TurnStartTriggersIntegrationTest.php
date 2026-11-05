@@ -1103,6 +1103,49 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertSame([$fury], $state->discardPile(), "only player 1's own Fury reached the discard pile");
     }
 
+    public function testDeflectionBansTheBouncedCardsNameOnTheirNextTurnOnly(): void
+    {
+        $deflection = $this->card('Deflection', 'hand', $this->p1);
+        $bounced = $this->card('Apathy', 'in_play', $this->p2);
+        $other = $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $deflection, ['target_mood_id' => $bounced]);
+
+        $state = $this->state(); // player 2's turn
+        self::assertSame($this->p2, $state->currentPlayerId());
+        self::assertContains($bounced, $state->hand($this->p2));
+        self::assertTrue($state->isNameBannedThisTurn($bounced), 'saved with the turn');
+        try {
+            $this->games->playMood($this->gameId, $this->p2, $bounced, []);
+            self::fail('the banned name was played');
+        } catch (\Throwable $e) {
+            self::assertInstanceOf(\MoodSwings\Rules\Exceptions\IllegalPlayException::class, $e);
+        }
+        $this->games->playMood($this->gameId, $this->p2, $other, []); // any other card is fine
+        self::assertTrue($this->state()->isInPlay($other));
+    }
+
+    public function testHauntingsBankedPlaysBecomeDiscardOnlyGrantsOnTheNextTurn(): void
+    {
+        $haunting = $this->card('Haunting', 'hand', $this->p1);
+        $first = $this->card('Courage', 'hand', $this->p1);
+        $second = $this->card('Joy', 'hand', $this->p1);
+        $this->card('Apathy', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $haunting, ['discard_card_ids' => [$first, $second]]);
+        $banked = $this->state()->bankedExtraPlaysByPlayer()[$this->p1] ?? [];
+        self::assertCount(2, $banked, 'banked with the player');
+        self::assertSame(['source' => 'discard'], $banked[0]['restriction']);
+
+        $this->games->pass($this->gameId, $this->p2); // the round ends; player 1 (ahead) starts the next
+        $state = $this->state();
+        self::assertSame($this->p1, $state->currentPlayerId());
+        self::assertSame(3, $state->playsRemaining(), 'the ordinary play plus the two banked ones');
+        $discardGrants = array_filter($state->pendingPlayGrants(), static fn (?array $g) => ($g['source'] ?? null) === 'discard');
+        self::assertCount(2, $discardGrants);
+        self::assertSame([], $state->bankedExtraPlaysByPlayer()[$this->p1] ?? [], 'spent into this turn\'s grants');
+    }
+
     public function testGrievanceMakesAnOpponentWithMoreCardsPutOneOnTheBottomOfTheDeck(): void
     {
         $grievance = $this->card('Grievance', 'hand', $this->p1);

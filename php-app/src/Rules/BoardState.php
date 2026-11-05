@@ -2885,9 +2885,15 @@ final class BoardState
      * consumeBankedExtraPlaysFor() at the start of $beneficiaryPlayerId's
      * own next turn.
      */
-    public function bankExtraPlay(int $beneficiaryPlayerId, int $sourceCardId): void
+    /**
+     * @param ?array{type?: string, values?: int[], source?: string} $restriction what the banked play may be spent on
+     *     (Haunting: only moods from the discard pile); absent for Joy/Generosity's unrestricted plays
+     */
+    public function bankExtraPlay(int $beneficiaryPlayerId, int $sourceCardId, ?array $restriction = null): void
     {
-        $this->bankedExtraPlays[$beneficiaryPlayerId][] = ['sourceCardId' => $sourceCardId];
+        $this->bankedExtraPlays[$beneficiaryPlayerId][] = $restriction === null
+            ? ['sourceCardId' => $sourceCardId]
+            : ['sourceCardId' => $sourceCardId, 'restriction' => $restriction];
     }
 
     /**
@@ -2897,7 +2903,7 @@ final class BoardState
      * consume-before-granting convention useGrantFor() itself follows for
      * a single grant.
      *
-     * @return array<int, array{sourceCardId: int}>
+     * @return array<int, array{sourceCardId: int, restriction?: array<string, mixed>}>
      */
     public function consumeBankedExtraPlaysFor(int $playerId): array
     {
@@ -2981,6 +2987,18 @@ final class BoardState
     public function resetRoundChoiceShields(): void
     {
         $this->roundChoiceShields = [];
+    }
+
+    /** Deflection: the turn restriction that stops $effectKey's card name being played ("cards with that name"). */
+    public static function nameBanRestriction(string $effectKey): string
+    {
+        return 'ban_name:' . $effectKey;
+    }
+
+    /** Whether the current turn bars playing $cardId because of its name (Deflection) -- the printed card, not what a Creativity copies. */
+    public function isNameBannedThisTurn(int $cardId): bool
+    {
+        return in_array(self::nameBanRestriction($this->catalogRow($cardId)['effectKey']), $this->turnRestrictions, true);
     }
 
     // --- turn flags: plays made this turn, base plays, and next-turn restrictions (Restraint, Rudeness, Pettiness...) ---
@@ -3150,6 +3168,9 @@ final class BoardState
     /** Whether any outstanding grant this turn -- restricted or not -- would allow playing $cardId. */
     public function hasUsablePlayGrant(int $cardId, int $playerId): bool
     {
+        if ($this->isNameBannedThisTurn($cardId)) {
+            return false;
+        }
         foreach ($this->playGrants as $restriction) {
             if ($this->grantIsActive($restriction) && $this->grantAllows($restriction, $cardId, $playerId)) {
                 return true;

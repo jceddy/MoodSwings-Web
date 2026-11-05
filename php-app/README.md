@@ -9485,6 +9485,20 @@ in custom sets is.
     Elusiveness first doesn't stop it protecting the rest. Nothing reaches the discard pile, so
     `discardedThisRound` isn't set. The owner's own discards (costs, their own Anger) are untouched.
 
+- **Next-turn and name bans (batch 16).** Deflection and Haunting (migration 0514), both riding the next-turn
+  machinery of batch 14/15.
+  - **Deflection** bounces an opponent's mood (the schema's `target_mood_id`, so Solace/Reassurance protection applies)
+    and queues `BoardState::nameBanRestriction($effectKey)` (`ban_name:<effect key>`) for its owner's next turn. The
+    ban is by *card name* -- the printed card's effect key is unique per name -- so a duplicate in hand is barred too,
+    and a Creativity copying the bounced mood isn't (it is a Creativity). It's in force for that one turn
+    (`isNameBannedThisTurn()`, checked in `hasUsablePlayGrant()` and with its own message in `MoodPlayService`) and then
+    lapses.
+  - **Haunting** discards any number of hand cards and banks that many plays for the owner's next turn, each restricted
+    to the discard pile: `bankExtraPlay()` now takes an optional restriction, kept on the banked entry
+    (`game_players.banked_extra_plays` -- entries without one are Joy's and Generosity's, unchanged) and turned into
+    grants by `computeFreshGrants()` (`['source' => 'discard', 'sourceCardId' => ...]`), so Restraint/Rudeness leave
+    them banked like any other banked play.
+
 
 ### Default selections mode (issue #274)
 

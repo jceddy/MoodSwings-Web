@@ -497,6 +497,12 @@ final class CardChoiceSchema
             ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => false, 'label' => "Card to discard from your hand (then choose a player who can't play moods during their next turn)"],
             ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => false, 'label' => "Player who can't play moods during their next turn (required if you discard a card above)"],
         ],
+        'deflection' => [
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => true, 'label' => "An opponent's mood to put into its player's hand (they can't play cards with that name next turn)", 'excludes_teammate' => true, 'optional_if_no_targets' => true],
+        ],
+        'haunting' => [
+            ['key' => 'discard_card_ids', 'type' => 'hand_card', 'multi' => true, 'required' => false, 'label' => 'Cards to discard from your hand (you may play that many additional moods from the discard pile on your next turn)'],
+        ],
         'resignation' => [
             ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => true, 'label' => 'Card to put on the bottom of the deck (cost to play this card)'],
         ],
