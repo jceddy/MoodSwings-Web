@@ -9244,9 +9244,9 @@ in custom sets is.
   `ImpartialityEffect`, `DiscardToDeckBottomEffect` (Reminiscence, Remorse), `LevityEffect`,
   `PairedColorTargetEffect` (Distrust, Disdain, Indignation, Vigilance), `WarmthEffect`, `YearningEffect`.
   Batch 2 (migration 0498, 12 cards) adds the **turn-start triggers** and Resilience; batch 3 (migration
-  0499, 7 cards) adds the **static value modifiers** and batch 4 (migration 0500, 3 cards) the **round-win
-  count** cards (all below). The later batches still need new hooks (extra scoring, a colorless color,
-  Grudge's chosen-opponent play grant) and aren't implemented yet; until a card is in the
+  0499, 7 cards) adds the **static value modifiers**, batch 4 (migration 0500, 3 cards) the **round-win
+  count** cards and batch 5 (migration 0502, 2 cards) the **extra scoring** cards (all below). The later
+  batches still need new hooks (a colorless color, Grudge's chosen-opponent play grant) and aren't implemented yet; until a card is in the
   `cards` table it simply doesn't exist in the game.
 - **"At the start of each of your turns" (`TurnStartEffect`).** Brooding, Covetousness, Fairness, FOMO,
   Jealousy, Martyrdom, Maturity, Neglect, Rumination, Volatility and Wastefulness implement
@@ -9272,7 +9272,7 @@ in custom sets is.
   if Resilience leaves play first).
 - **Static value modifiers (`ValueModifyingEffect`).** Ardor, Humility, Kinship, Orderliness and Verve change
   other moods' values while in play. `BoardState::valueOf()` now adds `valueModifierFor()` from every
-  unsuppressed in-play mood that implements `Rules/ValueModifyingEffect` (memoized per effect key) on top of
+  in-play mood that implements `Rules/ValueModifyingEffect` (memoized per effect key) on top of
   everything else it computes, so a modifier stacks with a one-time "value becomes N", a conditional alt value
   or a chaos delta rather than replacing it. A modifier must read only colors, printed numbers and effect
   state -- never `valueOf()` -- or modifiers would recurse into each other. "Printed number" is the card's
@@ -9295,10 +9295,18 @@ in custom sets is.
   (Corruption) counts twice. `finishScoringAndAdvance()`/`finishTeamScoringAndAdvance()` refresh the counts
   right after recording the round's winner, so after-scoring effects see the new standings.
   Perseverance is the first perpetual after-scoring ability: it implements `Rules/AfterScoringTriggerEffect`
-  and `applyAfterScoringHooks()` calls it, after the one-shot 'afterScoring' tags, for every unsuppressed
+  and `applyAfterScoringHooks()` calls it, after the one-shot 'afterScoring' tags, for every
   in-play mood that does -- it reads the standings *including* the round just decided, and uses the permanent
   value delta Maturity does. A replayed board has no round wins loaded, so a replay shows these three at
   their printed values.
+- **Extra scoring (`ScoringBonusEffect`).** Fulfillment (each of your moods worth 6 or more scores an extra
+  time) and Gratitude (each worth 2 or less) implement `Rules/ScoringBonusEffect::scoringBonus()` -- the
+  points to add on top of the plain sum of values -- and `RoundScorer::score()` adds
+  `BoardState::scoringBonusOf()` for every mood in play (so the live scoring preview and the scoring summary
+  include them; two Fulfillments each add a time). They read current values, so conditional/boosted/suppressed
+  moods are judged as they stand when the round scores. Suppression only zeroes a mood's own value in this
+  engine -- a suppressed Fulfillment (value 0) still grants its extra scoring, like every other while-in-play
+  ability here, so the value modifiers and Perseverance also keep working while suppressed.
 
 ### Default selections mode (issue #274)
 

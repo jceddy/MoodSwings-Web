@@ -1963,16 +1963,14 @@ final class BoardState
      * What every other mood in play adds to $cardId's value through a "while in play -- each of your moods
      * that ... has its value increased" ability (ValueModifyingEffect): Ardor, Humility, Kinship, Verve,
      * Orderliness. Applied on top of everything else valueOf() computes, so it stacks with a one-time
-     * "value becomes N" or a conditional alt value rather than replacing them, and a suppressed source
-     * contributes nothing (its ability is off).
+     * "value becomes N" or a conditional alt value rather than replacing them. Suppression only zeroes a
+     * mood's own value -- like every other "while in play" ability in the engine, a suppressed source
+     * keeps applying.
      */
     private function staticValueModifiersFor(int $cardId, MoodInPlay $mood): int
     {
         $total = 0;
         foreach ($this->moodsInPlay as $sourceCardId => $source) {
-            if ($source->suppressions !== []) {
-                continue;
-            }
             $effectKey = $this->catalogRow($this->effectiveCardId($sourceCardId))['effectKey'];
             if (!($this->valueModifierEffectKeys[$effectKey] ??= $this->registry->has($effectKey) && $this->registry->for($effectKey) instanceof ValueModifyingEffect)) {
                 continue;
@@ -2514,6 +2512,21 @@ final class BoardState
     public function roundWinsOf(int $playerId): int
     {
         return $this->roundWins[$playerId] ?? 0;
+    }
+
+    /**
+     * What $cardId's own "while scoring" ability adds to its owner's round score on top of the plain sum of
+     * values -- 0 unless its effect is a ScoringBonusEffect (Fulfillment, Gratitude).
+     */
+    public function scoringBonusOf(int $cardId): int
+    {
+        $effectKey = $this->catalogRow($this->effectiveCardId($cardId))['effectKey'];
+        if (!$this->registry->has($effectKey)) {
+            return 0;
+        }
+        $effect = $this->registry->for($effectKey);
+
+        return $effect instanceof ScoringBonusEffect ? $effect->scoringBonus($this, $cardId, $this->ownerOf($cardId)) : 0;
     }
 
     public function currentRoundNumber(): ?int

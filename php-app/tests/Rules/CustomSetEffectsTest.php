@@ -668,7 +668,7 @@ final class CustomSetEffectsTest extends TestCase
         $this->play($state, 1, 'Orderliness');
     }
 
-    public function testModifiersStackAndASuppressedSourceStopsApplying(): void
+    public function testModifiersStackAndSuppressionOnlyZeroesTheSourcesOwnValue(): void
     {
         $state = $this->state([1 => ['Humility', 'Orderliness', 'Creativity']]);
         $state->startTurn(1);
@@ -677,7 +677,8 @@ final class CustomSetEffectsTest extends TestCase
 
         self::assertSame(2, $state->valueOf($this->id('Creativity')), 'Humility +1 and Orderliness +1 stack on 0');
         $state->suppress($this->id('Humility'), 'end_of_round');
-        self::assertSame(1, $state->valueOf($this->id('Creativity')));
+        self::assertSame(0, $state->valueOf($this->id('Humility')), 'a suppressed mood is worth 0 itself');
+        self::assertSame(2, $state->valueOf($this->id('Creativity')), 'but, like every while-in-play ability, it keeps applying');
     }
 
     public function testVerveOnlyBoostsRedMoodsPlayedThisRound(): void
@@ -734,6 +735,41 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame(4, $state->valueOf($this->id('Anger')), 'two bonuses stack');
         $state->clearEndOfRoundValueBonuses();
         self::assertSame(0, $state->valueOf($this->id('Anger')));
+    }
+
+    // ---- extra scoring ----
+
+    public function testFulfillmentScoresEachOwnMoodWorthSixOrMoreAnExtraTime(): void
+    {
+        $state = $this->state([1 => ['Fulfillment', 'Bashfulness', 'Apathy'], 2 => ['Neurosis']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Fulfillment', 'Bashfulness', 'Apathy'); // 1, 6, 4
+        $this->seat($state, 2, 'Neurosis'); // 5 -- an opponent's mood never counts for us
+
+        $scores = (new \MoodSwings\Rules\RoundScorer())->score($state);
+        self::assertSame(1 + 6 + 4 + 6, $scores[1], 'Bashfulness (6) scores twice');
+        self::assertSame(5, $scores[2]);
+    }
+
+    public function testGratitudeScoresEachOwnMoodWorthTwoOrLessAnExtraTime(): void
+    {
+        $state = $this->state([1 => ['Gratitude', 'Benevolence', 'Charity', 'Apathy']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Gratitude', 'Benevolence', 'Charity', 'Apathy'); // 0, 2, 1, 4
+
+        $scores = (new \MoodSwings\Rules\RoundScorer())->score($state);
+        self::assertSame(0 + 2 + 1 + 4 + (0 + 2 + 1), $scores[1]);
+    }
+
+    public function testGratitudeReadsCurrentValueNotPrintedNumber(): void
+    {
+        $state = $this->state([1 => ['Gratitude', 'Benevolence']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Gratitude', 'Benevolence');
+        $state->addRoundColorBonus(1, 'white', 1); // Benevolence is white: 2 -> 3, no longer "2 or less"
+
+        $scores = (new \MoodSwings\Rules\RoundScorer())->score($state);
+        self::assertSame(0 + 3, $scores[1]);
     }
 
     // ---- round-win counts ----

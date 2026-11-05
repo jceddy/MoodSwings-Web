@@ -14579,7 +14579,7 @@ final class GameService
                 continue;
             }
             $effect = $this->plays->registry()->for($effectKey);
-            if ($effect instanceof AfterScoringTriggerEffect && !$state->isSuppressed($mood->cardId)) {
+            if ($effect instanceof AfterScoringTriggerEffect) {
                 $effect->afterScoring($state, $mood->cardId, $mood->ownerId);
             }
         }
@@ -23807,6 +23807,8 @@ final class GameService
                     : null,
                 'enthusiasm' => "{$ownerName} may score their highest-valued mood an extra time ({$cardName}).",
                 'passion' => "{$ownerName} may score one of an opponent's moods as their own ({$cardName}).",
+                'fulfillment' => "{$ownerName}'s {$cardName} scores each of their moods with a value of 6 or more an extra time.",
+                'gratitude' => "{$ownerName}'s {$cardName} scores each of their moods with a value of 2 or less an extra time.",
                 default => null,
             };
 

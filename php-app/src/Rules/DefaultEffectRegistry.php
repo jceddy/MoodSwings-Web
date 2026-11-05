@@ -155,6 +155,8 @@ use MoodSwings\Rules\Effects\Custom\VerveEffect;
 use MoodSwings\Rules\Effects\Custom\VitalityEffect;
 use MoodSwings\Rules\Effects\Custom\PerseveranceEffect;
 use MoodSwings\Rules\Effects\Custom\VindicationEffect;
+use MoodSwings\Rules\Effects\Custom\FulfillmentEffect;
+use MoodSwings\Rules\Effects\Custom\GratitudeEffect;
 
 /**
  * Wires up every MoodEffect for the full 133-card pool -- every card with
@@ -488,6 +490,10 @@ final class DefaultEffectRegistry
         $registry->register('resolve', new CustomConditionalValueEffect(CustomConditionalValueEffect::OWN_ROUND_WINS_FEWER_THAN_EACH_OTHER));
         $registry->register('vindication', new VindicationEffect());
         $registry->register('perseverance', new PerseveranceEffect());
+
+        // Extra scoring (ScoringBonusEffect).
+        $registry->register('fulfillment', new FulfillmentEffect());
+        $registry->register('gratitude', new GratitudeEffect());
 
         return $registry;
     }

@@ -58,6 +58,8 @@ final class RoundScorer
         }
 
         foreach ($state->moodsInPlay() as $mood) {
+            $scores[$mood->ownerId] += $state->scoringBonusOf($mood->cardId);
+
             $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
 
             if (in_array($effectKey, self::AUTOMATIC_SCORE_MULTIPLYING_EFFECT_KEYS, true)) {
