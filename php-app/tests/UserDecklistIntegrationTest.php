@@ -135,6 +135,26 @@ final class UserDecklistIntegrationTest extends TestCase
         $this->decklists->create($userId, 'My Deck', null, [999999], null, 'private');
     }
 
+    // A pasted list with an unrecognized card (e.g. a "Name ..." line without the "About" header above it) used to leak the
+    // parser's GameStateException out of the create/update routes as a 500.
+    public function testCreateFromTextWithAnUnrecognizedCardIsAValidationError(): void
+    {
+        $userId = $this->insertUser('alice');
+
+        $this->expectException(DecklistValidationException::class);
+        $this->expectExceptionMessage('Unrecognized card "Name E1 Free-play cycle"');
+        $this->decklists->create($userId, 'My Deck', "Name E1 Free-play cycle\n \n1 Charity", null, null, 'private');
+    }
+
+    public function testUpdateFromTextWithAnUnrecognizedCardIsAValidationError(): void
+    {
+        $userId = $this->insertUser('alice');
+        $id = $this->decklists->create($userId, 'My Deck', null, [3], null, 'private');
+
+        $this->expectException(DecklistValidationException::class);
+        $this->decklists->update($userId, $id, 'My Deck', "1 Not A Real Card", null, null, 'private');
+    }
+
     public function testCreateRejectsEmptyName(): void
     {
         $userId = $this->insertUser('alice');
