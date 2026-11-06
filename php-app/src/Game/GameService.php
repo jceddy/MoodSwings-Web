@@ -19,6 +19,7 @@ use MoodSwings\Repository\GameChatRepository;
 use MoodSwings\Repository\GameNoteRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Rules\AfterScoringTriggerEffect;
+use MoodSwings\Rules\BeforeScoringEffect;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
 use MoodSwings\Rules\ChaosCardChoiceSchema;
@@ -412,6 +413,9 @@ final class GameService
      * re-enters scoring, it resumes the remaining turn-start triggers instead.
      */
     private const TURN_START_DECISION_TYPE = 'turn_start_trigger';
+
+    /** A "before scoring" trigger's own pending decision (see BeforeScoringEffect and runBeforeScoringTriggers()). */
+    private const BEFORE_SCORING_DECISION_TYPE = 'before_scoring_trigger';
 
     /**
      * Quick Draft (issue #88, format 'draft' only; multiplayer 2-4 player
@@ -10685,6 +10689,14 @@ final class GameService
                 return $result;
             }
 
+            if ($decisionRow['decision_type'] === self::BEFORE_SCORING_DECISION_TYPE) {
+                // A "before scoring" trigger (see runBeforeScoringTriggers()): apply it, then carry on with the rest of scoring.
+                $result = $this->resumeBeforeScoringTriggers($gameId, $round, $batchRow, $gamePlayerId, $choices);
+                $pdo->commit();
+
+                return $result;
+            }
+
             if ($decisionRow['decision_type'] === self::TURN_START_DECISION_TYPE) {
                 // An "at the start of your turn" trigger (see runTurnStartTriggers()): apply it and carry on
                 // with the rest of the turn's triggers -- no MoodPlayService chain to resume.
@@ -13181,32 +13193,11 @@ final class GameService
             return $this->skipScoringAndAdvance($gameId, $round, $state);
         }
 
-        $nextDecision = $this->nextUnresolvedScoringDecision($state, $roundId, $turnOrder);
-        if ($nextDecision !== null) {
-            $pdo = Connection::get();
-            $pdo->beginTransaction();
-
-            try {
-                $this->boardStates->save($gameId, $state);
-                $this->writeScoringDecisionBatch($gameId, $roundId, $state, $nextDecision);
-                $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], ['scoring_trigger' => true], $state);
-
-                $pdo->commit();
-            } catch (Throwable $e) {
-                $pdo->rollBack();
-                throw $e;
-            }
-
-            return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
-        }
-
-        $scoringDecisions = $this->resolvedScoringDecisionBonuses($state, $roundId);
-
         $pdo = Connection::get();
         $pdo->beginTransaction();
 
         try {
-            $result = $this->finishScoringAndAdvance($gameId, $round, $turnOrder, $state, $scoringDecisions, $requestingGamePlayerId);
+            $result = $this->advanceScoringPhases($gameId, $round, $turnOrder, $state, $requestingGamePlayerId);
             $pdo->commit();
         } catch (Throwable $e) {
             $pdo->rollBack();
@@ -13214,6 +13205,146 @@ final class GameService
         }
 
         return $result;
+    }
+
+    /**
+     * Everything that happens once a round is ready to be scored, in order, pausing the round on whichever step needs a
+     * player's answer: "before scoring" triggers (Neglect -- runBeforeScoringTriggers()), then Enthusiasm/Passion's own
+     * scoring decisions, then the scoring itself (finishScoringAndAdvance()). Re-entered after each answer, and each step
+     * only asks for what hasn't been answered yet, so it is safe to call again from any point. The caller owns the transaction.
+     *
+     * @param int[] $turnOrder
+     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int, pending_decision?: bool}
+     */
+    private function advanceScoringPhases(int $gameId, array $round, array $turnOrder, BoardState $state, int $requestingGamePlayerId): array
+    {
+        $roundId = (int) $round['id'];
+
+        if ($this->runBeforeScoringTriggers($gameId, $roundId, $turnOrder, $state)) {
+            return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+        }
+
+        $nextDecision = $this->nextUnresolvedScoringDecision($state, $roundId, $turnOrder);
+        if ($nextDecision !== null) {
+            $this->boardStates->save($gameId, $state);
+            $this->writeScoringDecisionBatch($gameId, $roundId, $state, $nextDecision);
+            $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], ['scoring_trigger' => true], $state);
+
+            return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+        }
+
+        $scoringDecisions = $this->resolvedScoringDecisionBonuses($state, $roundId);
+
+        return $this->finishScoringAndAdvance($gameId, $round, $turnOrder, $state, $scoringDecisions, $requestingGamePlayerId);
+    }
+
+    /**
+     * "Before scoring" (BeforeScoringEffect -- Neglect): fires every such mood in play that hasn't yet fired this round, owners
+     * in the round's turn order and each owner's moods in play order. An automatic trigger just applies; one that needs input
+     * writes a pending-decision batch and PAUSES the round (returns true), resumed by resumeBeforeScoringTriggers(). A mood is
+     * recorded in game_rounds.before_scoring_done as soon as it fires (or is skipped), so re-entering never fires it twice; the
+     * board is saved before returning so what a trigger changed survives a later pause that rebuilds the state.
+     *
+     * @param int[] $turnOrder
+     * @return bool whether the round is now paused on a before-scoring decision
+     */
+    private function runBeforeScoringTriggers(int $gameId, int $roundId, array $turnOrder, BoardState $state): bool
+    {
+        $pdo = Connection::get();
+        $stmt = $pdo->prepare('SELECT before_scoring_done FROM game_rounds WHERE id = :round_id');
+        $stmt->execute(['round_id' => $roundId]);
+        $stored = $stmt->fetchColumn();
+        $done = $stored !== false && $stored !== null ? array_map(intval(...), json_decode((string) $stored, true)) : [];
+
+        $paused = false;
+        while (true) {
+            $next = null;
+            foreach ($turnOrder as $playerId) {
+                foreach ($state->moodsOwnedBy($playerId) as $mood) {
+                    if (!in_array($mood->cardId, $done, true) && $this->beforeScoringEffectFor($state, $mood->cardId) !== null) {
+                        $next = [$mood->cardId, $playerId];
+                        break 2;
+                    }
+                }
+            }
+            if ($next === null) {
+                break;
+            }
+
+            [$cardId, $ownerId] = $next;
+            $done[] = $cardId;
+            $pdo->prepare('UPDATE game_rounds SET before_scoring_done = :done WHERE id = :round_id')
+                ->execute(['done' => json_encode($done), 'round_id' => $roundId]);
+
+            $effect = $this->beforeScoringEffectFor($state, $cardId);
+            $requests = $effect->beforeScoringRequests($state, $cardId, $ownerId);
+            if ($requests === []) {
+                continue;
+            }
+            if ($requests === null) {
+                $requests = $effect->applyBeforeScoring($state, $cardId, $ownerId, []);
+                $this->logEvent($gameId, $roundId, $ownerId, 'before_scoring_triggered', $cardId, [], $state);
+                if ($requests === []) {
+                    continue;
+                }
+            } else {
+                $this->logEvent($gameId, $roundId, $ownerId, 'pending_decision_created', $cardId, ['scoring_trigger' => true, 'before_scoring_trigger' => true], $state);
+            }
+
+            $this->boardStates->save($gameId, $state);
+            $this->writePendingBatch($gameId, $roundId, $ownerId, new PlayerChoices([]), new PlayerChoices([]), PlayResult::pending($requests, $cardId, 0, new PlayerChoices([]), 0));
+            $paused = true;
+            break;
+        }
+
+        $this->boardStates->save($gameId, $state);
+
+        return $paused;
+    }
+
+    /** The BeforeScoringEffect behind $cardId's effective (Creativity-copied, if any) effect key, or null. */
+    private function beforeScoringEffectFor(BoardState $state, int $cardId): ?BeforeScoringEffect
+    {
+        $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+        $registry = $this->plays->registry();
+
+        if (!$registry->has($effectKey)) {
+            return null;
+        }
+        $effect = $registry->for($effectKey);
+
+        return $effect instanceof BeforeScoringEffect ? $effect : null;
+    }
+
+    /**
+     * respondToDecision()'s branch for a fully-answered before-scoring batch: applies the trigger, then either pauses again (the
+     * effect has a follow-up, or the next trigger needs input) or carries on with scoring. Runs inside respondToDecisionLocked()'s
+     * own transaction.
+     *
+     * @param array<string, mixed> $choices the last responder's raw answer, for the log
+     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int, pending_decision?: bool}
+     */
+    private function resumeBeforeScoringTriggers(int $gameId, array $round, array $batchRow, int $responderGamePlayerId, array $choices): array
+    {
+        $roundId = (int) $round['id'];
+        $cardId = (int) $batchRow['played_card_id'];
+        $ownerId = (int) $batchRow['initiating_game_player_id'];
+        $state = $this->boardStates->load($gameId);
+
+        $effect = $this->beforeScoringEffectFor($state, $cardId);
+        $followUps = $effect === null ? [] : $effect->applyBeforeScoring($state, $cardId, $ownerId, $this->collectAnswers((int) $batchRow['id']));
+
+        $this->logEvent($gameId, $roundId, $responderGamePlayerId, 'pending_decision_resolved', $cardId, [...$choices, 'scoring_trigger' => true, 'before_scoring_trigger' => true, 'initiating_game_player_id' => $ownerId], $state);
+
+        if ($followUps !== []) {
+            $this->boardStates->save($gameId, $state);
+            $this->writePendingBatch($gameId, $roundId, $ownerId, new PlayerChoices([]), new PlayerChoices([]), PlayResult::pending($followUps, $cardId, 0, new PlayerChoices([]), 0));
+            $this->logEvent($gameId, $roundId, $ownerId, 'pending_decision_created', $cardId, ['scoring_trigger' => true, 'before_scoring_trigger' => true], $state);
+
+            return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+        }
+
+        return $this->advanceScoringPhases($gameId, $round, $this->turnOrderForRound($gameId, $round), $state, $responderGamePlayerId);
     }
 
     /**
@@ -13347,8 +13478,11 @@ final class GameService
             // their draw the same way $turnOrder already excludes them
             // from winning.
             // Forgetfulness: no one draws at the end of this round.
+            // Official ruling: the losers draw starting from the player clockwise (next in seat order) from the winner and
+            // continuing around the table -- not in the round's own turn order -- since a card like Prudence can make the top
+            // card(s) of the deck known, so who draws first matters.
             if (!$state->noEndOfRoundDraw()) {
-                foreach ($turnOrder as $playerId) {
+                foreach ($this->rotate($turnOrder, $winnerId) as $playerId) {
                     if ($playerId !== $winnerId) {
                         $state->drawCard($playerId);
                         // Despair: "At the end of each round you lose, you draw an additional card" -- one for each in play.
@@ -15122,7 +15256,15 @@ final class GameService
         }
 
         foreach ($state->consumeBankedExtraPlaysFor($playerId) as $banked) {
-            $grants[] = [...($banked['restriction'] ?? []), 'sourceCardId' => $state->effectiveCardId($banked['sourceCardId'])];
+            $restriction = $banked['restriction'] ?? [];
+            if ($restriction['requiresSourceAtTurnStart'] ?? false) {
+                // Haunting: "if you still have this mood at the start of that turn" -- otherwise the banked play is simply lost.
+                unset($restriction['requiresSourceAtTurnStart']);
+                if (!$state->isInPlay($banked['sourceCardId']) || $state->ownerOf($banked['sourceCardId']) !== $playerId) {
+                    continue;
+                }
+            }
+            $grants[] = [...$restriction, 'sourceCardId' => $state->effectiveCardId($banked['sourceCardId'])];
         }
 
         // Chaos Draft (issue #405): every one of $playerId's own in-play
@@ -21091,6 +21233,8 @@ final class GameService
             $row['event_type'] === 'turn_passed' => ($details['automated'] ?? false)
                 ? "{$actor} passed automatically (no legal play)"
                 : "{$actor} passed",
+            $row['event_type'] === 'pending_decision_created' && ($details['before_scoring_trigger'] ?? false) => "{$cardName} triggered before scoring, waiting on a response",
+            $row['event_type'] === 'before_scoring_triggered' => "{$cardName} triggered before scoring",
             $row['event_type'] === 'pending_decision_created' && ($details['scoring_trigger'] ?? false) => "{$cardName}'s scoring effect triggered, waiting on a response from {$actor}",
             $row['event_type'] === 'pending_decision_created' && ($details['turn_start_trigger'] ?? false) => "{$cardName} triggered at the start of {$actor}'s turn, waiting on a response",
             $row['event_type'] === 'turn_start_triggered' => "{$cardName} triggered at the start of {$actor}'s turn",

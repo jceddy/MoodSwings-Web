@@ -285,17 +285,91 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertTrue($this->state()->isInPlay($a));
     }
 
-    public function testNeglectHitsAnOpponentWithAnEmptyHand(): void
+    /** @return array<int, int> game_player_id => score for round 1 */
+    private function roundOneScores(): array
+    {
+        $scores = [];
+        foreach ($this->pdo->query("SELECT game_player_id, score FROM game_round_scores gs JOIN game_rounds gr ON gr.id = gs.game_round_id WHERE gr.game_id = {$this->gameId} AND gr.round_number = 1")->fetchAll() as $row) {
+            $scores[(int) $row['game_player_id']] = (int) $row['score'];
+        }
+
+        return $scores;
+    }
+
+    // Neglect fires before scoring (not at the start of a turn): the opponent's single highest value mood goes automatically,
+    // so it doesn't count toward their score.
+    public function testNeglectDiscardsAnEmptyHandedOpponentsHighestMoodBeforeScoring(): void
+    {
+        $this->card('Neglect', 'in_play', $this->p2); // 2
+        $high = $this->card('Apathy', 'in_play', $this->p1); // 4
+        $low = $this->card('Courage', 'in_play', $this->p1); // 1
+        $this->card('Complacency', 'hand', $this->p2); // p1 has no cards in hand; p2 does, so p2 is safe
+
+        $this->games->pass($this->gameId, $this->p1);
+        self::assertTrue($this->state()->isInPlay($high), 'nothing happens at the start of a turn any more');
+        $result = $this->games->pass($this->gameId, $this->p2);
+
+        self::assertTrue($result['round_scored']);
+        $state = $this->state();
+        self::assertFalse($state->isInPlay($high), 'the highest value mood was put into the discard pile before scoring');
+        self::assertTrue($state->isInPlay($low));
+        self::assertSame(1, $this->roundOneScores()[$this->p1] ?? null, 'only the surviving mood (Courage, 1) is scored');
+    }
+
+    public function testNeglectLetsTheOpponentChooseAmongTiedHighestMoodsAndPausesScoring(): void
     {
         $this->card('Neglect', 'in_play', $this->p2);
-        $a = $this->card('Apathy', 'in_play', $this->p1);
-        $this->card('Complacency', 'hand', $this->p2); // p1 has no hand cards, and its turn already ended
+        $first = $this->card('Apathy', 'in_play', $this->p1); // 4
+        $second = $this->card('Complacency', 'in_play', $this->p1); // 4
+        $this->card('Courage', 'in_play', $this->p1); // 1
+        $this->card('Creativity', 'hand', $this->p2);
 
-        $this->handTurnToPlayerTwo();
+        $this->games->pass($this->gameId, $this->p1);
+        $paused = $this->games->pass($this->gameId, $this->p2);
 
-        self::assertSame($this->p1, $this->pendingDecisionTarget());
-        $this->games->respondToDecision($this->gameId, $this->p1, ['discard_mood_id_' . $this->p1 => $a]);
-        self::assertFalse($this->state()->isInPlay($a));
+        self::assertFalse($paused['round_scored']);
+        self::assertTrue($paused['pending_decision'] ?? false);
+        self::assertSame($this->p1, $this->pendingDecisionTarget(), 'the opponent chooses which tied mood goes');
+
+        $this->games->respondToDecision($this->gameId, $this->p1, ['discard_mood_id_' . $this->p1 => $second]);
+
+        $state = $this->state();
+        self::assertFalse($state->isInPlay($second));
+        self::assertTrue($state->isInPlay($first));
+        self::assertSame(4 + 1, $this->roundOneScores()[$this->p1] ?? null, 'the round was scored once, after the discard');
+        self::assertSame(
+            1,
+            (int) $this->pdo->query("SELECT COUNT(*) FROM game_cards WHERE game_id = {$this->gameId} AND zone = 'discard'")->fetchColumn(),
+            'exactly one mood was discarded -- the trigger did not fire a second time when scoring resumed'
+        );
+    }
+
+    public function testNeglectRejectsAMoodThatIsNotOneOfTheTiedHighest(): void
+    {
+        $this->card('Neglect', 'in_play', $this->p2);
+        $this->card('Apathy', 'in_play', $this->p1);
+        $this->card('Complacency', 'in_play', $this->p1);
+        $low = $this->card('Courage', 'in_play', $this->p1);
+        $this->card('Creativity', 'hand', $this->p2);
+
+        $this->games->pass($this->gameId, $this->p1);
+        $this->games->pass($this->gameId, $this->p2);
+
+        $this->expectException(\Throwable::class);
+        $this->games->respondToDecision($this->gameId, $this->p1, ['discard_mood_id_' . $this->p1 => $low]);
+    }
+
+    public function testNeglectIgnoresAnOpponentWhoStillHasCardsInHand(): void
+    {
+        $this->card('Neglect', 'in_play', $this->p2);
+        $mood = $this->card('Apathy', 'in_play', $this->p1);
+        $this->card('Courage', 'hand', $this->p1);
+        $this->card('Complacency', 'hand', $this->p2);
+
+        $this->games->pass($this->gameId, $this->p1);
+        $this->games->pass($this->gameId, $this->p2);
+
+        self::assertTrue($this->state()->isInPlay($mood));
     }
 
     public function testFairnessSuppressesTheSingleHighestMoodAutomatically(): void
@@ -1135,7 +1209,7 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         $this->games->playMood($this->gameId, $this->p1, $haunting, ['discard_card_ids' => [$first, $second]]);
         $banked = $this->state()->bankedExtraPlaysByPlayer()[$this->p1] ?? [];
         self::assertCount(2, $banked, 'banked with the player');
-        self::assertSame(['source' => 'discard'], $banked[0]['restriction']);
+        self::assertSame(['source' => 'discard', 'requiresSourceAtTurnStart' => true], $banked[0]['restriction']);
 
         $this->games->pass($this->gameId, $this->p2); // the round ends; player 1 (ahead) starts the next
         $state = $this->state();
@@ -1144,6 +1218,22 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         $discardGrants = array_filter($state->pendingPlayGrants(), static fn (?array $g) => ($g['source'] ?? null) === 'discard');
         self::assertCount(2, $discardGrants);
         self::assertSame([], $state->bankedExtraPlaysByPlayer()[$this->p1] ?? [], 'spent into this turn\'s grants');
+    }
+
+    public function testHauntingsBankedPlaysAreLostIfItIsNoLongerInPlayAtTheStartOfThatTurn(): void
+    {
+        $haunting = $this->card('Haunting', 'hand', $this->p1);
+        $first = $this->card('Courage', 'hand', $this->p1);
+        $this->card('Apathy', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $haunting, ['discard_card_ids' => [$first]]);
+        $this->pdo->exec("UPDATE game_cards SET zone = 'discard', owner_game_player_id = NULL WHERE id = {$haunting}"); // Haunting leaves play before the next turn
+
+        $this->games->pass($this->gameId, $this->p2); // the round ends; player 1 starts the next
+        $state = $this->state();
+        self::assertSame($this->p1, $state->currentPlayerId());
+        self::assertSame(1, $state->playsRemaining(), 'only the ordinary play: Haunting was gone at the start of the turn');
+        self::assertSame([], $state->bankedExtraPlaysByPlayer()[$this->p1] ?? [], 'the banked play was consumed (and lost), not kept for later');
     }
 
     public function testForgetfulnessTakesAWinFromThePreviousWinnerAndStopsTheRoundEndDraw(): void

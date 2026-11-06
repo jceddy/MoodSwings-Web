@@ -9,6 +9,7 @@ use MoodSwings\Friends\FriendshipService;
 use MoodSwings\Database\Connection;
 use MoodSwings\Game\CardCatalog;
 use MoodSwings\Game\DecklistParser;
+use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Repository\UserDecklistRepository;
 
 /**
@@ -230,7 +231,13 @@ final class UserDecklistService
     private function resolveCardIds(?string $decklistText, ?array $cardIds, ?array $sideboardCardIds, bool $allowCustom = true): array
     {
         if ($decklistText !== null && trim($decklistText) !== '') {
-            $parsed = (new DecklistParser(CardCatalog::load($allowCustom)['idsByName']))->parse($decklistText);
+            // The parser reports an unrecognized card or an unreadable line as a GameStateException (it was written for the
+            // game-creation flows); here that is bad user input, which the routes answer with a 400 -- not a 500.
+            try {
+                $parsed = (new DecklistParser(CardCatalog::load($allowCustom)['idsByName']))->parse($decklistText);
+            } catch (GameStateException $e) {
+                throw new DecklistValidationException($e->getMessage(), 0, $e);
+            }
 
             return [$parsed['cardIds'], $parsed['sideboardCardIds'] !== [] ? $parsed['sideboardCardIds'] : null];
         }
