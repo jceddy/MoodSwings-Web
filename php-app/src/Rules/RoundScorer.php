@@ -54,7 +54,8 @@ final class RoundScorer
     {
         $scores = array_fill_keys($state->playerOrder(), 0);
         foreach ($state->moodsInPlay() as $mood) {
-            $scores[$mood->ownerId] += $state->valueOf($mood->cardId);
+            // Levelheadedness: a flat score for every mood this round; otherwise each mood's own value.
+            $scores[$mood->ownerId] += $state->scoredValueOf($mood->cardId);
         }
 
         foreach ($state->moodsInPlay() as $mood) {
@@ -79,7 +80,7 @@ final class RoundScorer
     {
         $total = 0;
         foreach ($state->moodsOwnedBy($ownerId) as $mood) {
-            $total += $state->valueOf($mood->cardId);
+            $total += $state->scoredValueOf($mood->cardId);
         }
 
         return $total;
@@ -94,7 +95,7 @@ final class RoundScorer
         $total = 0;
         foreach ($state->moodsOwnedBy($ownerId) as $mood) {
             if ($state->colorOf($mood->cardId) === $color) {
-                $total += $state->valueOf($mood->cardId);
+                $total += $state->scoredValueOf($mood->cardId);
             }
         }
 

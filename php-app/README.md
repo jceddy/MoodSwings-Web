@@ -9440,6 +9440,141 @@ in custom sets is.
     itself made a board with a 1 and a 6 flip between 3 and 6 forever), so it needs three different values among the
     owner's *other* moods -- a board of at least four.
 
+- **Play restrictions (batch 14, tier 2).** Six cards that limit who may play what, built on a small per-turn
+  state in `BoardState` (`beginTurnFlags()`/`turnFlags()`): how many moods the turn's player has played, how many
+  of the turn's plays are base plays (1, or 2 with Hurt Feelings -- worked out from the round row, not stored), and
+  the restrictions in force. A mood is an *additional* one once the base plays are used up -- counted, because the
+  most restrictive usable grant is spent first and so which grant a play used can't tell base from extra. The flags
+  persist with the turn's grants (`game_rounds.turn_flags`, written by `updateRoundTurnState()` and the next-round
+  INSERTs); what waits for a player's next turn lives on `game_players.pending_turn_restrictions`, taken when
+  `computeFreshGrants()` builds that turn's grants (migration 0512).
+  - **Obstinacy**, **Restraint** and **Defensiveness** have no effect code (`PlayRuleMarkerEffect`): the engine reads
+    them off the board by effective effect key. Obstinacy: once its owner has played a mood this turn no grant is
+    active (`grantIsActive()`) -- Hurt Feelings' second play included, a literal reading of "one mood per turn".
+    Restraint: any grant that names a source card is inactive (`extraPlaysBlocked()`), so Hope/Charity/Premonition...
+    stop, while the bare base play and Hurt Feelings' labelled one stand; banked Joy/Generosity plays aren't spent
+    (`computeFreshGrants()` returns early), so they're still there when it leaves. Defensiveness: an additional mood
+    played while an *opponent* has it in play skips its after-playing effect (`afterPlayingSuppressedFor()`; what it
+    reacts to still happens), sparing its owner and every first/base play.
+  - **Rudeness** puts `TURN_RUDENESS` on each other player's next turn: extra plays dead and every mood played that
+    turn skips its after-playing effect (Hurt Feelings' second base play stands).
+  - **Pettiness**: optional discard + the chosen player (anyone, you included) gets `TURN_NO_PLAYS` for their next
+    turn -- this round's if they haven't gone yet (each player has one turn per round), else next round's.
+  - **Overconfidence** grants two extra plays tagged `onUsePendingTurnRestriction`; spending either (applied by
+    `MoodPlayService`) queues `TURN_NO_PLAYS` for the owner's next turn, once however many are used.
+  A player with no active grant simply has no legal play: bots pass, and a human with auto-pass on an empty hand is
+  passed automatically (otherwise they click Pass).
+
+- **"Can't choose your moods" (batch 15).** Solace, Reassurance and Elusiveness (migration 0513).
+  - **Choosing is stopped by rule, not per card.** `BoardState::isProtectedFromChoiceBy($mood, $chooser)` is true
+    for an opponent (never the owner, never a teammate) when the owner is shielded for the round (**Solace**,
+    `game_rounds.round_choice_shields`, a shield on the *player* so it holds if Solace leaves play, emptied with the
+    other round records) or has **Reassurance** in play and the mood's *current* value is 2 or less (so it covers
+    itself). `MoodPlayService` checks every mood field of the effect's own `CardChoiceSchema` entry that isn't
+    `scope: 'own'` -- on the first play and on every Duplicity repeat -- plus the reaction fields (Scorn, Dominance),
+    and `resolveScoringDecisionBonus()` checks Passion's pick. Sweeps (Rage, Wrath), random picks, "choose a value"
+    and effects where the owner picks their own mood (Fury, Vengeance's victim) have no such field, so they are
+    untouched, as the cards say. The picker never offers a protected mood: `in_play[].unchoosable_by_you` (per
+    viewer) is filtered in `fieldOptions()`, and bots' `moodCandidates()` skip them. Chaos Draft effects'
+    own mood fields aren't covered.
+  - **Elusiveness** is a replacement in `BoardState::moveInPlayToDiscard()`: when the *effect actor* -- the player
+    whose play is resolving (`setEffectActor()`, set by `MoodPlayService` around a play and around the answers to
+    its pending decisions, null elsewhere, so scoring-time and turn-start effects aren't replaced) -- isn't the
+    mood's owner or a teammate and the owner had Elusiveness in play when the play began, the mood goes to its
+    owner's hand instead. The set of Elusiveness owners is taken when the play begins, so a sweep that moves
+    Elusiveness first doesn't stop it protecting the rest. Nothing reaches the discard pile, so
+    `discardedThisRound` isn't set. The owner's own discards (costs, their own Anger) are untouched.
+
+- **Next-turn and name bans (batch 16).** Deflection and Haunting (migration 0514), both riding the next-turn
+  machinery of batch 14/15.
+  - **Deflection** bounces an opponent's mood (the schema's `target_mood_id`, so Solace/Reassurance protection applies)
+    and queues `BoardState::nameBanRestriction($effectKey)` (`ban_name:<effect key>`) for its owner's next turn. The
+    ban is by *card name* -- the printed card's effect key is unique per name -- so a duplicate in hand is barred too,
+    and a Creativity copying the bounced mood isn't (it is a Creativity). It's in force for that one turn
+    (`isNameBannedThisTurn()`, checked in `hasUsablePlayGrant()` and with its own message in `MoodPlayService`) and then
+    lapses.
+  - **Haunting** discards any number of hand cards and banks that many plays for the owner's next turn, each restricted
+    to the discard pile: `bankExtraPlay()` now takes an optional restriction, kept on the banked entry
+    (`game_players.banked_extra_plays` -- entries without one are Joy's and Generosity's, unchanged) and turned into
+    grants by `computeFreshGrants()` (`['source' => 'discard', 'sourceCardId' => ...]`), so Restraint/Rudeness leave
+    them banked like any other banked play.
+
+- **Round-order and round rules (batch 17).** Compassion, Forgetfulness and Levelheadedness (migration 0515).
+  - **Compassion** is read straight off the board: `BoardState::firstPlayerOverride()` (what Honor and Awe already use)
+    falls back to `compassionFirstPlayer()` -- the one active player with strictly fewer moods than every other (itself
+    counts), else the usual order (the round's winner). Honor's and Awe's explicit choices are looked at first.
+  - **Forgetfulness** takes a win off the previous scored round's `wins_awarded` (round wins are the sum of that
+    column, so a Corruption double becomes one; nothing in round 1 or after an Awe round) -- queued on the board
+    (`forfeitPreviousRoundWin()`) and applied by `BoardStateRepository::save()`, which runs at every pause, so a
+    Duplicity pause can't lose it and a repeat takes another. "No one draws at the end of the round" is
+    `game_rounds.round_no_end_draw`, checked at the loser's draw (and, in team formats, by skipping the losing team's
+    draw decision). Hurt Feelings is untouched.
+  - **Levelheadedness**: `game_rounds.round_flat_mood_score` (2) makes `RoundScorer` and the live board totals count every
+    mood as that (`BoardState::scoredValueOf()`), including Exhilaration's/Bliss's sums of own moods. Real values still
+    drive targeting, conditions and the bonuses that read a value (Enthusiasm, Passion). Both round flags are cleared
+    right after the round's draws, and a new round's row starts without them.
+
+- **Draw and discard triggers (batch 18).** Despair, Opportunism, Sentimentality and Rancor (migration 0516). None has
+  effect code; each is read off the board by its effective effect key (`PlayRuleMarkerEffect`).
+  - **Despair**: at the loser's end-of-round draw (`finishScoringAndAdvance()`), each of its owner's Despairs in play adds a
+    card. Forgetfulness's "no one draws" skips it too, and it isn't applied in team formats (the losing team's single draw is
+    a team decision there).
+  - **Opportunism**: `BoardState::moveHandToDiscard()` hands the card to the first opponent of the discarder who has it in
+    play, in seat order *starting with the active player* (the card's ruling for ties) -- straight from the pile into their
+    hand (a teammate's discard doesn't count). Moods put into the
+    discard pile and a player's own discards are untouched.
+  - **Sentimentality**: `moveInPlayToDiscard()` draws a card per Sentimentality of the mood's owner that isn't the mood
+    leaving -- in play now, or gone earlier in the same resolution, so a sweep that takes Sentimentality first still pays out
+    for the rest. Any cause counts; a mood Elusiveness bounces instead doesn't (nothing reached the pile).
+  - **Rancor**: when the effect actor (`setEffectActor()`) is an opponent of the mood's owner, each Rancor of the owner's that
+    is still in play is queued (once per Rancor, however many moods the effect takes); when the play or decision answer has
+    finished, `MoodPlayService` calls `resolveRancorRetaliation()`, which discards a random mood worth 3 or less of the
+    effect's player's, as an effect of the Rancor's owner (so Elusiveness on the attacker's side still applies and a Rancor
+    on theirs can answer in turn -- each round of it discards a mood, so it ends). It is not set off outside a play (scoring,
+    turn-start triggers), where there is no effect actor.
+
+- **Repeat effects (batch 19).** Optimism, Wistfulness, Reinvigoration and Admiration (migration 0517), on a new piece of
+  `MoodPlayService`.
+  - **Delegated invocations** (`DelegatesAfterPlaying`, for **Optimism** and **Admiration**): like Duplicity's repeat, running
+    another card's effect needs the registry, so the service does it. The card names its target in an optional field
+    (`target_mood_id` -- one of your other moods in play; `target_discard_card_id` -- a mood in the pile) and returns a plan
+    (effect key, the card the effect runs as, the target's `afterPlayingFields()`). The acting player is asked for the fresh
+    choices the repeat needs (a `delegated_effect_choices` pending decision, a nested field of those fields, the same shape
+    as Duplicity's repeat offer); the effect is then run -- pausing again if *it* needs a decision (Suspicion's discard,
+    say), the paused bag tagged with `__delegate_key`/`__delegate_source` so the answer is routed back to it -- and the
+    original card's own chain carries on afterwards. The repeat isn't a play, so Duplicity, Wistfulness and "each time you play
+    another mood" reactions don't see it. Optimism runs the chosen mood's effect as that mood; Admiration runs the pile mood's
+    effect as the Admiration just played (the card's ruling for a pile mood that says "this mood"), leaving the pile mood where
+    it is. A mood with no after-playing effect gives nothing.
+  - **Wistfulness**: Harmony's grant (one extra play, discard pile only) plus Duplicity's repeat for pile plays --
+    `resolveAfterPlayingChain()` adds each Wistfulness in play to a pile-played mood's repeat sources (`playedFromZone`),
+    except for Wistfulness's own play, so the pile play it grants already triggers twice.
+  - **Reinvigoration**: discards all your other moods (through `moveInPlayToDiscard()`, so Sentimentality pays out), grants that
+    many discard-only plays and locks the turn with `TURN_ONLY_FROM` + its card id (`lockPlaysToGrantsFrom()`, persisted in
+    `turn_flags`): `grantIsActive()` then only honours grants sourced from that card, so the base play, Hurt Feelings and every
+    other card's extra play are dead -- and two Reinvigorations cancel each other's plays (the ruling the authors lean toward).
+    Restraint stops its replays like any granted play. Bots never play it.
+
+- **The last four cards (batch 20).** Prudence, Reckoning, Shrewdness and Grudge (migration 0518) complete the set.
+  - **Prudence** is a *private* look: a `prudence_bottom` decision whose `revealed_card` field lists the top two cards of the
+    deck (the player's own deck in a duel) -- the field's options are only ever sent to its target, and nothing is recorded as a
+    public reveal. They pick any (0-2) to send to the bottom (`moveDeckCardToBottom()`); if both stay, a second `prudence_top`
+    decision picks which goes on top (`moveDeckCardToTop()` -- at most two cards, so one pick is the whole order). Bots leave
+    both where they are.
+  - **Reckoning**: the optional `reckon` flag; if set, every active player with a mood in play (the acting player too, Reckoning
+    itself included) is asked which of their own to keep (`reckoning_keep_mood`), and once all have answered every other mood in
+    play goes into the discard pile (so Elusiveness bounces an opponent's, Sentimentality pays out, Rancor answers).
+    Bots keep their highest-value mood when asked, and never choose to reckon.
+  - **Shrewdness** swaps the ownership of one of your other moods and one of an opponent's of no greater current value
+    (`giveInPlayToPlayer()` both ways: both stay in play, neither effect happens again); both choices or neither, and the
+    opponent's mood is an ordinary opposing-mood choice, so Solace/Reassurance protect it.
+  - **Grudge** remembers its opponent (`grudgeTargetPlayerId`) and grants one extra play per round that opponent has won
+    (`BoardState::roundWinsOf()`, derived from the scored rounds, so Forgetfulness lowers it): this turn's in `afterPlaying()`,
+    every later turn's in `computeFreshGrants()` as the turn starts (lost if that Grudge leaves play first). Its replacement
+    effect is in `BoardState`: `moveInPlayToDiscard()`, `moveInPlayToHand()` and `moveInPlayToPlayersHand()` send it to the
+    bottom of the deck instead, before Elusiveness is considered (a Grudge Elusiveness would bounce would end up on the bottom
+    anyway), and since nothing reaches the discard pile Sentimentality, Rancor and Vulnerability don't see it.
+
 
 ### Default selections mode (issue #274)
 

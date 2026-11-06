@@ -493,6 +493,32 @@ final class CardChoiceSchema
             ['key' => 'parity', 'type' => 'mode', 'required' => true, 'options' => ['odd', 'even'], 'label' => 'Odd or even: which printed numbers (top right corner) you remove'],
             ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods with a number of that type to put into the discard pile (up to 2, one per player)', 'count' => ['max' => 2], 'constraint' => ['type' => 'distinct_owners'], 'includes_self' => true],
         ],
+        'pettiness' => [
+            ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => false, 'label' => "Card to discard from your hand (then choose a player who can't play moods during their next turn)"],
+            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => false, 'label' => "Player who can't play moods during their next turn (required if you discard a card above)"],
+        ],
+        'deflection' => [
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => true, 'label' => "An opponent's mood to put into its player's hand (they can't play cards with that name next turn)", 'excludes_teammate' => true, 'optional_if_no_targets' => true],
+        ],
+        'haunting' => [
+            ['key' => 'discard_card_ids', 'type' => 'hand_card', 'multi' => true, 'required' => false, 'label' => 'Cards to discard from your hand (you may play that many additional moods from the discard pile on your next turn)'],
+        ],
+        'optimism' => [
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => "One of your other moods whose after-playing effect happens an additional time (you'll then make that effect's choices)"],
+        ],
+        'admiration' => [
+            ['key' => 'target_discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => "A mood in the discard pile whose after-playing effect happens as though you had just played it (you'll then make that effect's choices)"],
+        ],
+        'reckoning' => [
+            ['key' => 'reckon', 'type' => 'bool', 'required' => false, 'label' => 'Have each player choose one of their moods; every mood not chosen goes into the discard pile'],
+        ],
+        'shrewdness' => [
+            ['key' => 'own_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => 'Your other mood to swap (choose an opponent\'s mood below as well)'],
+            ['key' => 'opponent_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => false, 'label' => "An opponent's mood with a value less than or equal to that mood's, to swap for it", 'excludes_teammate' => true],
+        ],
+        'grudge' => [
+            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'other', 'required' => true, 'label' => "Opponent whose round wins give you extra plays", 'excludes_teammate' => true],
+        ],
         'resignation' => [
             ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => true, 'label' => 'Card to put on the bottom of the deck (cost to play this card)'],
         ],
@@ -653,6 +679,24 @@ final class CardChoiceSchema
             self::forEffectKey($effectKey),
             static fn (array $field): bool => ($field['stage'] ?? null) !== 'cost'
         ));
+    }
+
+    /**
+     * Every reaction field (Scorn's, Dominance's) that picks a mood belonging to someone else -- keys a play's choices
+     * may carry besides its own card's fields, checked for Solace/Reassurance protection alongside them.
+     *
+     * @return string[]
+     */
+    public static function reactionMoodFieldKeys(): array
+    {
+        $keys = [];
+        foreach (self::REACTIONS as $template) {
+            if (($template['type'] ?? null) === 'mood' && ($template['scope'] ?? 'any') !== 'own') {
+                $keys[] = $template['key'];
+            }
+        }
+
+        return $keys;
     }
 
     /** @return ?array<string, mixed> */

@@ -11914,11 +11914,14 @@
                     : [];
                 if (field.candidate_card_ids) {
                     return selfOption.concat(currentState.in_play
+                        .filter((c) => !c.unchoosable_by_you)
                         .filter((c) => field.candidate_card_ids.includes(c.card_id))
                         .map((c) => ({ value: c.card_id, label: cardLabel(c), ownerLabel: playerLabelFor(c.owner_game_player_id) })));
                 }
                 return selfOption.concat(currentState.in_play
                     .filter((c) => c.card_id !== card.card_id)
+                    // Solace / Reassurance: an opponent's mood your effects can't choose is never offered.
+                    .filter((c) => !c.unchoosable_by_you)
                     .filter((c) => {
                         if (field.scope === 'own') return c.owner_game_player_id === currentState.you.game_player_id;
                         if (field.scope === 'other') return c.owner_game_player_id !== currentState.you.game_player_id;
@@ -12623,6 +12626,8 @@
         activePendingDecision = pendingDecision;
         const titlesByDecisionType = {
             duplicity_repeat_offer: "Repeat " + (pendingDecision.played_card_name || 'this mood') + "'s effect?",
+            // Optimism / Admiration: another mood's effect happens again, and its choices are made fresh.
+            delegated_effect_choices: (pendingDecision.played_card_name || 'This mood') + ": choices for the repeated effect",
             enthusiasm_extra_score: "Enthusiasm's bonus",
             passion_score_opponent_mood: "Passion's bonus",
             after_scoring_order: 'Order your after-scoring effects',
@@ -12651,7 +12656,7 @@
         // card_id-only exclusion this was originally added for still
         // works either way.
         const playedCardInPlay = currentState.in_play.find((c) => c.card_id === pendingDecision.played_card_id);
-        const fieldCard = pendingDecision.decision_type === 'duplicity_repeat_offer'
+        const fieldCard = (pendingDecision.decision_type === 'duplicity_repeat_offer' || pendingDecision.decision_type === 'delegated_effect_choices')
             ? (playedCardInPlay || { card_id: pendingDecision.played_card_id })
             : PENDING_DECISION_PLACEHOLDER_CARD;
 

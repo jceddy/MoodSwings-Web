@@ -11241,7 +11241,7 @@ final class GameService
      *
      * @return array{round_scored: bool, game_completed: bool}
      */
-    private function applyDrawRecipientDecision(int $gameId, int $roundId, int $recipientGamePlayerId): array
+    private function applyDrawRecipientDecision(int $gameId, int $roundId, int $recipientGamePlayerId, bool $skipDraw = false): array
     {
         $pdo = Connection::get();
         $roundStmt = $pdo->prepare('SELECT * FROM game_rounds WHERE id = :id');
@@ -11249,7 +11249,11 @@ final class GameService
         $round = $roundStmt->fetch();
 
         $state = $this->boardStates->load($gameId);
-        $state->drawCard($recipientGamePlayerId);
+        // Forgetfulness: no one draws at the end of the round, so the losing team has no draw to give out -- this only
+        // goes on to create the next round.
+        if (!$skipDraw) {
+            $state->drawCard($recipientGamePlayerId);
+        }
 
         $winningTeamId = (int) $round['winner_team_id'];
         // Honor (or Awe's own one-time version) can still override who
@@ -11268,7 +11272,9 @@ final class GameService
 
         $this->boardStates->save($gameId, $state);
 
-        $this->logEvent($gameId, $roundId, $recipientGamePlayerId, 'team_draw_recipient_decided', null, ['game_player_id' => $recipientGamePlayerId], $state);
+        if (!$skipDraw) {
+            $this->logEvent($gameId, $roundId, $recipientGamePlayerId, 'team_draw_recipient_decided', null, ['game_player_id' => $recipientGamePlayerId], $state);
+        }
 
         // Representative only when there's no override -- its TEAM is
         // what matters until that team's own decision resolves (see
@@ -13276,6 +13282,7 @@ final class GameService
         $state->clearEndOfRoundValueBonuses();
         $state->resetRoundHandDiscards();
         $state->resetRoundMoodPlays();
+        $state->resetRoundChoiceShields();
         $state->resetTurnReactions();
 
         // A single source of truth for "who won" -- see its own docblock
@@ -13339,12 +13346,22 @@ final class GameService
             // untouched by resignation), but they're done playing -- skip
             // their draw the same way $turnOrder already excludes them
             // from winning.
-            foreach ($turnOrder as $playerId) {
-                if ($playerId !== $winnerId) {
-                    $state->drawCard($playerId);
+            // Forgetfulness: no one draws at the end of this round.
+            if (!$state->noEndOfRoundDraw()) {
+                foreach ($turnOrder as $playerId) {
+                    if ($playerId !== $winnerId) {
+                        $state->drawCard($playerId);
+                        // Despair: "At the end of each round you lose, you draw an additional card" -- one for each in play.
+                        for ($extra = $state->countMoodsInPlayWithEffectiveKey($playerId, 'despair'); $extra > 0; $extra--) {
+                            $state->drawCard($playerId);
+                        }
+                    }
                 }
             }
         }
+
+        // The round has been scored and its draws made: its flat score and no-draw switch end with it.
+        $state->resetRoundScoringFlags();
 
         $resolvedOrders = $this->resolvedAfterScoringOrders($roundId);
         $beforeAfterScoringHooks = $this->inPlayOwnershipSignature($state);
@@ -13407,10 +13424,11 @@ final class GameService
         }
 
         $insertRound = $pdo->prepare(
-            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, hurt_feelings_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status, pre_after_scoring_event_id)
-             VALUES (:game_id, :round_number, :first_player, :hurt_feelings, :first_player_turn, :plays_remaining, :pending_play_grants, 'in_progress', :pre_after_scoring_event_id)"
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, hurt_feelings_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, turn_flags, status, pre_after_scoring_event_id)
+             VALUES (:game_id, :round_number, :first_player, :hurt_feelings, :first_player_turn, :plays_remaining, :pending_play_grants, :turn_flags, 'in_progress', :pre_after_scoring_event_id)"
         );
         $insertRound->execute([
+            'turn_flags' => json_encode($state->turnFlags()),
             'game_id' => $gameId,
             'round_number' => (int) $round['round_number'] + 1,
             'first_player' => $nextFirstPlayer,
@@ -14016,6 +14034,15 @@ final class GameService
         // 'draw_recipient' branch actually draws the card AND creates the
         // next round (and its own turn_order decision) once resolved, so
         // only one game_team_decisions row is ever open at a time.
+        // Forgetfulness: no one draws this round, so there is no draw for the losing team to decide -- go straight on to the
+        // next round (the state was saved above with the flag still set; a new round starts without it).
+        if ($state->noEndOfRoundDraw()) {
+            $this->applyDrawRecipientDecision($gameId, $roundId, $this->teamMembers($gameId, $losingTeamId)[0], skipDraw: true);
+            $state->resetRoundScoringFlags();
+
+            return ['round_scored' => true, 'game_completed' => false, 'pending_decision' => true];
+        }
+
         $this->createTeamDecision($gameId, $roundId, $losingTeamId, 'draw_recipient', $this->teamMembers($gameId, $losingTeamId));
 
         return ['round_scored' => true, 'game_completed' => false, 'pending_decision' => true];
@@ -14135,6 +14162,9 @@ final class GameService
         }
         if (!$state->isInPlay($targetMoodId) || $state->ownerOf($targetMoodId) === $state->ownerOf($cardId)) {
             throw new InvalidChoiceException("Card {$targetMoodId} is not a valid opponent mood for Passion to score");
+        }
+        if ($state->isProtectedFromChoiceBy($targetMoodId, $state->ownerOf($cardId))) {
+            throw new InvalidChoiceException("Card {$targetMoodId} can't be chosen for Passion to score");
         }
 
         return $state->valueOf($targetMoodId);
@@ -15046,6 +15076,16 @@ final class GameService
         // second bare null.
         $grants = $baseCount > 1 ? [null, ['sourceLabel' => 'Hurt Feelings']] : [null];
 
+        // Pettiness/Overconfidence/Rudeness: whatever was waiting for this player's turn comes into force now, for
+        // this turn only (BoardState::beginTurnFlags(); persisted with the grants by updateRoundTurnState()).
+        $state->beginTurnFlags($baseCount, $state->consumePendingTurnRestrictionsFor($playerId));
+
+        // With Restraint in play, or on a Rudeness turn, no mood may let a player play an additional mood: only the
+        // base plays are left, and banked Joy/Generosity plays stay banked rather than being spent on nothing.
+        if ($state->extraPlaysBlocked()) {
+            return $grants;
+        }
+
         foreach ($this->effectiveSourceCardIds($state, $playerId, 'hope') as $hopeSourceCardId) {
             $grants[] = ['sourceCardId' => $hopeSourceCardId, 'requiresSourceInPlay' => true];
         }
@@ -15069,8 +15109,20 @@ final class GameService
             }
         }
 
+        // Grudge: "During each of your turns, you may play an additional mood for each round the chosen player has won" -- read
+        // as the turn starts, from the opponent each Grudge was played against; lost if that Grudge leaves play first.
+        foreach ($state->moodsOwnedBy($playerId) as $mood) {
+            if ($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'] !== 'grudge') {
+                continue;
+            }
+            $grudgeTarget = $state->effectState($mood->cardId, 'grudgeTargetPlayerId');
+            for ($extra = $grudgeTarget === null ? 0 : $state->roundWinsOf((int) $grudgeTarget); $extra > 0; $extra--) {
+                $grants[] = ['sourceCardId' => $mood->cardId, 'requiresSourceInPlay' => true];
+            }
+        }
+
         foreach ($state->consumeBankedExtraPlaysFor($playerId) as $banked) {
-            $grants[] = ['sourceCardId' => $state->effectiveCardId($banked['sourceCardId'])];
+            $grants[] = [...($banked['restriction'] ?? []), 'sourceCardId' => $state->effectiveCardId($banked['sourceCardId'])];
         }
 
         // Chaos Draft (issue #405): every one of $playerId's own in-play
@@ -15261,6 +15313,8 @@ final class GameService
         $state->clearEndOfRoundValueBonuses();
         $state->resetRoundHandDiscards();
         $state->resetRoundMoodPlays();
+        $state->resetRoundChoiceShields();
+        $state->resetRoundScoringFlags();
         $state->resetTurnReactions();
 
         $format = $this->fetchGame($gameId)['format'];
@@ -15313,10 +15367,11 @@ final class GameService
                 $this->seatFirstPlayerOverride($gameId, $newRoundId, $nextFirstPlayer, $format);
             } else {
                 $insertRound = $pdo->prepare(
-                    "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
-                     VALUES (:game_id, :round_number, :first_player, :first_player_turn, :plays_remaining, :pending_play_grants, 'in_progress')"
+                    "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, turn_flags, status)
+                     VALUES (:game_id, :round_number, :first_player, :first_player_turn, :plays_remaining, :pending_play_grants, :turn_flags, 'in_progress')"
                 );
                 $insertRound->execute([
+                    'turn_flags' => json_encode($state->turnFlags()),
                     'game_id' => $gameId,
                     'round_number' => (int) $round['round_number'] + 1,
                     'first_player' => $nextFirstPlayer,
@@ -19623,6 +19678,9 @@ final class GameService
                 // exist as a grant at all until computeFreshGrants() creates
                 // it fresh when that turn actually starts.
                 'has_unused_play_grant' => in_array($cardId, $activeGrantSourceCardIds, true),
+                // Solace / Reassurance: the viewer's own effects can't choose this mood (an opponent's, shielded or a
+                // cheap one under Reassurance) -- the target pickers leave it out.
+                'unchoosable_by_you' => $viewerGamePlayerId !== null && $state->isProtectedFromChoiceBy($cardId, $viewerGamePlayerId),
                 // A permanent one-time "after playing this mood, ... this
                 // mood's value becomes N" trigger (Dignity, Delight, ...)
                 // has locked its value in via BoardState::setValueOverride()
@@ -22322,7 +22380,7 @@ final class GameService
     {
         $total = 0;
         foreach ($state->moodsOwnedBy($playerId) as $mood) {
-            $total += $state->valueOf($mood->cardId);
+            $total += $state->scoredValueOf($mood->cardId);
         }
 
         return $total;
@@ -23318,9 +23376,10 @@ final class GameService
         }
 
         $stmt = $pdo->prepare(
-            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, loop_state_signature_counts = :loop_state_signature_counts, chaos_loop_state = :chaos_loop_state, discarded_this_round = :discarded_this_round, skip_scoring = :skip_scoring, skip_scoring_first_player_game_player_id = :skip_scoring_first_player_id, skip_scoring_source_card_id = :skip_scoring_source_card_id, skip_scoring_owner_game_player_id = :skip_scoring_owner_id, awards_extra_win = :awards_extra_win, awards_extra_win_source_card_id = :awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id = :awards_extra_win_owner_id WHERE id = :round_id'
+            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, loop_state_signature_counts = :loop_state_signature_counts, chaos_loop_state = :chaos_loop_state, discarded_this_round = :discarded_this_round, skip_scoring = :skip_scoring, skip_scoring_first_player_game_player_id = :skip_scoring_first_player_id, skip_scoring_source_card_id = :skip_scoring_source_card_id, skip_scoring_owner_game_player_id = :skip_scoring_owner_id, awards_extra_win = :awards_extra_win, awards_extra_win_source_card_id = :awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id = :awards_extra_win_owner_id, turn_flags = :turn_flags WHERE id = :round_id'
         );
         $stmt->execute([
+            'turn_flags' => json_encode($state->turnFlags()),
             'player_id' => $playerId,
             'plays_remaining' => count($playGrants),
             'pending_play_grants' => json_encode($persistedPlayGrants ?? $playGrants),

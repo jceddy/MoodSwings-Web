@@ -177,6 +177,23 @@ use MoodSwings\Rules\Effects\Custom\ReflectionEffect;
 use MoodSwings\Rules\Effects\Custom\ReverieEffect;
 use MoodSwings\Rules\Effects\Custom\WarinessEffect;
 use MoodSwings\Rules\Effects\Custom\LongingEffect;
+use MoodSwings\Rules\Effects\Custom\GrudgeEffect;
+use MoodSwings\Rules\Effects\Custom\PrudenceEffect;
+use MoodSwings\Rules\Effects\Custom\ReckoningEffect;
+use MoodSwings\Rules\Effects\Custom\ShrewdnessEffect;
+use MoodSwings\Rules\Effects\Custom\AdmirationEffect;
+use MoodSwings\Rules\Effects\Custom\OptimismEffect;
+use MoodSwings\Rules\Effects\Custom\ReinvigorationEffect;
+use MoodSwings\Rules\Effects\Custom\WistfulnessEffect;
+use MoodSwings\Rules\Effects\Custom\ForgetfulnessEffect;
+use MoodSwings\Rules\Effects\Custom\LevelheadednessEffect;
+use MoodSwings\Rules\Effects\Custom\DeflectionEffect;
+use MoodSwings\Rules\Effects\Custom\HauntingEffect;
+use MoodSwings\Rules\Effects\Custom\OverconfidenceEffect;
+use MoodSwings\Rules\Effects\Custom\PettinessEffect;
+use MoodSwings\Rules\Effects\Custom\PlayRuleMarkerEffect;
+use MoodSwings\Rules\Effects\Custom\RudenessEffect;
+use MoodSwings\Rules\Effects\Custom\SolaceEffect;
 use MoodSwings\Rules\Effects\Custom\GrievanceEffect;
 use MoodSwings\Rules\Effects\Custom\UrgencyEffect;
 use MoodSwings\Rules\Effects\Custom\DejectionEffect;
@@ -572,6 +589,31 @@ final class DefaultEffectRegistry
         // Hand-size check, plays-this-round and distinct-values cards.
         $registry->register('grievance', new GrievanceEffect());
         $registry->register('urgency', new UrgencyEffect());
+
+        // Play-restriction cards (turn flags: BoardState::beginTurnFlags()).
+        foreach (['obstinacy', 'restraint', 'defensiveness', 'reassurance', 'elusiveness', 'compassion', 'despair', 'opportunism', 'sentimentality', 'rancor'] as $playRuleKey) {
+            $registry->register($playRuleKey, new PlayRuleMarkerEffect());
+        }
+        $registry->register('rudeness', new RudenessEffect());
+        $registry->register('solace', new SolaceEffect());
+        $registry->register('deflection', new DeflectionEffect());
+        $registry->register('haunting', new HauntingEffect());
+        $registry->register('forgetfulness', new ForgetfulnessEffect());
+        $registry->register('levelheadedness', new LevelheadednessEffect());
+
+        // Repeat effects (MoodPlayService runs the delegated and repeated effects).
+        $registry->register('optimism', new OptimismEffect());
+        $registry->register('admiration', new AdmirationEffect());
+        $registry->register('wistfulness', new WistfulnessEffect());
+        $registry->register('reinvigoration', new ReinvigorationEffect());
+
+        // The last four cards.
+        $registry->register('prudence', new PrudenceEffect());
+        $registry->register('reckoning', new ReckoningEffect());
+        $registry->register('shrewdness', new ShrewdnessEffect());
+        $registry->register('grudge', new GrudgeEffect());
+        $registry->register('pettiness', new PettinessEffect());
+        $registry->register('overconfidence', new OverconfidenceEffect());
         $registry->register('restlessness', new CustomConditionalValueEffect(CustomConditionalValueEffect::DISTINCT_OWN_VALUES_AT_LEAST, 3));
         $registry->register('adrenaline', new FirstEachTurnExtraPlayEffect(FirstEachTurnExtraPlayEffect::RED_MOOD));
         $registry->register('affinity', new FirstEachTurnExtraPlayEffect(FirstEachTurnExtraPlayEffect::MATCHING_NUMBER));

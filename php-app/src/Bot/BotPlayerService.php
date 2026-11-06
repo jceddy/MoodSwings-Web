@@ -571,6 +571,8 @@ final class BotPlayerService
             'sneakiness' => $this->sneakinessTargetPlayerId($state, $botGamePlayerId) !== null,
             'pacifism' => $this->pacifismTargetMoodIds($state, $botGamePlayerId) !== [],
             'anger' => $this->angerTargetMoodIds($state, $cardId, $botGamePlayerId) !== [],
+            // Reinvigoration wipes the bot's own board and locks the rest of its turn to replays it would have to plan -- not played.
+            'reinvigoration' => false,
             default => true,
         };
     }
@@ -804,6 +806,25 @@ final class BotPlayerService
             }
         }
 
+        // Prudence's look at the top of the deck: the bot leaves both cards where they are and takes either order (its multi field
+        // takes a list, which the generic revealed-card pick below would not give).
+        if ($decisionType === 'prudence_bottom') {
+            return [];
+        }
+
+        // Reckoning: the mood a player KEEPS is the one choice that isn't a loss, so the bot keeps its highest-value mood (the generic
+        // own-mood pick below minimizes what it gives up, which would keep its worst one).
+        if ($decisionType === 'reckoning_keep_mood' && isset($field['candidate_card_ids'])) {
+            $best = null;
+            foreach ($field['candidate_card_ids'] as $candidateId) {
+                if ($state->isInPlay($candidateId) && ($best === null || $state->valueOf($candidateId) > $state->valueOf($best))) {
+                    $best = $candidateId;
+                }
+            }
+
+            return $best === null ? [] : [$field['key'] => $best];
+        }
+
         // Greed/Nosiness/Entitlement/Inspiration: pick from cards the table has just seen revealed. The best card
         // (by draft priority, lowest id on a tie) is right every time -- taken for ourselves, or the one an
         // opponent should lose.
@@ -1015,7 +1036,7 @@ final class BotPlayerService
         $bestMoodId = null;
         $bestValue = -1;
         foreach ($state->moodsInPlay() as $mood) {
-            if ($mood->ownerId === $ownerGamePlayerId) {
+            if ($mood->ownerId === $ownerGamePlayerId || $state->isProtectedFromChoiceBy($mood->cardId, $ownerGamePlayerId)) {
                 continue;
             }
 

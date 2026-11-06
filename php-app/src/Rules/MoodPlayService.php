@@ -45,6 +45,15 @@ final class MoodPlayService
      */
     private const DUPLICITY_REPEAT_KEY = 'duplicity_repeat';
 
+    /**
+     * The key of the pending decision that asks the acting player for the fresh choices a repeated effect needs (Optimism,
+     * Admiration -- see DelegatesAfterPlaying), and the two markers a bag carries while that other card's effect is the one
+     * resolving: its effect key, and the card it runs as.
+     */
+    private const DELEGATE_ASK_KEY = 'delegate_choices';
+    private const DELEGATE_KEY = '__delegate_key';
+    private const DELEGATE_SOURCE = '__delegate_source';
+
     public function __construct(
         private readonly EffectRegistry $registry,
         private readonly ChaosEffectRegistry $chaosRegistry = new ChaosEffectRegistry(),
@@ -68,6 +77,22 @@ final class MoodPlayService
      */
     public function playMood(BoardState $state, int $playerId, int $cardId, PlayerChoices $choices, ?array $cardNames = null): PlayResult
     {
+        // $playerId's effect is the one resolving for the whole play (Elusiveness tells an opponent's from the owner's own).
+        $state->setEffectActor($playerId);
+        try {
+            $result = $this->resolvePlay($state, $playerId, $cardId, $choices, $cardNames);
+            $state->resolveRancorRetaliation();
+
+            return $result;
+        } finally {
+            $state->setEffectActor(null);
+        }
+    }
+
+    private function resolvePlay(BoardState $state, int $playerId, int $cardId, PlayerChoices $choices, ?array $cardNames): PlayResult
+    {
+        $this->assertNoProtectedReactionTarget($state, $playerId, $choices);
+
         if ($state->currentPlayerId() !== $playerId) {
             throw new IllegalPlayException("It is not player {$playerId}'s turn");
         }
@@ -76,6 +101,9 @@ final class MoodPlayService
         // otherwise permit the play -- see BoardState::bannedColorsThisRound().
         if (in_array($state->colorOf($cardId), $state->bannedColorsThisRound(), true)) {
             throw new IllegalPlayException("Card {$cardId}'s color is banned from being played this round");
+        }
+        if ($state->isNameBannedThisTurn($cardId)) {
+            throw new IllegalPlayException("Card {$cardId} can't be played this turn: a card with its name was returned to its player's hand");
         }
         if (!$state->hasUsablePlayGrant($cardId, $playerId)) {
             throw new IllegalPlayException("Player {$playerId} has no plays remaining this turn that allow playing card {$cardId}");
@@ -156,6 +184,8 @@ final class MoodPlayService
                 throw new InvalidChoiceException("Grant sourced from {$grantLabel} is not currently usable for playing {$cardLabel}");
             }
         }
+        // Asked before this play is counted: the turn's base plays are used up, so this mood is an additional one (Defensiveness).
+        $additionalPlay = $state->isAdditionalPlay();
         $consumedGrant = $state->useGrantFor($cardId, $playerId, $preferredGrantSourceCardId);
 
         if ($effectiveRow['hasToPlay']) {
@@ -172,6 +202,7 @@ final class MoodPlayService
             $state->moveHandToInPlay($playerId, $cardId, $copiedCardId);
         }
         $state->recordMoodPlayed($playerId);
+        $state->recordTurnPlay();
 
         // Gluttony/Insecurity tag whichever specific card ends up consuming
         // their granted extra play with effectState (e.g. "discard it after
@@ -201,6 +232,11 @@ final class MoodPlayService
             }
         }
 
+        // Overconfidence: spending one of the plays it granted costs the owner their next turn.
+        if ($consumedGrant !== null && isset($consumedGrant['onUsePendingTurnRestriction'])) {
+            $state->addPendingTurnRestriction($playerId, $consumedGrant['onUsePendingTurnRestriction']);
+        }
+
         if ($consumedGrant !== null && isset($consumedGrant['onUseEffectState'])) {
             foreach ($consumedGrant['onUseEffectState'] as $key => $value) {
                 if ($key === 'afterScoring' && is_array($value) && !isset($value['playerId'])) {
@@ -225,7 +261,7 @@ final class MoodPlayService
             $state->grantExtraPlay(1, ResilienceEffect::RESTRICTION, $cardId);
         }
 
-        return $this->resolveAfterPlayingChain($state, $cardId, $playerId, $choices, $choices, 0);
+        return $this->resolveAfterPlayingChain($state, $cardId, $playerId, $choices, $choices, 0, $state->afterPlayingSuppressedFor($playerId, $additionalPlay));
     }
 
     /**
@@ -267,11 +303,17 @@ final class MoodPlayService
         PlayerChoices $topLevelChoices,
         PlayerChoices $invocationChoices,
         int $invocationSeq,
+        bool $afterPlayingSuppressed = false,
     ): PlayResult {
         $reactorCandidateCardIds = array_values(array_map(
             static fn ($mood) => $mood->cardId,
             array_filter($state->moodsOwnedBy($playerId), static fn ($mood) => $mood->cardId !== $cardId),
         ));
+
+        // Defensiveness / Rudeness: this mood's after-playing effect doesn't happen (what it reacts to still does).
+        if ($afterPlayingSuppressed) {
+            return $this->finishAfterPlayingChain($state, $cardId, $playerId, $invocationChoices, $reactorCandidateCardIds);
+        }
 
         $effectiveRow = $state->catalogRow($state->effectiveCardId($cardId));
         if (!$effectiveRow['hasAfterPlaying']) {
@@ -296,10 +338,30 @@ final class MoodPlayService
         }
 
         $effectiveEffectKey = $effectiveRow['effectKey'];
+        $this->assertNoProtectedMoodChosen($state, $playerId, $effectiveEffectKey, $invocationChoices);
         $effect = $this->registry->for($effectiveEffectKey);
 
         $duplicitySources = $state->countMoodsInPlayWithEffectiveKey($playerId, 'duplicity');
         $eligibleSources = $effectiveEffectKey === 'duplicity' ? $duplicitySources - 1 : $duplicitySources;
+        // Wistfulness: "each time you play another mood from the discard pile, you may have that mood's after-playing effect
+        // happen an additional time" -- Duplicity's repeat, only for a mood played from the pile, and not for Wistfulness's own play.
+        if ($state->effectState($cardId, 'playedFromZone') === 'discard') {
+            $wistfulnessSources = $state->countMoodsInPlayWithEffectiveKey($playerId, 'wistfulness');
+            $eligibleSources += $effectiveEffectKey === 'wistfulness' ? $wistfulnessSources - 1 : $wistfulnessSources;
+        }
+
+        if ($effect instanceof DelegatesAfterPlaying) {
+            $plan = $effect->delegatedInvocation($state, $cardId, $playerId, $invocationChoices);
+            if ($plan === null) {
+                return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationChoices, $invocationSeq, $eligibleSources, $reactorCandidateCardIds);
+            }
+            $marked = $invocationChoices->with([self::DELEGATE_KEY => $plan['effectKey'], self::DELEGATE_SOURCE => $plan['sourceCardId']]);
+            if ($plan['fields'] !== []) {
+                return PlayResult::pending([$this->delegateChoicesRequest($playerId, $plan['fields'])], $cardId, $invocationSeq, $marked, $eligibleSources, $reactorCandidateCardIds);
+            }
+
+            return $this->runDelegatedInvocation($state, $cardId, $playerId, $topLevelChoices, $marked, $invocationSeq, $eligibleSources, $reactorCandidateCardIds, new PlayerChoices([]));
+        }
 
         if ($effect instanceof RequiresOpponentDecision) {
             $pendingDecisions = $effect->pendingDecisionsFor($state, $cardId, $playerId, $invocationChoices);
@@ -318,6 +380,41 @@ final class MoodPlayService
         }
 
         return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationChoices, $invocationSeq, $eligibleSources, $reactorCandidateCardIds);
+    }
+
+    /**
+     * Solace / Reassurance: "your opponents can't choose your moods". Every mood another player's play names -- through
+     * a mood field of the effect's own schema that isn't one of the player's own (scope 'own') -- must be one the
+     * player is allowed to choose; the schema is the list of what an effect chooses, so one check here covers every
+     * card (and every Duplicity repeat) without each effect repeating it. Effects where the owner picks their own
+     * moods (Fury, Vengeance), sweeps, random picks and "choose a value" are none of these fields, so they are unaffected.
+     */
+    private function assertNoProtectedMoodChosen(BoardState $state, int $playerId, string $effectKey, PlayerChoices $choices): void
+    {
+        foreach (CardChoiceSchema::afterPlayingFields($effectKey) as $field) {
+            if (($field['type'] ?? null) !== 'mood' || ($field['scope'] ?? 'any') === 'own') {
+                continue;
+            }
+            $this->assertChosenMoodsAllowed($state, $playerId, $choices, $field['key'], (bool) ($field['multi'] ?? false));
+        }
+    }
+
+    /** The same rule for the optional reaction fields (Scorn, Dominance) that ride with a play's choices. */
+    private function assertNoProtectedReactionTarget(BoardState $state, int $playerId, PlayerChoices $choices): void
+    {
+        foreach (CardChoiceSchema::reactionMoodFieldKeys() as $key) {
+            $this->assertChosenMoodsAllowed($state, $playerId, $choices, $key, false);
+        }
+    }
+
+    private function assertChosenMoodsAllowed(BoardState $state, int $playerId, PlayerChoices $choices, string $key, bool $multi): void
+    {
+        $ids = $multi ? $choices->ints($key) : array_filter([$choices->int($key)], static fn (?int $id) => $id !== null);
+        foreach ($ids as $moodId) {
+            if ($state->isProtectedFromChoiceBy($moodId, $playerId)) {
+                throw new InvalidChoiceException("Card {$moodId} can't be chosen by player {$playerId}'s effect");
+            }
+        }
     }
 
     /** The effect registry this service dispatches to (GameService looks up TurnStartEffect triggers through it). */
@@ -381,6 +478,30 @@ final class MoodPlayService
         array $reactorCandidateCardIds = [],
         string $pendingSource = 'effect',
     ): PlayResult {
+        $state->setEffectActor($playerId);
+        try {
+            $result = $this->resolvePendingAnswers($state, $cardId, $playerId, $topLevelChoices, $invocationChoices, $invocationSeq, $answers, $duplicityEligibleSources, $reactorCandidateCardIds, $pendingSource);
+            $state->resolveRancorRetaliation();
+
+            return $result;
+        } finally {
+            $state->setEffectActor(null);
+        }
+    }
+
+    /** @param array<string, PlayerChoices> $answers @param int[] $reactorCandidateCardIds */
+    private function resolvePendingAnswers(
+        BoardState $state,
+        int $cardId,
+        int $playerId,
+        PlayerChoices $topLevelChoices,
+        PlayerChoices $invocationChoices,
+        int $invocationSeq,
+        array $answers,
+        int $duplicityEligibleSources,
+        array $reactorCandidateCardIds,
+        string $pendingSource,
+    ): PlayResult {
         if (isset($answers[self::DUPLICITY_REPEAT_KEY])) {
             return $this->resolveDuplicityRepeatOffer($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $answers[self::DUPLICITY_REPEAT_KEY], $reactorCandidateCardIds);
         }
@@ -401,6 +522,27 @@ final class MoodPlayService
             }
 
             return $this->continueAfterChaosResolved($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $duplicityEligibleSources, $reactorCandidateCardIds);
+        }
+
+        // Optimism / Admiration: the acting player has just given the fresh choices the repeated effect needs...
+        if (isset($answers[self::DELEGATE_ASK_KEY])) {
+            return $this->runDelegatedInvocation($state, $cardId, $playerId, $topLevelChoices, $invocationChoices, $invocationSeq, $duplicityEligibleSources, $reactorCandidateCardIds, $answers[self::DELEGATE_ASK_KEY]->sub(self::DELEGATE_ASK_KEY));
+        }
+
+        // ... or the repeated effect itself paused for a decision and this answers it.
+        $delegateKey = $invocationChoices->string(self::DELEGATE_KEY);
+        if ($delegateKey !== null) {
+            $delegateEffect = $this->registry->for($delegateKey);
+            if (!$delegateEffect instanceof RequiresOpponentDecision) {
+                throw new IllegalPlayException("Effect '{$delegateKey}' has no pending decisions to resolve");
+            }
+            $delegateSource = $invocationChoices->int(self::DELEGATE_SOURCE) ?? $cardId;
+            $followUpDecisions = $delegateEffect->resolveDecisions($state, $delegateSource, $playerId, $invocationChoices, $answers);
+            if ($followUpDecisions !== []) {
+                return PlayResult::pending($followUpDecisions, $cardId, $invocationSeq, $invocationChoices, $duplicityEligibleSources, $reactorCandidateCardIds);
+            }
+
+            return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationChoices, $invocationSeq, $duplicityEligibleSources, $reactorCandidateCardIds);
         }
 
         $effectiveEffectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
@@ -566,6 +708,65 @@ final class MoodPlayService
         }
 
         return $this->finishAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $reactorCandidateCardIds);
+    }
+
+    /** The decision that asks $playerId for the fresh choices a repeated effect needs (a nested field of that effect's own choice fields). @param array<int, array<string, mixed>> $fields */
+    private function delegateChoicesRequest(int $playerId, array $fields): PendingDecisionRequest
+    {
+        return new PendingDecisionRequest(
+            key: self::DELEGATE_ASK_KEY,
+            targetPlayerId: $playerId,
+            decisionType: 'delegated_effect_choices',
+            field: [
+                'key' => self::DELEGATE_ASK_KEY,
+                'type' => 'nested',
+                'required' => false,
+                'label' => 'Choices for the repeated effect',
+                'fields' => $fields,
+            ],
+        );
+    }
+
+    /**
+     * Runs the effect a DelegatesAfterPlaying card chose (its effect key and the card it runs as are in the marked
+     * $invocationChoices) with $repeatChoices -- like resolveAfterPlayingChain() does for a card's own effect, minus the
+     * things only a play has (the Duplicity/Wistfulness snapshot is the original card's, carried through unchanged) -- and then
+     * carries on with the ORIGINAL card's chain. If the effect needs someone's decision the play pauses under the original
+     * card, the bag tagged with the markers so the answer is routed back to this effect.
+     *
+     * @param int[] $reactorCandidateCardIds
+     */
+    private function runDelegatedInvocation(
+        BoardState $state,
+        int $cardId,
+        int $playerId,
+        PlayerChoices $topLevelChoices,
+        PlayerChoices $markedChoices,
+        int $invocationSeq,
+        int $eligibleSources,
+        array $reactorCandidateCardIds,
+        PlayerChoices $repeatChoices,
+    ): PlayResult {
+        $effectKey = $markedChoices->requireString(self::DELEGATE_KEY);
+        $sourceCardId = $markedChoices->int(self::DELEGATE_SOURCE) ?? $cardId;
+        $this->assertNoProtectedMoodChosen($state, $playerId, $effectKey, $repeatChoices);
+
+        $effect = $this->registry->for($effectKey);
+        $resumeChoices = $repeatChoices->with([self::DELEGATE_KEY => $effectKey, self::DELEGATE_SOURCE => $sourceCardId]);
+        if ($effect instanceof RequiresOpponentDecision) {
+            $pendingDecisions = $effect->pendingDecisionsFor($state, $sourceCardId, $playerId, $repeatChoices);
+            if ($pendingDecisions !== []) {
+                return PlayResult::pending($pendingDecisions, $cardId, $invocationSeq, $resumeChoices, $eligibleSources, $reactorCandidateCardIds);
+            }
+            $followUpDecisions = $effect->resolveDecisions($state, $sourceCardId, $playerId, $repeatChoices, []);
+            if ($followUpDecisions !== []) {
+                return PlayResult::pending($followUpDecisions, $cardId, $invocationSeq, $resumeChoices, $eligibleSources, $reactorCandidateCardIds);
+            }
+        } else {
+            $effect->afterPlaying($state, $sourceCardId, $playerId, $repeatChoices);
+        }
+
+        return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $markedChoices, $invocationSeq, $eligibleSources, $reactorCandidateCardIds);
     }
 
     /**

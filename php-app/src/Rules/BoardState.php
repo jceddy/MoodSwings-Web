@@ -204,6 +204,80 @@ final class BoardState
     /** See $awardsExtraWinSourceCardId's own docblock. */
     private ?int $awardsExtraWinOwnerId = null;
 
+    /**
+     * Solace: the players whose moods their opponents can't choose until the end of the round
+     * (game_rounds.round_choice_shields, emptied with the other round records) -- see isProtectedFromChoiceBy().
+     *
+     * @var array<int, true>
+     */
+    private array $roundChoiceShields = [];
+
+    /**
+     * The player whose play or effect is resolving right now (set by MoodPlayService for a play and for the
+     * answers to its pending decisions), so a replacement effect can tell an opponent's effect from the owner's own
+     * -- Elusiveness. Null outside a play (scoring, turn-start triggers, a hand-built board), where nothing is replaced.
+     */
+    private ?int $effectActorId = null;
+
+    /**
+     * @var array<int, int> ownerId => how many Sentimentality moods of theirs have left play (to the discard pile) during the
+     * current resolution, so a sweep that takes Sentimentality first still pays out for the moods it takes after it.
+     */
+    private array $sentimentalityLeftThisResolution = [];
+
+    /**
+     * @var array<int, array{ownerId: int, actorId: int}> Rancor mood id => the owner and the opponent whose effect put one of the
+     * owner's other moods into the discard pile -- each Rancor retaliates once per effect, when it finishes
+     * (resolveRancorRetaliation()).
+     */
+    private array $pendingRancor = [];
+
+    /**
+     * @var array<int, true> the players who had Elusiveness in play when the current play began (see setEffectActor()) --
+     * a sweep moves their moods one at a time, and Elusiveness itself must not stop protecting the rest by going first.
+     */
+    private array $elusivenessOwners = [];
+
+    /**
+     * Levelheadedness: "This round, each mood scores 2 instead of its value." The score every mood contributes this
+     * round, or null for each mood's own value. Persisted on the live round (game_rounds.round_flat_mood_score) and
+     * gone with it -- the next round's row starts without one.
+     */
+    private ?int $flatMoodScore = null;
+
+    /** Forgetfulness: "This round, no one draws a card at the end of the round." Persisted like $flatMoodScore (game_rounds.round_no_end_draw). */
+    private bool $noEndOfRoundDraw = false;
+
+    /**
+     * Forgetfulness: how many times "the winner of the previous round loses a round win" has happened since the board
+     * was last saved. BoardStateRepository::save() applies them to the previous scored round's wins (it is called at
+     * every pause and at the end of a play) and clears the count, so none is lost to a Duplicity pause.
+     */
+    private int $pendingWinForfeits = 0;
+
+    /** Pettiness/Overconfidence: the player may not play moods this turn. */
+    public const TURN_NO_PLAYS = 'no_plays';
+    /** Reinvigoration: "You can't play any moods this turn except moods played this way" -- the restriction is this prefix plus the card's id. */
+    public const TURN_ONLY_FROM = 'only_from:';
+    /** Rudeness: no additional moods this turn, and no after-playing effects of the moods played in it. */
+    public const TURN_RUDENESS = 'rudeness';
+
+    /**
+     * How many moods the current turn's player has played so far this turn and how many of the turn's grants are
+     * its base plays (1, or 2 with Hurt Feelings) -- a mood is an "additional" one (Restraint, Defensiveness,
+     * Rudeness) once the base plays are used up. Which grant a play consumed can't tell them apart (the most
+     * restrictive usable grant is spent first), so it is counted. Persisted with the turn's grants
+     * (game_rounds.turn_flags) and started over by beginTurnFlags().
+     */
+    private int $turnPlaysMade = 0;
+    private int $turnBasePlays = 1;
+
+    /** @var list<string> TURN_* restrictions in force for the current turn, taken from pendingTurnRestrictions when it began. */
+    private array $turnRestrictions = [];
+
+    /** @var array<int, list<string>> playerId => TURN_* restrictions waiting for that player's next turn -- see addPendingTurnRestriction(). */
+    private array $pendingTurnRestrictions = [];
+
     /** @var array<int, array<string, mixed>> cardId => effectState staged during payToPlayCost(), before the card exists as a MoodInPlay -- see stagePrePlayEffectState(). */
     private array $pendingEffectState = [];
 
@@ -1088,6 +1162,24 @@ final class BoardState
     public function moveInPlayToDiscard(int $cardId): void
     {
         $ownerId = $this->moodInPlay($cardId)->ownerId;
+        $leavingEffectKey = $this->catalogRow($this->effectiveCardId($cardId))['effectKey'];
+        // Grudge: "If this mood would leave play, put it on the bottom of the deck instead." It is looked at before Elusiveness: a Grudge
+        // that Elusiveness would bounce to its owner's hand would only be sent to the bottom of the deck by this anyway.
+        if ($leavingEffectKey === 'grudge') {
+            $this->moveInPlayToBottomOfDeck($cardId);
+
+            return;
+        }
+        // Elusiveness: an opponent's effect that would put one of its owner's moods into the discard pile puts it into their
+        // hand instead -- so nothing reaches the discard pile, and nothing that watches the pile happens.
+        if ($this->effectActorId !== null
+            && $ownerId !== $this->effectActorId
+            && !$this->isTeammate($this->effectActorId, $ownerId)
+            && isset($this->elusivenessOwners[$ownerId])) {
+            $this->moveInPlayToHand($cardId);
+
+            return;
+        }
         $value = $this->valueOf($cardId);
         $this->discardOwners[$cardId] = $ownerId;
         unset($this->moodsInPlay[$cardId]);
@@ -1096,10 +1188,16 @@ final class BoardState
         $this->recordMove($cardId, 'play', 'discard');
         $this->pendingChaosDiscardEvents[] = ['cardId' => $cardId, 'ownerId' => $ownerId, 'value' => $value];
         $this->cascadeMoodLeavingPlay($cardId);
+        $this->moodDiscardTriggers($cardId, $ownerId, $leavingEffectKey);
     }
 
     public function moveInPlayToHand(int $cardId): void
     {
+        if ($this->catalogRow($this->effectiveCardId($cardId))['effectKey'] === 'grudge') {
+            $this->moveInPlayToBottomOfDeck($cardId); // Grudge: leaving play, into a hand included, sends it to the bottom of the deck
+
+            return;
+        }
         $owner = $this->moodInPlay($cardId)->ownerId;
         unset($this->moodsInPlay[$cardId]);
         $this->hands[$owner][] = $cardId;
@@ -1111,6 +1209,11 @@ final class BoardState
     public function moveInPlayToPlayersHand(int $cardId, int $newOwnerId): void
     {
         $this->moodInPlay($cardId);
+        if ($this->catalogRow($this->effectiveCardId($cardId))['effectKey'] === 'grudge') {
+            $this->moveInPlayToBottomOfDeck($cardId);
+
+            return;
+        }
         unset($this->moodsInPlay[$cardId]);
         $this->hands[$newOwnerId][] = $cardId;
         $this->recordMove($cardId, 'play', 'hand', toPlayerId: $newOwnerId);
@@ -1180,6 +1283,7 @@ final class BoardState
         $this->discardedThisRound = true;
         $this->roundHandDiscards[$playerId] = true;
         $this->recordMove($cardId, 'hand', 'discard', fromPlayerId: $playerId);
+        $this->opportunismTakes($playerId, $cardId);
     }
 
     /**
@@ -1228,6 +1332,19 @@ final class BoardState
         }
         array_splice($this->decks[$key], $index, 1);
         $this->decks[$key][] = $cardId;
+        $this->recordMove($cardId, 'deck', 'deck', fromPlayerId: $playerId);
+    }
+
+    /** Prudence: moves a card already in $playerId's deck to the top of that deck. */
+    public function moveDeckCardToTop(int $playerId, int $cardId): void
+    {
+        $key = $this->deckKeyFor($playerId);
+        $index = array_search($cardId, $this->decks[$key] ?? [], true);
+        if ($index === false) {
+            throw new InvalidArgumentException("Card {$cardId} is not in player {$playerId}'s deck");
+        }
+        array_splice($this->decks[$key], $index, 1);
+        array_unshift($this->decks[$key], $cardId);
         $this->recordMove($cardId, 'deck', 'deck', fromPlayerId: $playerId);
     }
 
@@ -2266,6 +2383,7 @@ final class BoardState
         // as an indistinguishable second "your normal turn".
         $this->playGrants = $hasHurtFeelings ? [null, ['sourceLabel' => 'Hurt Feelings']] : [null];
         $this->turnStateSignatureCounts = [];
+        $this->beginTurnFlags($hasHurtFeelings ? 2 : 1, []);
     }
 
     /**
@@ -2542,6 +2660,8 @@ final class BoardState
         $this->roundFirstPlayerId = $playerId;
         $this->currentRoundNumber = $roundNumber;
         $this->roundMoodPlays = [];
+        $this->roundChoiceShields = [];
+        $this->resetRoundScoringFlags();
     }
 
     /**
@@ -2736,7 +2856,39 @@ final class BoardState
             }
         }
 
-        return null;
+        return $this->compassionFirstPlayer();
+    }
+
+    /**
+     * Compassion: "The player with the fewest moods goes first each round, regardless of who won the previous round. (If
+     * players are tied, the usual order applies.)" -- the one player with strictly fewer moods than every other active
+     * player, or null (the usual order: the round's winner) when none or no such player. An explicit choice (Honor, Awe)
+     * is looked at first, so it wins if both are somehow in play.
+     */
+    private function compassionFirstPlayer(): ?int
+    {
+        $inPlay = false;
+        foreach ($this->moodsInPlay as $mood) {
+            if ($this->catalogRow($this->effectiveCardId($mood->cardId))['effectKey'] === 'compassion') {
+                $inPlay = true;
+                break;
+            }
+        }
+        if (!$inPlay) {
+            return null;
+        }
+
+        $counts = [];
+        foreach ($this->activePlayerOrder() as $playerId) {
+            $counts[$playerId] = count($this->moodsOwnedBy($playerId));
+        }
+        if ($counts === []) {
+            return null;
+        }
+        $fewest = min($counts);
+        $holders = array_keys(array_filter($counts, static fn (int $count): bool => $count === $fewest));
+
+        return count($holders) === 1 ? $holders[0] : null;
     }
 
     /**
@@ -2831,9 +2983,15 @@ final class BoardState
      * consumeBankedExtraPlaysFor() at the start of $beneficiaryPlayerId's
      * own next turn.
      */
-    public function bankExtraPlay(int $beneficiaryPlayerId, int $sourceCardId): void
+    /**
+     * @param ?array{type?: string, values?: int[], source?: string} $restriction what the banked play may be spent on
+     *     (Haunting: only moods from the discard pile); absent for Joy/Generosity's unrestricted plays
+     */
+    public function bankExtraPlay(int $beneficiaryPlayerId, int $sourceCardId, ?array $restriction = null): void
     {
-        $this->bankedExtraPlays[$beneficiaryPlayerId][] = ['sourceCardId' => $sourceCardId];
+        $this->bankedExtraPlays[$beneficiaryPlayerId][] = $restriction === null
+            ? ['sourceCardId' => $sourceCardId]
+            : ['sourceCardId' => $sourceCardId, 'restriction' => $restriction];
     }
 
     /**
@@ -2843,7 +3001,7 @@ final class BoardState
      * consume-before-granting convention useGrantFor() itself follows for
      * a single grant.
      *
-     * @return array<int, array{sourceCardId: int}>
+     * @return array<int, array{sourceCardId: int, restriction?: array<string, mixed>}>
      */
     public function consumeBankedExtraPlaysFor(int $playerId): array
     {
@@ -2865,6 +3023,358 @@ final class BoardState
     public function bankedExtraPlaysByPlayer(): array
     {
         return $this->bankedExtraPlays;
+    }
+
+    // --- discard triggers: Opportunism, Sentimentality, Rancor ---
+
+    /**
+     * Opportunism: "Each time an opponent discards a card from their hand, you put that card into your hand." When more than one
+     * opponent of the discarder has Opportunism in play -- the card is only one -- the first in seat order starting with the
+     * active player (whose turn it is) takes it, and then turn order; a teammate's discard isn't an opponent's.
+     */
+    private function opportunismTakes(int $discarderId, int $cardId): void
+    {
+        $order = $this->activePlayerOrder();
+        $start = $this->currentPlayerId !== null ? array_search($this->currentPlayerId, $order, true) : false;
+        if ($start !== false) {
+            $order = [...array_slice($order, $start), ...array_slice($order, 0, $start)];
+        }
+
+        foreach ($order as $holderId) {
+            if ($holderId === $discarderId || $this->isTeammate($discarderId, $holderId)) {
+                continue;
+            }
+            if ($this->countMoodsInPlayWithEffectiveKey($holderId, 'opportunism') > 0) {
+                $this->moveDiscardToHand($holderId, $cardId);
+
+                return;
+            }
+        }
+    }
+
+    /**
+     * What a mood going from play to the discard pile sets off (called once it has gone):
+     *  - Sentimentality: its owner draws a card for each Sentimentality of theirs that is NOT the mood leaving -- those in play,
+     *    plus any that left earlier in this same resolution (so a sweep taking Sentimentality first still pays out for the rest).
+     *  - Rancor: if an opponent's effect did it, each Rancor the owner has in play (other than the mood leaving) will
+     *    retaliate once this effect finishes -- see resolveRancorRetaliation().
+     */
+    private function moodDiscardTriggers(int $cardId, int $ownerId, string $leavingEffectKey): void
+    {
+        $sentimentalities = $this->sentimentalityLeftThisResolution[$ownerId] ?? 0;
+        $rancors = [];
+        foreach ($this->moodsOwnedBy($ownerId) as $mood) {
+            $key = $this->catalogRow($this->effectiveCardId($mood->cardId))['effectKey'];
+            if ($key === 'sentimentality') {
+                $sentimentalities++;
+            } elseif ($key === 'rancor') {
+                $rancors[] = $mood->cardId;
+            }
+        }
+        if ($leavingEffectKey === 'sentimentality') {
+            $this->sentimentalityLeftThisResolution[$ownerId] = ($this->sentimentalityLeftThisResolution[$ownerId] ?? 0) + 1;
+        }
+        for ($i = 0; $i < $sentimentalities; $i++) {
+            $this->drawCard($ownerId);
+        }
+
+        if ($this->effectActorId !== null && $ownerId !== $this->effectActorId && !$this->isTeammate($this->effectActorId, $ownerId)) {
+            foreach ($rancors as $rancorId) {
+                $this->pendingRancor[$rancorId] = ['ownerId' => $ownerId, 'actorId' => $this->effectActorId];
+            }
+        }
+    }
+
+    /**
+     * Rancor: "Each time an opponent's effect puts one or more of your other moods into the discard pile, a random one of that
+     * player's moods with a value of 3 or less is put into the discard pile." Called when the effect has finished (MoodPlayService):
+     * each Rancor that was set off retaliates once, however many moods the effect took, as an effect of its own owner -- which
+     * can set off a Rancor on the other side in turn, but every round of it discards a mood, so it ends.
+     */
+    public function resolveRancorRetaliation(): void
+    {
+        while ($this->pendingRancor !== []) {
+            $rancorId = array_key_first($this->pendingRancor);
+            $trigger = $this->pendingRancor[$rancorId];
+            unset($this->pendingRancor[$rancorId]);
+
+            $candidates = [];
+            foreach ($this->moodsOwnedBy($trigger['actorId']) as $mood) {
+                if ($this->valueOf($mood->cardId) <= 3) {
+                    $candidates[] = $mood->cardId;
+                }
+            }
+            if ($candidates === []) {
+                continue;
+            }
+
+            $savedActor = $this->effectActorId;
+            $savedElusiveness = $this->elusivenessOwners;
+            $this->enterEffectActor($trigger['ownerId']);
+            $this->moveInPlayToDiscard($candidates[random_int(0, count($candidates) - 1)]);
+            $this->effectActorId = $savedActor;
+            $this->elusivenessOwners = $savedElusiveness;
+        }
+    }
+
+    // --- round scoring flags: Levelheadedness, Forgetfulness ---
+
+    /** What every mood scores this round instead of its own value (Levelheadedness), or null. */
+    public function flatMoodScore(): ?int
+    {
+        return $this->flatMoodScore;
+    }
+
+    public function setFlatMoodScore(?int $score): void
+    {
+        $this->flatMoodScore = $score;
+    }
+
+    /** What $cardId contributes to its owner's score: the round's flat score if there is one, else its value. */
+    public function scoredValueOf(int $cardId): int
+    {
+        return $this->flatMoodScore ?? $this->valueOf($cardId);
+    }
+
+    /** Whether the players draw at the end of this round as usual -- false once Forgetfulness has been played. */
+    public function noEndOfRoundDraw(): bool
+    {
+        return $this->noEndOfRoundDraw;
+    }
+
+    public function setNoEndOfRoundDraw(bool $noDraw): void
+    {
+        $this->noEndOfRoundDraw = $noDraw;
+    }
+
+    /** Forgetfulness: the winner of the previous round loses a round win (applied when the board is next saved). */
+    public function forfeitPreviousRoundWin(): void
+    {
+        $this->pendingWinForfeits++;
+    }
+
+    /** Returns and clears the number of previous-round wins to take away. */
+    public function consumePendingWinForfeits(): int
+    {
+        $count = $this->pendingWinForfeits;
+        $this->pendingWinForfeits = 0;
+
+        return $count;
+    }
+
+    /** A round ends: the next one scores moods at their own values and ends with the usual draws. */
+    public function resetRoundScoringFlags(): void
+    {
+        $this->flatMoodScore = null;
+        $this->noEndOfRoundDraw = false;
+    }
+
+    // --- choosing moods: Solace / Reassurance protection and the effect actor (Elusiveness) ---
+
+    /** The player whose play/effect is resolving (see $effectActorId). */
+    public function setEffectActor(?int $playerId): void
+    {
+        $this->sentimentalityLeftThisResolution = [];
+        $this->pendingRancor = [];
+        $this->enterEffectActor($playerId);
+    }
+
+    /** Sets who the resolving effect belongs to and the Elusiveness snapshot, leaving the per-resolution trigger records alone. */
+    private function enterEffectActor(?int $playerId): void
+    {
+        $this->effectActorId = $playerId;
+        $this->elusivenessOwners = [];
+        if ($playerId === null) {
+            return;
+        }
+        foreach ($this->moodsInPlay as $mood) {
+            if ($this->catalogRow($this->effectiveCardId($mood->cardId))['effectKey'] === 'elusiveness') {
+                $this->elusivenessOwners[$mood->ownerId] = true;
+            }
+        }
+    }
+
+    /**
+     * Whether $chooserId may not choose the mood $cardId (an opponent choosing it as a target): its owner is shielded
+     * for the round (Solace), or has Reassurance in play and the mood's current value is 2 or less. Never true for
+     * the owner's own choice or a teammate's -- only "opponents can't choose your moods".
+     */
+    public function isProtectedFromChoiceBy(int $cardId, int $chooserId): bool
+    {
+        if (!$this->isInPlay($cardId)) {
+            return false;
+        }
+        $ownerId = $this->ownerOf($cardId);
+        if ($ownerId === $chooserId || $this->isTeammate($chooserId, $ownerId)) {
+            return false;
+        }
+        if (isset($this->roundChoiceShields[$ownerId])) {
+            return true;
+        }
+
+        return $this->countMoodsInPlayWithEffectiveKey($ownerId, 'reassurance') > 0 && $this->valueOf($cardId) <= 2;
+    }
+
+    /** Solace: until the end of the round, $playerId's opponents can't choose their moods. */
+    public function shieldMoodsFromChoices(int $playerId): void
+    {
+        $this->roundChoiceShields[$playerId] = true;
+    }
+
+    /** @return int[] the players whose moods are shielded this round */
+    public function roundChoiceShields(): array
+    {
+        return array_keys($this->roundChoiceShields);
+    }
+
+    /** @param int[] $playerIds */
+    public function restoreRoundChoiceShields(array $playerIds): void
+    {
+        $this->roundChoiceShields = array_fill_keys(array_map(intval(...), $playerIds), true);
+    }
+
+    /** A round ends: nobody's moods are shielded in the next one. */
+    public function resetRoundChoiceShields(): void
+    {
+        $this->roundChoiceShields = [];
+    }
+
+    /** Deflection: the turn restriction that stops $effectKey's card name being played ("cards with that name"). */
+    public static function nameBanRestriction(string $effectKey): string
+    {
+        return 'ban_name:' . $effectKey;
+    }
+
+    /** Whether the current turn bars playing $cardId because of its name (Deflection) -- the printed card, not what a Creativity copies. */
+    public function isNameBannedThisTurn(int $cardId): bool
+    {
+        return in_array(self::nameBanRestriction($this->catalogRow($cardId)['effectKey']), $this->turnRestrictions, true);
+    }
+
+    // --- turn flags: plays made this turn, base plays, and next-turn restrictions (Restraint, Rudeness, Pettiness...) ---
+
+    /** A turn starts: $basePlays base plays (2 with Hurt Feelings), none made yet, $restrictions in force. @param list<string> $restrictions */
+    public function beginTurnFlags(int $basePlays, array $restrictions): void
+    {
+        $this->turnPlaysMade = 0;
+        $this->turnBasePlays = $basePlays;
+        $this->turnRestrictions = array_values(array_unique($restrictions));
+    }
+
+    /** Reinvigoration: the TURN_ONLY_FROM restriction for $sourceCardId, in force for the rest of this turn. */
+    public function lockPlaysToGrantsFrom(int $sourceCardId): void
+    {
+        $restriction = self::TURN_ONLY_FROM . $sourceCardId;
+        if (!in_array($restriction, $this->turnRestrictions, true)) {
+            $this->turnRestrictions[] = $restriction;
+        }
+    }
+
+    /** @return array{playsMade: int, basePlays: int, restrictions: list<string>} what is persisted with the turn's grants */
+    public function turnFlags(): array
+    {
+        return ['playsMade' => $this->turnPlaysMade, 'basePlays' => $this->turnBasePlays, 'restrictions' => $this->turnRestrictions];
+    }
+
+    /** @param ?array{playsMade?: int, basePlays?: int, restrictions?: list<string>} $flags */
+    public function restoreTurnFlags(?array $flags): void
+    {
+        $this->turnPlaysMade = (int) ($flags['playsMade'] ?? 0);
+        $this->turnBasePlays = (int) ($flags['basePlays'] ?? 1);
+        $this->turnRestrictions = array_values($flags['restrictions'] ?? []);
+    }
+
+    /** @return list<string> */
+    public function turnRestrictions(): array
+    {
+        return $this->turnRestrictions;
+    }
+
+    /** Whether the mood about to be played is an additional one -- the turn's base plays are already used up. */
+    public function isAdditionalPlay(): bool
+    {
+        return $this->turnPlaysMade >= $this->turnBasePlays;
+    }
+
+    /** A mood was played this turn (a play, not an effect putting one into play). */
+    public function recordTurnPlay(): void
+    {
+        $this->turnPlaysMade++;
+    }
+
+    /** Restraint in play anywhere, or Rudeness on this turn: moods can't let the current player play additional moods. */
+    public function extraPlaysBlocked(): bool
+    {
+        if (in_array(self::TURN_RUDENESS, $this->turnRestrictions, true)) {
+            return true;
+        }
+        foreach ($this->moodsInPlay as $mood) {
+            if ($this->catalogRow($this->effectiveCardId($mood->cardId))['effectKey'] === 'restraint') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Whether the after-playing effect of the mood $playerId is playing right now doesn't happen: any mood on a
+     * Rudeness turn, and an additional one (see isAdditionalPlay(), asked before the play is recorded) while an
+     * opponent of $playerId has Defensiveness in play.
+     */
+    public function afterPlayingSuppressedFor(int $playerId, bool $additionalPlay): bool
+    {
+        if (in_array(self::TURN_RUDENESS, $this->turnRestrictions, true)) {
+            return true;
+        }
+        if (!$additionalPlay) {
+            return false;
+        }
+        foreach ($this->moodsInPlay as $mood) {
+            if ($mood->ownerId !== $playerId
+                && !$this->isTeammate($playerId, $mood->ownerId)
+                && $this->catalogRow($this->effectiveCardId($mood->cardId))['effectKey'] === 'defensiveness') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** $restriction (a TURN_* constant) applies to $playerId's next turn. Idempotent -- a restriction is in force or it isn't. */
+    public function addPendingTurnRestriction(int $playerId, string $restriction): void
+    {
+        $list = $this->pendingTurnRestrictions[$playerId] ?? [];
+        if (!in_array($restriction, $list, true)) {
+            $list[] = $restriction;
+        }
+        $this->pendingTurnRestrictions[$playerId] = $list;
+    }
+
+    /**
+     * Returns and clears everything waiting for $playerId's next turn -- called once, as that turn's grants are
+     * computed (GameService::computeFreshGrants()).
+     *
+     * @return list<string>
+     */
+    public function consumePendingTurnRestrictionsFor(int $playerId): array
+    {
+        $list = $this->pendingTurnRestrictions[$playerId] ?? [];
+        unset($this->pendingTurnRestrictions[$playerId]);
+
+        return $list;
+    }
+
+    /** @return array<int, list<string>> playerId => restrictions waiting for their next turn (for BoardStateRepository to persist) */
+    public function pendingTurnRestrictionsByPlayer(): array
+    {
+        return $this->pendingTurnRestrictions;
+    }
+
+    /** @param array<int, list<string>> $byPlayer */
+    public function restorePendingTurnRestrictions(array $byPlayer): void
+    {
+        $this->pendingTurnRestrictions = $byPlayer;
     }
 
     public function playsRemaining(): int
@@ -2917,6 +3427,9 @@ final class BoardState
     /** Whether any outstanding grant this turn -- restricted or not -- would allow playing $cardId. */
     public function hasUsablePlayGrant(int $cardId, int $playerId): bool
     {
+        if ($this->isNameBannedThisTurn($cardId)) {
+            return false;
+        }
         foreach ($this->playGrants as $restriction) {
             if ($this->grantIsActive($restriction) && $this->grantAllows($restriction, $cardId, $playerId)) {
                 return true;
@@ -3109,6 +3622,26 @@ final class BoardState
      */
     private function grantIsActive(?array $restriction): bool
     {
+        if (in_array(self::TURN_NO_PLAYS, $this->turnRestrictions, true)) {
+            return false;
+        }
+        // Reinvigoration: each one in force this turn leaves only the plays it granted itself, so a second one blocks the
+        // first's leftover plays and its own are blocked by the first (the ruling the card's authors lean toward).
+        foreach ($this->turnRestrictions as $turnRestriction) {
+            if (str_starts_with($turnRestriction, self::TURN_ONLY_FROM) && ($restriction['sourceCardId'] ?? null) !== (int) substr($turnRestriction, strlen(self::TURN_ONLY_FROM))) {
+                return false;
+            }
+        }
+        // Obstinacy: its owner can only play one mood per turn, so nothing more is playable once one has been.
+        if ($this->turnPlaysMade >= 1 && $this->currentPlayerId !== null && $this->countMoodsInPlayWithEffectiveKey($this->currentPlayerId, 'obstinacy') > 0) {
+            return false;
+        }
+        // Restraint / Rudeness: moods can't let a player play additional moods -- a grant from a card (it names its
+        // source) is dead, while the turn's own base plays (a bare null, or Hurt Feelings' labelled one) stand.
+        if ($restriction !== null && !isset($restriction['sourceLabel']) && $this->extraPlaysBlocked()) {
+            return false;
+        }
+
         if ($restriction === null) {
             return true;
         }

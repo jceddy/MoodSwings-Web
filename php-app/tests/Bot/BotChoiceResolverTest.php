@@ -98,6 +98,20 @@ final class BotChoiceResolverTest extends TestCase
         self::assertSame(55, $this->resolver->resolve($state, $field, 1, 0, 'conviction'));
     }
 
+    public function testMoodFieldNeverOffersAMoodTheBotsEffectsCantChoose(): void
+    {
+        $state = $this->boardState(hands: [2 => [8, 55]]); // Dignity (value 3), Apathy (value 4)
+        $state->moveHandToInPlay(2, 8);
+        $state->moveHandToInPlay(2, 55);
+        $state->shieldMoodsFromChoices(2); // Solace: nothing of player 2's can be chosen this round
+        $field = ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => true];
+
+        self::assertNull($this->resolver->resolve($state, $field, 1, 0, 'conviction'));
+        // Without the shield the same field offers the highest-value mood.
+        $state->resetRoundChoiceShields();
+        self::assertSame(55, $this->resolver->resolve($state, $field, 1, 0, 'conviction'));
+    }
+
     public function testMoodMultiFieldPicksCountMinLowestValueCandidates(): void
     {
         $state = $this->boardState(hands: [1 => [8, 55, 5]]); // Dignity 3, Apathy 4, Complacency 4
