@@ -9577,8 +9577,9 @@ in custom sets is.
 
 #### Emotional Baggage: known gaps and open items
 
-Everything above is implemented and deployed, but these were deliberately left for later. Each is also tracked as a GitHub
-issue labelled with the area it touches (search for "Emotional Baggage:").
+Everything above is implemented and deployed, but these were deliberately left for later. Each is also a GitHub issue titled
+"Emotional Baggage: ..." (follow-ups to #103): replays #813, team play #814, Chaos Draft #815, bot targeting #816, effect actor #817,
+Unity/Discord #818, browser testing #819, rulings to confirm #820.
 
 - **Replays don't load the newer round records.** `BoardStateRepository::load()` restores them from the live round row, but
   `ReplayStateBuilder` rebuilds a board from game events and doesn't: round wins (`setRoundWins()` -- Competitiveness, Resolve,
@@ -9595,8 +9596,8 @@ issue labelled with the area it touches (search for "Emotional Baggage:").
   `angerTargetMoodIds()`, `creativityBestCopyTargetId()`) don't call `isProtectedFromChoiceBy()`: a bot that picks a protected mood
   has its play rejected (`InvalidChoiceException`, caught in `advanceAutomatedTurns()`) and passes instead.
 - **Effect actor only exists during a play.** `BoardState::setEffectActor()` is set around a play and the answers to its pending
-  decisions, so Elusiveness (bounce), Rancor (retaliation) and Sentimentality's/Opportunism's neighbours see nothing at scoring time
-  or in turn-start triggers (Brooding, Martyrdom...), where an "opponent's effect" can still move a mood.
+  decisions, so Elusiveness (bounce) and Rancor (retaliation) see nothing at scoring time or in turn-start triggers (Brooding,
+  Martyrdom...), where an "opponent's effect" can still move a mood.
 - **The Unity client and the Discord bot don't know about custom sets.** Neither reads `sets.is_custom`, `cards.art_set_code`
   (art lives in `web-static/img/cards/XEMB/`), the colorless color, or the newer pending-decision types (`revealed_card`,
   `turn_start_trigger`, `delegated_effect_choices`, `reckoning_keep_mood`, `prudence_bottom`/`prudence_top`...) and card fields
