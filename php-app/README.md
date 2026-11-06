@@ -9575,6 +9575,42 @@ in custom sets is.
     bottom of the deck instead, before Elusiveness is considered (a Grudge Elusiveness would bounce would end up on the bottom
     anyway), and since nothing reaches the discard pile Sentimentality, Rancor and Vulnerability don't see it.
 
+#### Emotional Baggage: known gaps and open items
+
+Everything above is implemented and deployed, but these were deliberately left for later. Each is also tracked as a GitHub
+issue labelled with the area it touches (search for "Emotional Baggage:").
+
+- **Replays don't load the newer round records.** `BoardStateRepository::load()` restores them from the live round row, but
+  `ReplayStateBuilder` rebuilds a board from game events and doesn't: round wins (`setRoundWins()` -- Competitiveness, Resolve,
+  Perseverance, Grudge), Vitality's `round_value_bonuses`, `round_hand_discards` (Schadenfreude, Carelessness), `round_mood_plays`
+  (Urgency), `round_choice_shields` (Solace), `round_flat_mood_score` and `round_no_end_draw` (Levelheadedness, Forgetfulness),
+  and the turn's `turn_flags` (restrictions, plays made). A replayed board therefore shows those cards at their base behaviour.
+- **Open Team Play.** Despair isn't applied to the losing team's single draw (a team decision), and Forgetfulness's "no one
+  draws" skips that decision (`applyDrawRecipientDecision(..., skipDraw: true)` from `finishTeamScoringAndAdvance()`) -- that
+  branch has no test of its own, only the existing team tests passing through the code around it.
+- **Chaos Draft effects' own mood targets aren't checked against Solace/Reassurance.** `MoodPlayService::assertNoProtectedMoodChosen()`
+  reads `CardChoiceSchema`, not `ChaosCardChoiceSchema`, so a chaos effect that picks "an opponent's mood" can still pick a protected one.
+- **Bot targeting code that bypasses protection.** The generic resolver (`BotChoiceResolver::moodCandidates()`) and Passion's
+  answer skip protected moods, but the bespoke pickers in `BotPlayerService` (for example `pacifismTargetMoodIds()`,
+  `angerTargetMoodIds()`, `creativityBestCopyTargetId()`) don't call `isProtectedFromChoiceBy()`: a bot that picks a protected mood
+  has its play rejected (`InvalidChoiceException`, caught in `advanceAutomatedTurns()`) and passes instead.
+- **Effect actor only exists during a play.** `BoardState::setEffectActor()` is set around a play and the answers to its pending
+  decisions, so Elusiveness (bounce), Rancor (retaliation) and Sentimentality's/Opportunism's neighbours see nothing at scoring time
+  or in turn-start triggers (Brooding, Martyrdom...), where an "opponent's effect" can still move a mood.
+- **The Unity client and the Discord bot don't know about custom sets.** Neither reads `sets.is_custom`, `cards.art_set_code`
+  (art lives in `web-static/img/cards/XEMB/`), the colorless color, or the newer pending-decision types (`revealed_card`,
+  `turn_start_trigger`, `delegated_effect_choices`, `reckoning_keep_mood`, `prudence_bottom`/`prudence_top`...) and card fields
+  (`unchoosable_by_you`).
+- **The web UI pieces have only been tested through the API, not in a browser:** the New Game card-set picker, `revealed_card`
+  decisions (Greed, Nosiness, Entitlement, Inspiration, Prudence), Candor's revealed-hands section, the reaction fields that ride
+  with a play (Scorn, Dominance, Reflection, Reverie), the turn-start decision title, `delegated_effect_choices` (Optimism,
+  Admiration), Reckoning's keep-one prompt, the `unchoosable_by_you` filter in target pickers, and the colorless sorts and filter.
+- **Rulings to confirm with the card designers** (each is documented in its card's paragraph above): Obstinacy also limits Hurt
+  Feelings' second play; Pettiness may target its own player; Compassion yields to Honor/Awe; Urgency counts every mood its owner
+  played this round; Restlessness ignores every mood with its own ability; Opportunism ties go in seat order from the active
+  player; a Sentimentality that leaves in a sequential effect (as opposed to a sweep) doesn't pay out for the next mood; Premonition
+  and Rapport put their second pick in a follow-up decision, so it is made after seeing the first draw.
+
 
 ### Default selections mode (issue #274)
 
