@@ -71,7 +71,10 @@ final class MoodPlayService
         // $playerId's effect is the one resolving for the whole play (Elusiveness tells an opponent's from the owner's own).
         $state->setEffectActor($playerId);
         try {
-            return $this->resolvePlay($state, $playerId, $cardId, $choices, $cardNames);
+            $result = $this->resolvePlay($state, $playerId, $cardId, $choices, $cardNames);
+            $state->resolveRancorRetaliation();
+
+            return $result;
         } finally {
             $state->setEffectActor(null);
         }
@@ -449,7 +452,10 @@ final class MoodPlayService
     ): PlayResult {
         $state->setEffectActor($playerId);
         try {
-            return $this->resolvePendingAnswers($state, $cardId, $playerId, $topLevelChoices, $invocationChoices, $invocationSeq, $answers, $duplicityEligibleSources, $reactorCandidateCardIds, $pendingSource);
+            $result = $this->resolvePendingAnswers($state, $cardId, $playerId, $topLevelChoices, $invocationChoices, $invocationSeq, $answers, $duplicityEligibleSources, $reactorCandidateCardIds, $pendingSource);
+            $state->resolveRancorRetaliation();
+
+            return $result;
         } finally {
             $state->setEffectActor(null);
         }

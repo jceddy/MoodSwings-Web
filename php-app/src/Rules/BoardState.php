@@ -220,6 +220,19 @@ final class BoardState
     private ?int $effectActorId = null;
 
     /**
+     * @var array<int, int> ownerId => how many Sentimentality moods of theirs have left play (to the discard pile) during the
+     * current resolution, so a sweep that takes Sentimentality first still pays out for the moods it takes after it.
+     */
+    private array $sentimentalityLeftThisResolution = [];
+
+    /**
+     * @var array<int, array{ownerId: int, actorId: int}> Rancor mood id => the owner and the opponent whose effect put one of the
+     * owner's other moods into the discard pile -- each Rancor retaliates once per effect, when it finishes
+     * (resolveRancorRetaliation()).
+     */
+    private array $pendingRancor = [];
+
+    /**
      * @var array<int, true> the players who had Elusiveness in play when the current play began (see setEffectActor()) --
      * a sweep moves their moods one at a time, and Elusiveness itself must not stop protecting the rest by going first.
      */
@@ -1147,6 +1160,7 @@ final class BoardState
     public function moveInPlayToDiscard(int $cardId): void
     {
         $ownerId = $this->moodInPlay($cardId)->ownerId;
+        $leavingEffectKey = $this->catalogRow($this->effectiveCardId($cardId))['effectKey'];
         // Elusiveness: an opponent's effect that would put one of its owner's moods into the discard pile puts it into their
         // hand instead -- so nothing reaches the discard pile, and nothing that watches the pile happens.
         if ($this->effectActorId !== null
@@ -1165,6 +1179,7 @@ final class BoardState
         $this->recordMove($cardId, 'play', 'discard');
         $this->pendingChaosDiscardEvents[] = ['cardId' => $cardId, 'ownerId' => $ownerId, 'value' => $value];
         $this->cascadeMoodLeavingPlay($cardId);
+        $this->moodDiscardTriggers($cardId, $ownerId, $leavingEffectKey);
     }
 
     public function moveInPlayToHand(int $cardId): void
@@ -1249,6 +1264,7 @@ final class BoardState
         $this->discardedThisRound = true;
         $this->roundHandDiscards[$playerId] = true;
         $this->recordMove($cardId, 'hand', 'discard', fromPlayerId: $playerId);
+        $this->opportunismTakes($playerId, $cardId);
     }
 
     /**
@@ -2977,6 +2993,92 @@ final class BoardState
         return $this->bankedExtraPlays;
     }
 
+    // --- discard triggers: Opportunism, Sentimentality, Rancor ---
+
+    /**
+     * Opportunism: "Each time an opponent discards a card from their hand, you put that card into your hand." The first
+     * opponent of the discarder (seat order) with Opportunism in play takes it -- the card is only one -- and a teammate's
+     * discard isn't an opponent's.
+     */
+    private function opportunismTakes(int $discarderId, int $cardId): void
+    {
+        foreach ($this->activePlayerOrder() as $holderId) {
+            if ($holderId === $discarderId || $this->isTeammate($discarderId, $holderId)) {
+                continue;
+            }
+            if ($this->countMoodsInPlayWithEffectiveKey($holderId, 'opportunism') > 0) {
+                $this->moveDiscardToHand($holderId, $cardId);
+
+                return;
+            }
+        }
+    }
+
+    /**
+     * What a mood going from play to the discard pile sets off (called once it has gone):
+     *  - Sentimentality: its owner draws a card for each Sentimentality of theirs that is NOT the mood leaving -- those in play,
+     *    plus any that left earlier in this same resolution (so a sweep taking Sentimentality first still pays out for the rest).
+     *  - Rancor: if an opponent's effect did it, each Rancor the owner has in play (other than the mood leaving) will
+     *    retaliate once this effect finishes -- see resolveRancorRetaliation().
+     */
+    private function moodDiscardTriggers(int $cardId, int $ownerId, string $leavingEffectKey): void
+    {
+        $sentimentalities = $this->sentimentalityLeftThisResolution[$ownerId] ?? 0;
+        $rancors = [];
+        foreach ($this->moodsOwnedBy($ownerId) as $mood) {
+            $key = $this->catalogRow($this->effectiveCardId($mood->cardId))['effectKey'];
+            if ($key === 'sentimentality') {
+                $sentimentalities++;
+            } elseif ($key === 'rancor') {
+                $rancors[] = $mood->cardId;
+            }
+        }
+        if ($leavingEffectKey === 'sentimentality') {
+            $this->sentimentalityLeftThisResolution[$ownerId] = ($this->sentimentalityLeftThisResolution[$ownerId] ?? 0) + 1;
+        }
+        for ($i = 0; $i < $sentimentalities; $i++) {
+            $this->drawCard($ownerId);
+        }
+
+        if ($this->effectActorId !== null && $ownerId !== $this->effectActorId && !$this->isTeammate($this->effectActorId, $ownerId)) {
+            foreach ($rancors as $rancorId) {
+                $this->pendingRancor[$rancorId] = ['ownerId' => $ownerId, 'actorId' => $this->effectActorId];
+            }
+        }
+    }
+
+    /**
+     * Rancor: "Each time an opponent's effect puts one or more of your other moods into the discard pile, a random one of that
+     * player's moods with a value of 3 or less is put into the discard pile." Called when the effect has finished (MoodPlayService):
+     * each Rancor that was set off retaliates once, however many moods the effect took, as an effect of its own owner -- which
+     * can set off a Rancor on the other side in turn, but every round of it discards a mood, so it ends.
+     */
+    public function resolveRancorRetaliation(): void
+    {
+        while ($this->pendingRancor !== []) {
+            $rancorId = array_key_first($this->pendingRancor);
+            $trigger = $this->pendingRancor[$rancorId];
+            unset($this->pendingRancor[$rancorId]);
+
+            $candidates = [];
+            foreach ($this->moodsOwnedBy($trigger['actorId']) as $mood) {
+                if ($this->valueOf($mood->cardId) <= 3) {
+                    $candidates[] = $mood->cardId;
+                }
+            }
+            if ($candidates === []) {
+                continue;
+            }
+
+            $savedActor = $this->effectActorId;
+            $savedElusiveness = $this->elusivenessOwners;
+            $this->enterEffectActor($trigger['ownerId']);
+            $this->moveInPlayToDiscard($candidates[random_int(0, count($candidates) - 1)]);
+            $this->effectActorId = $savedActor;
+            $this->elusivenessOwners = $savedElusiveness;
+        }
+    }
+
     // --- round scoring flags: Levelheadedness, Forgetfulness ---
 
     /** What every mood scores this round instead of its own value (Levelheadedness), or null. */
@@ -3033,6 +3135,14 @@ final class BoardState
 
     /** The player whose play/effect is resolving (see $effectActorId). */
     public function setEffectActor(?int $playerId): void
+    {
+        $this->sentimentalityLeftThisResolution = [];
+        $this->pendingRancor = [];
+        $this->enterEffectActor($playerId);
+    }
+
+    /** Sets who the resolving effect belongs to and the Elusiveness snapshot, leaving the per-resolution trigger records alone. */
+    private function enterEffectActor(?int $playerId): void
     {
         $this->effectActorId = $playerId;
         $this->elusivenessOwners = [];

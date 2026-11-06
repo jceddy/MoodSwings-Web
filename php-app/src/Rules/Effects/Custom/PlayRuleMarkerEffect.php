@@ -18,6 +18,9 @@ use MoodSwings\Rules\AbstractMoodEffect;
  *  - Elusiveness ("If an opponent's effect would put one of your moods into the discard pile, put it into your hand
  *    instead"): BoardState::moveInPlayToDiscard()'s replacement.
  *  - Compassion ("The player with the fewest moods goes first each round"): BoardState::firstPlayerOverride().
+ *  - Despair (an extra draw for each round its owner loses): GameService's round-end draw; Opportunism (a card an opponent
+ *    discards from hand): BoardState::moveHandToDiscard(); Sentimentality (a draw when one of your other moods is put into the
+ *    discard pile) and Rancor (retaliation against an opponent's effect that does): BoardState::moveInPlayToDiscard().
  * Registered under each key so the card resolves; the engine finds the rule by the effective effect key (so a Creativity
  * copying one carries it too).
  */

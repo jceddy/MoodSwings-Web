@@ -583,7 +583,7 @@ final class DefaultEffectRegistry
         $registry->register('urgency', new UrgencyEffect());
 
         // Play-restriction cards (turn flags: BoardState::beginTurnFlags()).
-        foreach (['obstinacy', 'restraint', 'defensiveness', 'reassurance', 'elusiveness', 'compassion'] as $playRuleKey) {
+        foreach (['obstinacy', 'restraint', 'defensiveness', 'reassurance', 'elusiveness', 'compassion', 'despair', 'opportunism', 'sentimentality', 'rancor'] as $playRuleKey) {
             $registry->register($playRuleKey, new PlayRuleMarkerEffect());
         }
         $registry->register('rudeness', new RudenessEffect());

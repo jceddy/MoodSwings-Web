@@ -13351,6 +13351,10 @@ final class GameService
                 foreach ($turnOrder as $playerId) {
                     if ($playerId !== $winnerId) {
                         $state->drawCard($playerId);
+                        // Despair: "At the end of each round you lose, you draw an additional card" -- one for each in play.
+                        for ($extra = $state->countMoodsInPlayWithEffectiveKey($playerId, 'despair'); $extra > 0; $extra--) {
+                            $state->drawCard($playerId);
+                        }
                     }
                 }
             }

@@ -9514,6 +9514,24 @@ in custom sets is.
     drive targeting, conditions and the bonuses that read a value (Enthusiasm, Passion). Both round flags are cleared
     right after the round's draws, and a new round's row starts without them.
 
+- **Draw and discard triggers (batch 18).** Despair, Opportunism, Sentimentality and Rancor (migration 0516). None has
+  effect code; each is read off the board by its effective effect key (`PlayRuleMarkerEffect`).
+  - **Despair**: at the loser's end-of-round draw (`finishScoringAndAdvance()`), each of its owner's Despairs in play adds a
+    card. Forgetfulness's "no one draws" skips it too, and it isn't applied in team formats (the losing team's single draw is
+    a team decision there).
+  - **Opportunism**: `BoardState::moveHandToDiscard()` hands the card to the first opponent of the discarder, in seat order,
+    who has it in play -- straight from the pile into their hand (a teammate's discard doesn't count). Moods put into the
+    discard pile and a player's own discards are untouched.
+  - **Sentimentality**: `moveInPlayToDiscard()` draws a card per Sentimentality of the mood's owner that isn't the mood
+    leaving -- in play now, or gone earlier in the same resolution, so a sweep that takes Sentimentality first still pays out
+    for the rest. Any cause counts; a mood Elusiveness bounces instead doesn't (nothing reached the pile).
+  - **Rancor**: when the effect actor (`setEffectActor()`) is an opponent of the mood's owner, each Rancor of the owner's that
+    is still in play is queued (once per Rancor, however many moods the effect takes); when the play or decision answer has
+    finished, `MoodPlayService` calls `resolveRancorRetaliation()`, which discards a random mood worth 3 or less of the
+    effect's player's, as an effect of the Rancor's owner (so Elusiveness on the attacker's side still applies and a Rancor
+    on theirs can answer in turn -- each round of it discards a mood, so it ends). It is not set off outside a play (scoring,
+    turn-start triggers), where there is no effect actor.
+
 
 ### Default selections mode (issue #274)
 

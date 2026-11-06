@@ -1206,6 +1206,51 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertSame($this->p1, $state->currentPlayerId(), 'Compassion: the player with the fewest moods goes first, not the winner');
     }
 
+    public function testDespairDrawsAnExtraCardAtTheEndOfARoundItsOwnerLoses(): void
+    {
+        $this->card('Despair', 'in_play', $this->p2); // worth 2
+        $big = $this->card('Apathy', 'hand', $this->p1); // 4: player 1 wins
+        $this->card('Courage', 'deck', $this->p2, 0);
+        $this->card('Creativity', 'deck', $this->p2, 1);
+        $this->card('Joy', 'deck', $this->p2, 2);
+
+        $this->games->playMood($this->gameId, $this->p1, $big, []);
+        $this->games->pass($this->gameId, $this->p2); // player 1 wins the round; player 2 loses
+
+        self::assertCount(2, $this->state()->hand($this->p2), 'the usual loser\'s draw plus Despair\'s extra one');
+    }
+
+    public function testDespairDoesNothingForTheRoundsWinner(): void
+    {
+        $despair = $this->card('Despair', 'in_play', $this->p1); // the winner's own
+        $courage = $this->card('Courage', 'hand', $this->p1);
+        $this->card('Apathy', 'deck', $this->p1, 0);
+        $this->card('Creativity', 'deck', $this->p2, 0);
+
+        $this->games->playMood($this->gameId, $this->p1, $courage, []);
+        $this->games->pass($this->gameId, $this->p2);
+
+        self::assertSame([], $this->state()->hand($this->p1), 'the round was won, so no draw');
+        self::assertContains($despair, array_map(static fn ($m) => $m->cardId, $this->state()->moodsOwnedBy($this->p1)));
+    }
+
+    public function testRancorRetaliatesAcrossRequestsForAnOpponentsEffect(): void
+    {
+        $this->card('Rancor', 'in_play', $this->p2);
+        $victim = $this->card('Creativity', 'in_play', $this->p2);
+        $lowMood = $this->card('Anger', 'in_play', $this->p1);
+        $rashness = $this->card('Rashness', 'hand', $this->p1);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $rashness, ['target_mood_id' => $victim]);
+
+        $state = $this->state();
+        self::assertFalse($state->isInPlay($victim));
+        $remaining = array_values(array_map(static fn ($m) => $m->cardId, $state->moodsOwnedBy($this->p1)));
+        self::assertCount(1, $remaining, 'one of Anger and Rashness, both worth 3 or less, answered for it');
+        self::assertContains($remaining[0], [$lowMood, $rashness]);
+    }
+
     public function testGrievanceMakesAnOpponentWithMoreCardsPutOneOnTheBottomOfTheDeck(): void
     {
         $grievance = $this->card('Grievance', 'hand', $this->p1);

@@ -1301,6 +1301,134 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame(8, $scorer->score($state)[2]);
     }
 
+    // ---- discard triggers: Opportunism, Sentimentality, Rancor ----
+
+    public function testOpportunismTakesAnOpponentsDiscardedHandCard(): void
+    {
+        $state = $this->state([1 => ['Opportunism'], 2 => ['Apathy', 'Boredom']]);
+        $this->seat($state, 1, 'Opportunism');
+        $state->moveHandToDiscard(2, $this->id('Apathy'));
+
+        self::assertSame($this->ids('Apathy'), $state->hand(1), 'into the holder\'s hand, not the pile');
+        self::assertSame([], $state->discardPile());
+    }
+
+    public function testOpportunismIgnoresItsOwnersDiscardsAndMoodsGoingToThePile(): void
+    {
+        $state = $this->state([1 => ['Opportunism', 'Apathy'], 2 => ['Boredom']]);
+        $this->seat($state, 1, 'Opportunism');
+        $this->seat($state, 2, 'Boredom');
+        $state->moveHandToDiscard(1, $this->id('Apathy'));
+        $state->moveInPlayToDiscard($this->id('Boredom'));
+
+        self::assertSame([], $state->hand(1));
+        self::assertEqualsCanonicalizing($this->ids('Apathy', 'Boredom'), $state->discardPile());
+    }
+
+    public function testOpportunismGoesToTheFirstOpponentWithItInSeatOrder(): void
+    {
+        $state = $this->state([1 => ['Apathy'], 2 => ['Opportunism'], 3 => ['Boredom']]);
+        $this->seat($state, 2, 'Opportunism');
+        $this->seat($state, 3, 'Boredom');
+        $state->moveHandToDiscard(1, $this->id('Apathy'));
+
+        self::assertSame($this->ids('Apathy'), $state->hand(2));
+    }
+
+    public function testSentimentalityDrawsWhenAnotherOfYourMoodsIsDiscarded(): void
+    {
+        $state = $this->state([1 => ['Sentimentality', 'Apathy'], 2 => []], ['Courage', 'Joy']);
+        $this->seat($state, 1, 'Sentimentality', 'Apathy');
+        $state->moveInPlayToDiscard($this->id('Apathy'));
+
+        self::assertSame($this->ids('Courage'), $state->hand(1), 'a mood for a card');
+    }
+
+    public function testSentimentalityDoesNotDrawForItselfOrForAnOpponentsMood(): void
+    {
+        $state = $this->state([1 => ['Sentimentality'], 2 => ['Apathy']], ['Courage', 'Joy']);
+        $this->seat($state, 1, 'Sentimentality');
+        $this->seat($state, 2, 'Apathy');
+        $state->moveInPlayToDiscard($this->id('Apathy'));
+        self::assertSame([], $state->hand(1), "an opponent's mood");
+
+        $state->moveInPlayToDiscard($this->id('Sentimentality'));
+        self::assertSame([], $state->hand(1), 'not one of its owner\'s OTHER moods');
+    }
+
+    public function testSentimentalityStillPaysOutWhenASweepTakesItFirst(): void
+    {
+        $state = $this->state([1 => ['Wrath'], 2 => ['Sentimentality', 'Apathy', 'Boredom']], ['Courage', 'Joy', 'Creativity']);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Sentimentality', 'Apathy', 'Boredom');
+        $this->play($state, 1, 'Wrath', ['discard_all_other_moods' => true]);
+
+        self::assertCount(2, $state->hand(2), 'one card for each of the two other moods, though Sentimentality went first');
+    }
+
+    public function testSentimentalityDoesNotDrawWhenElusivenessBouncesTheMood(): void
+    {
+        $state = $this->state([1 => ['Rashness'], 2 => ['Sentimentality', 'Elusiveness', 'Creativity']], ['Courage']);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Sentimentality', 'Elusiveness', 'Creativity');
+        $this->play($state, 1, 'Rashness', ['target_mood_id' => $this->id('Creativity')]);
+
+        self::assertNotContains($this->id('Courage'), $state->hand(2), 'bounced, not put into the discard pile');
+    }
+
+    public function testRancorDiscardsAnOpposingLowMoodWhenAnOpponentsEffectTakesYours(): void
+    {
+        $state = $this->state([1 => ['Rashness', 'Anger'], 2 => ['Rancor', 'Creativity']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Anger'); // 0: the only mood of player 1 worth 3 or less besides Rashness (1)
+        $this->seat($state, 2, 'Rancor', 'Creativity');
+        $this->play($state, 1, 'Rashness', ['target_mood_id' => $this->id('Creativity')]); // Rashness: an opposing mood worth 1 or less
+
+        self::assertFalse($state->isInPlay($this->id('Creativity')));
+        $stillIn = array_map(static fn ($m) => $m->cardId, $state->moodsOwnedBy(1));
+        self::assertCount(1, $stillIn, 'one of player 1\'s moods valued 3 or less went too (a random one of Rashness and Anger)');
+        self::assertTrue($state->isInPlay($this->id('Rancor')));
+    }
+
+    public function testRancorRetaliatesOnceHoweverManyMoodsTheEffectTakes(): void
+    {
+        $state = $this->state([1 => ['Anger', 'Joy'], 2 => ['Rancor', 'Creativity', 'Hope']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Joy'); // 3
+        $this->seat($state, 2, 'Rancor', 'Creativity', 'Hope');
+        // Anger takes two of player 2's moods (0 and 0) at once: Rancor answers once, with one of Joy (3) and Anger (0).
+        $this->play($state, 1, 'Anger', ['target_mood_ids' => $this->ids('Creativity', 'Hope')]);
+
+        self::assertFalse($state->isInPlay($this->id('Creativity')));
+        self::assertFalse($state->isInPlay($this->id('Hope')));
+        self::assertCount(1, $state->moodsOwnedBy(1), 'exactly one of player 1\'s two low moods went');
+    }
+
+    public function testRancorNeverRespondsToYourOwnEffect(): void
+    {
+        $own = $this->state([2 => ['Rancor', 'Creativity'], 1 => ['Anger']]);
+        $this->seat($own, 2, 'Rancor', 'Creativity');
+        $this->seat($own, 1, 'Anger');
+        $own->setEffectActor(2);
+        $own->moveInPlayToDiscard($this->id('Creativity'));
+        $own->resolveRancorRetaliation();
+
+        self::assertTrue($own->isInPlay($this->id('Anger')), 'your own effect never sets Rancor off');
+    }
+
+    public function testRancorHasNoTargetWhenTheAttackerHasNoLowMood(): void
+    {
+        $state = $this->state([1 => ['Rashness', 'Apathy'], 2 => ['Rancor', 'Creativity']]);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Rancor', 'Creativity');
+        $state->setEffectActor(1);
+        $this->seat($state, 1, 'Apathy'); // 4
+        $state->moveInPlayToDiscard($this->id('Creativity'));
+        $state->resolveRancorRetaliation();
+
+        self::assertTrue($state->isInPlay($this->id('Apathy')), 'valued above 3');
+    }
+
     // ---- static value modifiers ----
 
     public function testArdorAddsTheNumberOfRedMoodsToEachOwnRedMood(): void
