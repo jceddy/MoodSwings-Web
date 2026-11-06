@@ -2584,6 +2584,12 @@ dialog#chaos-loop-shortcut-dialog {
     display: none;
 }
 
+/* "Card sets for random pools": loadCardSetOptions() builds one plain inline <label> per set, so with nothing forcing a
+   break they ran together on a single line. Block display puts each set on its own line. */
+#new-game-card-sets-options label {
+    display: block;
+}
+
 /* Same block/spacing treatment as .new-game-field above, generalized for
    every other dialog's own plain <label>-wrapped fields (issue #91's New
    Tournament dialog is the first of these) rather than reusing a
