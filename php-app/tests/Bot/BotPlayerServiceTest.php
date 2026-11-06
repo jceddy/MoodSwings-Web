@@ -3495,6 +3495,42 @@ final class BotPlayerServiceTest extends TestCase
 
     // -- Cruelty (reported live: "bots should avoid playing Cruelty with no targets") --
 
+    // Haunting: the bot discards the hand cards that would be good plays from the discard pile next turn (they score points or
+    // have something to target) and keeps the rest. Haunting itself is never discarded.
+    public function testHauntingDiscardsTheHandCardsThatWouldBeGoodPlays(): void
+    {
+        $catalog = $this->sampleCatalog() + [
+            202 => $this->row('black', 'mythic', 0, null, 'haunting', false, false, true),
+            231 => $this->row('red', 'common', 0, null, 'rashness', false, false, true), // value 0, but has a target
+            232 => $this->row('green', 'common', 0, null, 'blank', false, false, false), // value 0, nothing to target
+        ];
+        $state = new BoardState($catalog, DefaultEffectRegistry::build(), [1, 2, 3], [1 => [202, 55, 231, 232]]);
+
+        $choices = $this->bot->buildChoicesForCard($state, 202, 1);
+
+        self::assertSame(['discard_card_ids' => [55, 231]], $choices); // Apathy (scores 4) and Rashness (targets); not the blank card
+    }
+
+    public function testRashnessChoicesTargetAnOpponentsMoodValuedOneOrLess(): void
+    {
+        $catalog = $this->sampleCatalog() + [231 => $this->row('red', 'common', 0, null, 'rashness', false, false, true)];
+        $state = new BoardState($catalog, DefaultEffectRegistry::build(), [1, 2, 3], [1 => [231], 2 => [48]]);
+        $state->moveHandToInPlay(2, 48); // Panic (value 1)
+
+        self::assertSame(['target_mood_id' => 48], $this->bot->buildChoicesForCard($state, 231, 1));
+    }
+
+    public function testHauntingDiscardsNothingWhenNoHandCardWouldBeAGoodPlay(): void
+    {
+        $catalog = $this->sampleCatalog() + [
+            202 => $this->row('black', 'mythic', 0, null, 'haunting', false, false, true),
+            232 => $this->row('green', 'common', 0, null, 'blank', false, false, false),
+        ];
+        $state = new BoardState($catalog, DefaultEffectRegistry::build(), [1, 2, 3], [1 => [202, 232]]);
+
+        self::assertSame([], $this->bot->buildChoicesForCard($state, 202, 1));
+    }
+
     public function testChooseActionDeprioritizesCrueltyWithNoQualifyingOpponents(): void
     {
         $state = $this->boardState(hands: [1 => [61, 48]]); // Cruelty (value 3), Panic (value 1)

@@ -9272,6 +9272,11 @@ in custom sets is.
   (`adjustChaosValueDelta()`); Wastefulness uses the new `BoardState::moveDeckTopToDiscard()` (a
   `deck`-to-`discard` card move, which `ReplayStateBuilder` replays). Bots decline the optional triggers,
   except that they take Covetousness's best target and keep FOMO by discarding their weakest card.
+- **Bot choices for the community set.** Rashness's optional target is in `BotChoiceResolver::ALWAYS_FILLED_OPTIONAL_FIELDS` (taking
+  an opponent's mood valued 1 or less costs the acting player nothing), so a bot always names one when it exists. Haunting has
+  its own branch in `BotPlayerService` (`hauntingDiscardCardIds()`): the bot discards exactly the hand cards that would be good
+  plays from the discard pile next turn -- they score points, or their effect has a mood/player/discard-pile target -- and
+  keeps the rest.
 - **"Before scoring" (`BeforeScoringEffect`).** Neglect (reworked in migration 0523: worth 2, "before scoring, each opponent
   with no cards in hand puts one of their *highest value* moods into the discard pile") is the one card that fires between the
   round's last play/pass and the scores being computed. `Rules/BeforeScoringEffect` mirrors `TurnStartEffect`

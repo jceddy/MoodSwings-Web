@@ -78,6 +78,27 @@ final class BotChoiceResolverTest extends TestCase
         self::assertSame(0, $this->resolver->resolve($state, $field, 1, 0, 'other_card'));
     }
 
+    // Rashness's "you may put one of your opponents' moods valued 1 or less into the discard pile" costs the bot nothing, so
+    // the optional field is filled whenever a legal target exists -- and only with a mood valued 1 or less.
+    public function testRashnessTargetFieldIsFilledWithAnOpponentsLowValueMood(): void
+    {
+        $state = new BoardState($this->sampleCatalog() + [231 => $this->row('red', 'common', 0, null, 'rashness', false, false, true)], DefaultEffectRegistry::build(), [1, 2, 3], [1 => [231], 2 => [48, 55]]);
+        $state->moveHandToInPlay(2, 48); // Panic (value 1) -- a legal target
+        $state->moveHandToInPlay(2, 55); // Apathy (value 4) -- too valuable for Rashness
+        $field = ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => false, 'excludes_teammate' => true, 'filter' => ['max_value' => 1]];
+
+        self::assertSame(48, $this->resolver->resolve($state, $field, 1, 231, 'rashness'));
+    }
+
+    public function testRashnessTargetFieldStaysEmptyWithoutALegalTarget(): void
+    {
+        $state = new BoardState($this->sampleCatalog() + [231 => $this->row('red', 'common', 0, null, 'rashness', false, false, true)], DefaultEffectRegistry::build(), [1, 2, 3], [1 => [231], 2 => [55]]);
+        $state->moveHandToInPlay(2, 55); // Apathy (value 4)
+        $field = ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => false, 'excludes_teammate' => true, 'filter' => ['max_value' => 1]];
+
+        self::assertNull($this->resolver->resolve($state, $field, 1, 231, 'rashness'));
+    }
+
     public function testMoodFieldOwnScopePicksTheLowestValueCandidate(): void
     {
         $state = $this->boardState(hands: [1 => [8, 55]]); // Dignity (value 3), Apathy (value 4)
