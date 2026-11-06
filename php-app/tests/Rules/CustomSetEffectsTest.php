@@ -1456,6 +1456,187 @@ final class CustomSetEffectsTest extends TestCase
         self::assertTrue($state->isInPlay($this->id('Apathy')), 'valued above 3');
     }
 
+    // ---- repeat effects: Optimism, Admiration, Wistfulness, Reinvigoration ----
+
+    /** Resumes a paused play with $answers, the way GameService does once every decision has an answer. @param array<string, PlayerChoices> $answers */
+    private function resume(BoardState $state, \MoodSwings\Rules\PlayResult $paused, array $answers, ?PlayerChoices $top = null): \MoodSwings\Rules\PlayResult
+    {
+        return $this->plays->resolvePendingDecisions(
+            $state, $paused->playedCardId, 1, $top ?? new PlayerChoices([]), $paused->invocationChoices, $paused->invocationSeq,
+            $answers, $paused->duplicityEligibleSources, $paused->reactorCandidateCardIds,
+        );
+    }
+
+    public function testOptimismRepeatsAnotherMoodsEffectWithFreshChoices(): void
+    {
+        $state = $this->state([1 => ['Optimism', 'Longing', 'Complacency', 'Apathy']], discardNames: ['Courage', 'Joy']);
+        $state->startTurn(1);
+        $state->grantExtraPlay(1, null, $this->id('Longing'));
+        $this->play($state, 1, 'Longing', ['hand_card_id' => $this->id('Complacency'), 'discard_card_ids' => $this->ids('Courage')]);
+        self::assertContains($this->id('Courage'), $state->hand(1));
+
+        $paused = $this->plays->playMood($state, 1, $this->id('Optimism'), new PlayerChoices(['target_mood_id' => $this->id('Longing')]));
+        self::assertTrue($paused->isPending);
+        self::assertSame('delegated_effect_choices', $paused->pendingDecisions[0]->decisionType);
+        self::assertSame(1, $paused->pendingDecisions[0]->targetPlayerId, 'the acting player makes the repeat\'s choices');
+
+        $done = $this->resume($state, $paused, ['delegate_choices' => new PlayerChoices(['delegate_choices' => [
+            'hand_card_id' => $this->id('Apathy'),
+            'discard_card_ids' => $this->ids('Joy'),
+        ]])]);
+
+        self::assertFalse($done->isPending);
+        self::assertContains($this->id('Joy'), $state->hand(1), "Longing's effect happened again, with new choices");
+        self::assertContains($this->id('Apathy'), $state->discardPile());
+        self::assertTrue($state->isInPlay($this->id('Longing')));
+    }
+
+    public function testOptimismWithoutAChoiceOrWithAnEffectlessMoodDoesNothing(): void
+    {
+        $state = $this->state([1 => ['Optimism', 'Anger']]);
+        $state->startTurn(1);
+        $result = $this->plays->playMood($state, 1, $this->id('Optimism'), new PlayerChoices([]));
+        self::assertFalse($result->isPending);
+
+        $second = $this->state([1 => ['Optimism', 'Honesty']]);
+        $second->startTurn(1);
+        $this->seat($second, 1, 'Honesty'); // no after-playing effect
+        $result = $this->plays->playMood($second, 1, $this->id('Optimism'), new PlayerChoices(['target_mood_id' => $this->id('Honesty')]));
+        self::assertFalse($result->isPending);
+    }
+
+    public function testOptimismRefusesAMoodThatIsNotYoursOrNotInPlay(): void
+    {
+        $state = $this->state([1 => ['Optimism'], 2 => ['Longing']]);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Longing');
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, $this->id('Optimism'), new PlayerChoices(['target_mood_id' => $this->id('Longing')]));
+    }
+
+    public function testOptimismRunsAnEffectWithNoChoicesStraightAway(): void
+    {
+        $state = $this->state([1 => ['Optimism', 'Charity']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Charity'); // grants an extra play, asks for nothing
+        $before = $state->playsRemaining();
+        $result = $this->plays->playMood($state, 1, $this->id('Optimism'), new PlayerChoices(['target_mood_id' => $this->id('Charity')]));
+
+        self::assertFalse($result->isPending);
+        self::assertSame($before, $state->playsRemaining(), "Optimism's own play used one and Charity's repeated effect granted one back");
+    }
+
+    public function testAdmirationRunsAPileMoodsEffectAsItself(): void
+    {
+        $state = $this->state([1 => ['Admiration', 'Complacency']], discardNames: ['Longing', 'Courage']);
+        $state->startTurn(1);
+        $paused = $this->plays->playMood($state, 1, $this->id('Admiration'), new PlayerChoices(['target_discard_card_id' => $this->id('Longing')]));
+        self::assertTrue($paused->isPending);
+
+        $this->resume($state, $paused, ['delegate_choices' => new PlayerChoices(['delegate_choices' => [
+            'hand_card_id' => $this->id('Complacency'),
+            'discard_card_ids' => $this->ids('Courage'),
+        ]])]);
+
+        self::assertContains($this->id('Courage'), $state->hand(1));
+        self::assertContains($this->id('Longing'), $state->discardPile(), 'the pile mood stays in the pile');
+        self::assertTrue($state->isInPlay($this->id('Admiration')));
+    }
+
+    public function testAdmirationRequiresAMoodInThePile(): void
+    {
+        $state = $this->state([1 => ['Admiration'], 2 => ['Longing']]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, $this->id('Admiration'), new PlayerChoices(['target_discard_card_id' => $this->id('Longing')]));
+    }
+
+    public function testWistfulnessGrantsADiscardOnlyPlay(): void
+    {
+        $state = $this->state([1 => ['Wistfulness', 'Anger']], discardNames: ['Boredom']);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Wistfulness');
+
+        $grants = array_values($state->pendingPlayGrants());
+        self::assertCount(1, $grants);
+        self::assertSame('discard', $grants[0]['source'], 'only a mood from the discard pile');
+        self::assertSame($this->id('Wistfulness'), $grants[0]['sourceCardId']);
+    }
+
+    public function testWistfulnessOffersARepeatOfAMoodPlayedFromThePile(): void
+    {
+        $state = $this->state([1 => ['Wistfulness', 'Anger']], discardNames: ['Longing']);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Wistfulness');
+        $result = $this->plays->playMood($state, 1, $this->id('Longing'), new PlayerChoices([]));
+
+        self::assertTrue($result->isPending, "Longing was played from the pile, so its effect may happen again");
+        self::assertSame('duplicity_repeat_offer', $result->pendingDecisions[0]->decisionType);
+    }
+
+    public function testWistfulnessDoesNotRepeatAMoodPlayedFromHandOrItself(): void
+    {
+        $fromHand = $this->state([1 => ['Wistfulness', 'Longing']]);
+        $fromHand->startTurn(1);
+        $fromHand->grantExtraPlay(1, null, $this->id('Longing'));
+        $this->play($fromHand, 1, 'Wistfulness');
+        $result = $this->plays->playMood($fromHand, 1, $this->id('Longing'), new PlayerChoices([]));
+        self::assertFalse($result->isPending, 'a hand play isn\'t a pile play');
+
+        $self = $this->state([1 => ['Wistfulness']]);
+        $self->startTurn(1);
+        $result = $this->plays->playMood($self, 1, $this->id('Wistfulness'), new PlayerChoices([]));
+        self::assertFalse($result->isPending, 'Wistfulness is not "another mood"');
+    }
+
+    public function testReinvigorationDiscardsYourOtherMoodsAndGrantsThatManyPilePlays(): void
+    {
+        $state = $this->state([1 => ['Reinvigoration', 'Anger', 'Boredom', 'Apathy']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Anger', 'Boredom');
+        $this->play($state, 1, 'Reinvigoration');
+
+        self::assertEqualsCanonicalizing($this->ids('Anger', 'Boredom'), $state->discardPile());
+        self::assertTrue($state->isInPlay($this->id('Reinvigoration')));
+        self::assertSame(2, $state->playsRemaining(), 'two pile plays and nothing else: not the hand');
+        self::assertFalse($state->hasUsablePlayGrant($this->id('Apathy'), 1), "can't play from hand this turn");
+        self::assertTrue($state->hasUsablePlayGrant($this->id('Anger'), 1));
+    }
+
+    public function testReinvigorationLocksOutEveryOtherPlayThisTurn(): void
+    {
+        $state = $this->state([1 => ['Reinvigoration', 'Anger', 'Boredom']]);
+        $state->startTurn(1);
+        $state->grantExtraPlay(1, null, $this->id('Boredom')); // some other card's extra play
+        $this->seat($state, 1, 'Anger');
+        $this->play($state, 1, 'Reinvigoration');
+
+        self::assertSame(1, $state->playsRemaining(), "only the one pile play Reinvigoration granted; the other extra play is locked out");
+    }
+
+    public function testReinvigorationWithNoOtherMoodsOnlyCostsTheTurn(): void
+    {
+        $state = $this->state([1 => ['Reinvigoration', 'Anger']]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Reinvigoration');
+
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testTwoReinvigorationsBlockEachOthersPlays(): void
+    {
+        $state = $this->state([1 => ['Reinvigoration', 'Anger']], discardNames: ['Boredom']);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Anger');
+        $this->play($state, 1, 'Reinvigoration'); // one pile play
+        self::assertSame(1, $state->playsRemaining());
+        // A second Reinvigoration's lock names only its own plays (another card id here): with both locks in force no grant is left.
+        $state->lockPlaysToGrantsFrom(9999);
+        self::assertSame(0, $state->playsRemaining());
+    }
+
     // ---- static value modifiers ----
 
     public function testArdorAddsTheNumberOfRedMoodsToEachOwnRedMood(): void

@@ -503,6 +503,12 @@ final class CardChoiceSchema
         'haunting' => [
             ['key' => 'discard_card_ids', 'type' => 'hand_card', 'multi' => true, 'required' => false, 'label' => 'Cards to discard from your hand (you may play that many additional moods from the discard pile on your next turn)'],
         ],
+        'optimism' => [
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => "One of your other moods whose after-playing effect happens an additional time (you'll then make that effect's choices)"],
+        ],
+        'admiration' => [
+            ['key' => 'target_discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => "A mood in the discard pile whose after-playing effect happens as though you had just played it (you'll then make that effect's choices)"],
+        ],
         'resignation' => [
             ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => true, 'label' => 'Card to put on the bottom of the deck (cost to play this card)'],
         ],

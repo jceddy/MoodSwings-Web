@@ -177,6 +177,10 @@ use MoodSwings\Rules\Effects\Custom\ReflectionEffect;
 use MoodSwings\Rules\Effects\Custom\ReverieEffect;
 use MoodSwings\Rules\Effects\Custom\WarinessEffect;
 use MoodSwings\Rules\Effects\Custom\LongingEffect;
+use MoodSwings\Rules\Effects\Custom\AdmirationEffect;
+use MoodSwings\Rules\Effects\Custom\OptimismEffect;
+use MoodSwings\Rules\Effects\Custom\ReinvigorationEffect;
+use MoodSwings\Rules\Effects\Custom\WistfulnessEffect;
 use MoodSwings\Rules\Effects\Custom\ForgetfulnessEffect;
 use MoodSwings\Rules\Effects\Custom\LevelheadednessEffect;
 use MoodSwings\Rules\Effects\Custom\DeflectionEffect;
@@ -592,6 +596,12 @@ final class DefaultEffectRegistry
         $registry->register('haunting', new HauntingEffect());
         $registry->register('forgetfulness', new ForgetfulnessEffect());
         $registry->register('levelheadedness', new LevelheadednessEffect());
+
+        // Repeat effects (MoodPlayService runs the delegated and repeated effects).
+        $registry->register('optimism', new OptimismEffect());
+        $registry->register('admiration', new AdmirationEffect());
+        $registry->register('wistfulness', new WistfulnessEffect());
+        $registry->register('reinvigoration', new ReinvigorationEffect());
         $registry->register('pettiness', new PettinessEffect());
         $registry->register('overconfidence', new OverconfidenceEffect());
         $registry->register('restlessness', new CustomConditionalValueEffect(CustomConditionalValueEffect::DISTINCT_OWN_VALUES_AT_LEAST, 3));

@@ -257,6 +257,8 @@ final class BoardState
 
     /** Pettiness/Overconfidence: the player may not play moods this turn. */
     public const TURN_NO_PLAYS = 'no_plays';
+    /** Reinvigoration: "You can't play any moods this turn except moods played this way" -- the restriction is this prefix plus the card's id. */
+    public const TURN_ONLY_FROM = 'only_from:';
     /** Rudeness: no additional moods this turn, and no after-playing effects of the moods played in it. */
     public const TURN_RUDENESS = 'rudeness';
 
@@ -3229,6 +3231,15 @@ final class BoardState
         $this->turnRestrictions = array_values(array_unique($restrictions));
     }
 
+    /** Reinvigoration: the TURN_ONLY_FROM restriction for $sourceCardId, in force for the rest of this turn. */
+    public function lockPlaysToGrantsFrom(int $sourceCardId): void
+    {
+        $restriction = self::TURN_ONLY_FROM . $sourceCardId;
+        if (!in_array($restriction, $this->turnRestrictions, true)) {
+            $this->turnRestrictions[] = $restriction;
+        }
+    }
+
     /** @return array{playsMade: int, basePlays: int, restrictions: list<string>} what is persisted with the turn's grants */
     public function turnFlags(): array
     {
@@ -3583,6 +3594,13 @@ final class BoardState
     {
         if (in_array(self::TURN_NO_PLAYS, $this->turnRestrictions, true)) {
             return false;
+        }
+        // Reinvigoration: each one in force this turn leaves only the plays it granted itself, so a second one blocks the
+        // first's leftover plays and its own are blocked by the first (the ruling the card's authors lean toward).
+        foreach ($this->turnRestrictions as $turnRestriction) {
+            if (str_starts_with($turnRestriction, self::TURN_ONLY_FROM) && ($restriction['sourceCardId'] ?? null) !== (int) substr($turnRestriction, strlen(self::TURN_ONLY_FROM))) {
+                return false;
+            }
         }
         // Obstinacy: its owner can only play one mood per turn, so nothing more is playable once one has been.
         if ($this->turnPlaysMade >= 1 && $this->currentPlayerId !== null && $this->countMoodsInPlayWithEffectiveKey($this->currentPlayerId, 'obstinacy') > 0) {

@@ -571,6 +571,8 @@ final class BotPlayerService
             'sneakiness' => $this->sneakinessTargetPlayerId($state, $botGamePlayerId) !== null,
             'pacifism' => $this->pacifismTargetMoodIds($state, $botGamePlayerId) !== [],
             'anger' => $this->angerTargetMoodIds($state, $cardId, $botGamePlayerId) !== [],
+            // Reinvigoration wipes the bot's own board and locks the rest of its turn to replays it would have to plan -- not played.
+            'reinvigoration' => false,
             default => true,
         };
     }

@@ -9533,6 +9533,28 @@ in custom sets is.
     on theirs can answer in turn -- each round of it discards a mood, so it ends). It is not set off outside a play (scoring,
     turn-start triggers), where there is no effect actor.
 
+- **Repeat effects (batch 19).** Optimism, Wistfulness, Reinvigoration and Admiration (migration 0517), on a new piece of
+  `MoodPlayService`.
+  - **Delegated invocations** (`DelegatesAfterPlaying`, for **Optimism** and **Admiration**): like Duplicity's repeat, running
+    another card's effect needs the registry, so the service does it. The card names its target in an optional field
+    (`target_mood_id` -- one of your other moods in play; `target_discard_card_id` -- a mood in the pile) and returns a plan
+    (effect key, the card the effect runs as, the target's `afterPlayingFields()`). The acting player is asked for the fresh
+    choices the repeat needs (a `delegated_effect_choices` pending decision, a nested field of those fields, the same shape
+    as Duplicity's repeat offer); the effect is then run -- pausing again if *it* needs a decision (Suspicion's discard,
+    say), the paused bag tagged with `__delegate_key`/`__delegate_source` so the answer is routed back to it -- and the
+    original card's own chain carries on afterwards. The repeat isn't a play, so Duplicity, Wistfulness and "each time you play
+    another mood" reactions don't see it. Optimism runs the chosen mood's effect as that mood; Admiration runs the pile mood's
+    effect as the Admiration just played (the card's ruling for a pile mood that says "this mood"), leaving the pile mood where
+    it is. A mood with no after-playing effect gives nothing.
+  - **Wistfulness**: Harmony's grant (one extra play, discard pile only) plus Duplicity's repeat for pile plays --
+    `resolveAfterPlayingChain()` adds each Wistfulness in play to a pile-played mood's repeat sources (`playedFromZone`),
+    except for Wistfulness's own play, so the pile play it grants already triggers twice.
+  - **Reinvigoration**: discards all your other moods (through `moveInPlayToDiscard()`, so Sentimentality pays out), grants that
+    many discard-only plays and locks the turn with `TURN_ONLY_FROM` + its card id (`lockPlaysToGrantsFrom()`, persisted in
+    `turn_flags`): `grantIsActive()` then only honours grants sourced from that card, so the base play, Hurt Feelings and every
+    other card's extra play are dead -- and two Reinvigorations cancel each other's plays (the ruling the authors lean toward).
+    Restraint stops its replays like any granted play. Bots never play it.
+
 
 ### Default selections mode (issue #274)
 

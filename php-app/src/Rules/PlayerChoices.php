@@ -76,6 +76,12 @@ final class PlayerChoices
         return new self(is_array($values) ? $values : []);
     }
 
+    /** A copy of this bag with $extra added (or overriding) -- used to tag a persisted bag with the delegated effect it belongs to. @param array<string, mixed> $extra */
+    public function with(array $extra): self
+    {
+        return new self([...$this->values, ...$extra]);
+    }
+
     /**
      * The raw underlying values -- used to persist a bag across a pause in
      * resolution (see GameService's pending-decision batches), since a

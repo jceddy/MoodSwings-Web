@@ -1251,6 +1251,69 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertContains($remaining[0], [$lowMood, $rashness]);
     }
 
+    public function testOptimismsRepeatedEffectAsksForFreshChoicesThenAnOpponentsDecisionAcrossRequests(): void
+    {
+        $suspicion = $this->card('Suspicion', 'in_play', $this->p1);
+        $optimism = $this->card('Optimism', 'hand', $this->p1);
+        $forced = $this->card('Apathy', 'hand', $this->p2);
+        $this->card('Creativity', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $optimism, ['target_mood_id' => $suspicion]);
+        self::assertSame($this->p1, $this->pendingDecisionTarget(), 'the acting player makes the repeat\'s choices first');
+        $ask = $this->games->getState($this->gameId, $this->userIdOf($this->p1))['round']['pending_decision'];
+        self::assertSame('delegated_effect_choices', $ask['decision_type']);
+
+        $this->games->respondToDecision($this->gameId, $this->p1, ['delegate_choices' => ['player_ids' => [$this->p2]]]);
+        self::assertSame($this->p2, $this->pendingDecisionTarget(), "Suspicion's own decision: player 2 picks the card to discard");
+
+        $this->games->respondToDecision($this->gameId, $this->p2, ['discarded_card_id_' . $this->p2 => $forced]);
+
+        self::assertNull($this->pendingDecisionTarget());
+        self::assertContains($forced, $this->state()->discardPile(), "Suspicion's effect happened again");
+        self::assertTrue($this->state()->isInPlay($optimism));
+        self::assertTrue($this->state()->isInPlay($suspicion));
+    }
+
+    public function testAdmirationRunsAPileMoodsEffectAcrossRequests(): void
+    {
+        $admiration = $this->card('Admiration', 'hand', $this->p1);
+        $pileMood = $this->card('Suspicion', 'discard', $this->p1);
+        $forced = $this->card('Apathy', 'hand', $this->p2);
+        $this->card('Creativity', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $admiration, ['target_discard_card_id' => $pileMood]);
+        $this->games->respondToDecision($this->gameId, $this->p1, ['delegate_choices' => ['player_ids' => [$this->p2]]]);
+        $this->games->respondToDecision($this->gameId, $this->p2, ['discarded_card_id_' . $this->p2 => $forced]);
+
+        $state = $this->state();
+        self::assertContains($forced, $state->discardPile());
+        self::assertContains($pileMood, $state->discardPile(), 'Suspicion itself stays in the pile');
+        self::assertTrue($state->isInPlay($admiration));
+    }
+
+    public function testReinvigorationsLockPersistsAndLeavesOnlyPilePlays(): void
+    {
+        $reinvigoration = $this->card('Reinvigoration', 'hand', $this->p1);
+        $mine = $this->card('Anger', 'in_play', $this->p1);
+        $inHand = $this->card('Courage', 'hand', $this->p1);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $reinvigoration, []);
+
+        $state = $this->state();
+        self::assertSame($this->p1, $state->currentPlayerId(), 'still player 1\'s turn: one pile play remains');
+        self::assertContains($mine, $state->discardPile());
+        self::assertSame(1, $state->playsRemaining());
+        try {
+            $this->games->playMood($this->gameId, $this->p1, $inHand, []);
+            self::fail('a hand card was played under Reinvigoration');
+        } catch (\Throwable $e) {
+            self::assertInstanceOf(\MoodSwings\Rules\Exceptions\IllegalPlayException::class, $e);
+        }
+        $this->games->playMood($this->gameId, $this->p1, $mine, []); // the replay from the pile
+        self::assertTrue($this->state()->isInPlay($mine));
+    }
+
     public function testGrievanceMakesAnOpponentWithMoreCardsPutOneOnTheBottomOfTheDeck(): void
     {
         $grievance = $this->card('Grievance', 'hand', $this->p1);

@@ -12626,6 +12626,8 @@
         activePendingDecision = pendingDecision;
         const titlesByDecisionType = {
             duplicity_repeat_offer: "Repeat " + (pendingDecision.played_card_name || 'this mood') + "'s effect?",
+            // Optimism / Admiration: another mood's effect happens again, and its choices are made fresh.
+            delegated_effect_choices: (pendingDecision.played_card_name || 'This mood') + ": choices for the repeated effect",
             enthusiasm_extra_score: "Enthusiasm's bonus",
             passion_score_opponent_mood: "Passion's bonus",
             after_scoring_order: 'Order your after-scoring effects',
@@ -12654,7 +12656,7 @@
         // card_id-only exclusion this was originally added for still
         // works either way.
         const playedCardInPlay = currentState.in_play.find((c) => c.card_id === pendingDecision.played_card_id);
-        const fieldCard = pendingDecision.decision_type === 'duplicity_repeat_offer'
+        const fieldCard = (pendingDecision.decision_type === 'duplicity_repeat_offer' || pendingDecision.decision_type === 'delegated_effect_choices')
             ? (playedCardInPlay || { card_id: pendingDecision.played_card_id })
             : PENDING_DECISION_PLACEHOLDER_CARD;
 
