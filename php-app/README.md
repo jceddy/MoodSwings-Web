@@ -1863,7 +1863,9 @@ request/response round trips with no process alive in between to hold a
   rules engine, persisting the result, and appending a `game_events` row,
   all within a single request. Turn advancement, round scoring (via
   `RoundScorer`), Hurt Feelings assignment (3+ player games only), losers
-  drawing a card (skipped entirely for the round that pushes the winner to
+  drawing a card (in order starting with the player clockwise from the
+  winner, per the official ruling -- not the round's own turn order, since a
+  card like Prudence can make the top of the deck known; skipped entirely for the round that pushes the winner to
   `wins_needed` -- there's no next round for that card to matter in, and a
   player shouldn't draw one off the round that just ended the game), game
   completion once a player reaches `wins_needed`,

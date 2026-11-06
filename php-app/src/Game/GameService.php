@@ -13347,8 +13347,11 @@ final class GameService
             // their draw the same way $turnOrder already excludes them
             // from winning.
             // Forgetfulness: no one draws at the end of this round.
+            // Official ruling: the losers draw starting from the player clockwise (next in seat order) from the winner and
+            // continuing around the table -- not in the round's own turn order -- since a card like Prudence can make the top
+            // card(s) of the deck known, so who draws first matters.
             if (!$state->noEndOfRoundDraw()) {
-                foreach ($turnOrder as $playerId) {
+                foreach ($this->rotate($turnOrder, $winnerId) as $playerId) {
                     if ($playerId !== $winnerId) {
                         $state->drawCard($playerId);
                         // Despair: "At the end of each round you lose, you draw an additional card" -- one for each in play.

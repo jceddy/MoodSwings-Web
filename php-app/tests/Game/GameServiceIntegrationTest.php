@@ -6083,6 +6083,32 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNotNull($game['completed_at']);
     }
 
+    // Official ruling: losers draw starting from the player clockwise from the winner, not from the round's own first player
+    // (Prudence and similar cards can make the top card(s) known, so the order is not cosmetic).
+    public function testLosersDrawStartingClockwiseFromTheWinnerNotFromTheRoundsFirstPlayer(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3, 'complacencyId' => $complacencyId] = $this->buildThreePlayerFixture();
+
+        // p1 goes first this round but p2 wins it: clockwise from p2 is p3, then p1 (turn order would have been p1, then p3).
+        $this->games->pass($gameId, $p1);
+        $this->games->playMood($gameId, $p2, $complacencyId, []);
+        $result = $this->games->pass($gameId, $p3);
+
+        self::assertTrue($result['round_scored']);
+        self::assertFalse($result['game_completed']);
+
+        $handOf = function (int $playerId) use ($gameId): array {
+            $stmt = $this->pdo->prepare("SELECT card_id FROM game_cards WHERE game_id = :game_id AND zone = 'hand' AND owner_game_player_id = :owner ORDER BY card_id");
+            $stmt->execute(['game_id' => $gameId, 'owner' => $playerId]);
+
+            return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+        };
+        // The deck's top card is 27, then 54: p3 draws first (27), p1 second (54).
+        self::assertSame([27], $handOf($p3));
+        self::assertContains(54, $handOf($p1));
+        self::assertNotContains(27, $handOf($p1));
+    }
+
     public function testLoserDoesNotDrawACardWhenTheWinningRoundEndsTheGame(): void
     {
         $u1 = $this->insertUser('finalround-p1');
