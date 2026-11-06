@@ -9555,6 +9555,26 @@ in custom sets is.
     other card's extra play are dead -- and two Reinvigorations cancel each other's plays (the ruling the authors lean toward).
     Restraint stops its replays like any granted play. Bots never play it.
 
+- **The last four cards (batch 20).** Prudence, Reckoning, Shrewdness and Grudge (migration 0518) complete the set.
+  - **Prudence** is a *private* look: a `prudence_bottom` decision whose `revealed_card` field lists the top two cards of the
+    deck (the player's own deck in a duel) -- the field's options are only ever sent to its target, and nothing is recorded as a
+    public reveal. They pick any (0-2) to send to the bottom (`moveDeckCardToBottom()`); if both stay, a second `prudence_top`
+    decision picks which goes on top (`moveDeckCardToTop()` -- at most two cards, so one pick is the whole order). Bots leave
+    both where they are.
+  - **Reckoning**: the optional `reckon` flag; if set, every active player with a mood in play (the acting player too, Reckoning
+    itself included) is asked which of their own to keep (`reckoning_keep_mood`), and once all have answered every other mood in
+    play goes into the discard pile (so Elusiveness bounces an opponent's, Sentimentality pays out, Rancor answers).
+    Bots keep their highest-value mood when asked, and never choose to reckon.
+  - **Shrewdness** swaps the ownership of one of your other moods and one of an opponent's of no greater current value
+    (`giveInPlayToPlayer()` both ways: both stay in play, neither effect happens again); both choices or neither, and the
+    opponent's mood is an ordinary opposing-mood choice, so Solace/Reassurance protect it.
+  - **Grudge** remembers its opponent (`grudgeTargetPlayerId`) and grants one extra play per round that opponent has won
+    (`BoardState::roundWinsOf()`, derived from the scored rounds, so Forgetfulness lowers it): this turn's in `afterPlaying()`,
+    every later turn's in `computeFreshGrants()` as the turn starts (lost if that Grudge leaves play first). Its replacement
+    effect is in `BoardState`: `moveInPlayToDiscard()`, `moveInPlayToHand()` and `moveInPlayToPlayersHand()` send it to the
+    bottom of the deck instead, before Elusiveness is considered (a Grudge Elusiveness would bounce would end up on the bottom
+    anyway), and since nothing reaches the discard pile Sentimentality, Rancor and Vulnerability don't see it.
+
 
 ### Default selections mode (issue #274)
 

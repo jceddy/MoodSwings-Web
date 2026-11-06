@@ -3203,6 +3203,24 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['target_mood_id' => 5], $this->bot->chooseDecisionAnswer($state, $field, 1, 'passion_score_opponent_mood', 97));
     }
 
+    public function testChooseDecisionAnswerKeepsItsHighestValueMoodForReckoning(): void
+    {
+        $state = $this->boardState(hands: [1 => [3, 5]]);
+        $state->moveHandToInPlay(1, 3); // Charity, value 1
+        $state->moveHandToInPlay(1, 5); // Complacency, value 4
+        $field = ['key' => 'chosen_mood_id_1', 'type' => 'mood', 'candidate_card_ids' => [3, 5], 'required' => true];
+
+        self::assertSame(['chosen_mood_id_1' => 5], $this->bot->chooseDecisionAnswer($state, $field, 1, 'reckoning_keep_mood', 100));
+    }
+
+    public function testChooseDecisionAnswerLeavesBothCardsOnTopForPrudence(): void
+    {
+        $state = $this->boardState();
+        $field = ['key' => 'bottom_card_ids', 'type' => 'revealed_card', 'multi' => true, 'required' => false, 'candidate_card_ids' => [3, 5]];
+
+        self::assertSame([], $this->bot->chooseDecisionAnswer($state, $field, 1, 'prudence_bottom', 100));
+    }
+
     public function testChooseDecisionAnswerDeclinesAScoringBonusWhenSneakinessWasPlayedThisRound(): void
     {
         $state = $this->boardState(hands: [1 => [116, 5], 2 => [51]]);

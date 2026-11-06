@@ -177,6 +177,10 @@ use MoodSwings\Rules\Effects\Custom\ReflectionEffect;
 use MoodSwings\Rules\Effects\Custom\ReverieEffect;
 use MoodSwings\Rules\Effects\Custom\WarinessEffect;
 use MoodSwings\Rules\Effects\Custom\LongingEffect;
+use MoodSwings\Rules\Effects\Custom\GrudgeEffect;
+use MoodSwings\Rules\Effects\Custom\PrudenceEffect;
+use MoodSwings\Rules\Effects\Custom\ReckoningEffect;
+use MoodSwings\Rules\Effects\Custom\ShrewdnessEffect;
 use MoodSwings\Rules\Effects\Custom\AdmirationEffect;
 use MoodSwings\Rules\Effects\Custom\OptimismEffect;
 use MoodSwings\Rules\Effects\Custom\ReinvigorationEffect;
@@ -602,6 +606,12 @@ final class DefaultEffectRegistry
         $registry->register('admiration', new AdmirationEffect());
         $registry->register('wistfulness', new WistfulnessEffect());
         $registry->register('reinvigoration', new ReinvigorationEffect());
+
+        // The last four cards.
+        $registry->register('prudence', new PrudenceEffect());
+        $registry->register('reckoning', new ReckoningEffect());
+        $registry->register('shrewdness', new ShrewdnessEffect());
+        $registry->register('grudge', new GrudgeEffect());
         $registry->register('pettiness', new PettinessEffect());
         $registry->register('overconfidence', new OverconfidenceEffect());
         $registry->register('restlessness', new CustomConditionalValueEffect(CustomConditionalValueEffect::DISTINCT_OWN_VALUES_AT_LEAST, 3));

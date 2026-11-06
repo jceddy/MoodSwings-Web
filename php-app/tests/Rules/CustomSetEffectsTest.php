@@ -1637,6 +1637,194 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame(0, $state->playsRemaining());
     }
 
+    // ---- the last four: Prudence, Reckoning, Shrewdness, Grudge ----
+
+    public function testPrudenceLooksAtTheTopTwoAndSendsChosenOnesToTheBottom(): void
+    {
+        $state = $this->state([1 => ['Prudence']], ['Courage', 'Joy', 'Apathy']);
+        $state->startTurn(1);
+        $paused = $this->plays->playMood($state, 1, $this->id('Prudence'), new PlayerChoices([]));
+
+        self::assertTrue($paused->isPending);
+        $request = $paused->pendingDecisions[0];
+        self::assertSame('prudence_bottom', $request->decisionType);
+        self::assertSame($this->ids('Courage', 'Joy'), $request->field['candidate_card_ids'], 'only the top two');
+        self::assertSame([], $state->consumeRevealedCardIds(), 'a private look, not a reveal');
+
+        $this->resume($state, $paused, ['bottom_card_ids' => new PlayerChoices(['bottom_card_ids' => $this->ids('Courage')])]);
+        self::assertSame($this->ids('Joy', 'Apathy', 'Courage'), $state->deck());
+    }
+
+    public function testPrudenceKeepingBothAsksWhichGoesOnTop(): void
+    {
+        $state = $this->state([1 => ['Prudence']], ['Courage', 'Joy', 'Apathy']);
+        $state->startTurn(1);
+        $paused = $this->plays->playMood($state, 1, $this->id('Prudence'), new PlayerChoices([]));
+        $second = $this->resume($state, $paused, ['bottom_card_ids' => new PlayerChoices(['bottom_card_ids' => []])]);
+
+        self::assertTrue($second->isPending);
+        self::assertSame('prudence_top', $second->pendingDecisions[0]->decisionType);
+        $done = $this->resume($state, $second, ['top_card_id' => new PlayerChoices(['top_card_id' => $this->id('Joy')])]);
+
+        self::assertFalse($done->isPending);
+        self::assertSame($this->ids('Joy', 'Courage', 'Apathy'), $state->deck(), 'Joy on top, Courage second');
+    }
+
+    public function testPrudenceCanSendBothToTheBottomAndWithAnEmptyDeckDoesNothing(): void
+    {
+        $state = $this->state([1 => ['Prudence']], ['Courage', 'Joy', 'Apathy']);
+        $state->startTurn(1);
+        $paused = $this->plays->playMood($state, 1, $this->id('Prudence'), new PlayerChoices([]));
+        $done = $this->resume($state, $paused, ['bottom_card_ids' => new PlayerChoices(['bottom_card_ids' => $this->ids('Courage', 'Joy')])]);
+        self::assertFalse($done->isPending);
+        self::assertSame($this->ids('Apathy', 'Courage', 'Joy'), $state->deck());
+
+        $empty = $this->state([1 => ['Prudence']]);
+        $empty->startTurn(1);
+        self::assertFalse($this->plays->playMood($empty, 1, $this->id('Prudence'), new PlayerChoices([]))->isPending);
+    }
+
+    public function testReckoningKeepsOneMoodPerPlayerAndDiscardsTheRest(): void
+    {
+        $state = $this->state([1 => ['Reckoning', 'Anger'], 2 => ['Apathy', 'Boredom']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Anger');
+        $this->seat($state, 2, 'Apathy', 'Boredom');
+        $paused = $this->plays->playMood($state, 1, $this->id('Reckoning'), new PlayerChoices(['reckon' => true]));
+
+        self::assertTrue($paused->isPending);
+        self::assertCount(2, $paused->pendingDecisions, 'every player with a mood chooses');
+        $keep = [1 => $this->id('Reckoning'), 2 => $this->id('Boredom')]; // player 1 may keep Reckoning itself
+        $answers = [];
+        foreach ($paused->pendingDecisions as $request) {
+            $answers[$request->key] = new PlayerChoices([$request->key => $keep[$request->targetPlayerId]]);
+        }
+        $this->resume($state, $paused, $answers);
+
+        self::assertEqualsCanonicalizing($this->ids('Reckoning', 'Boredom'), array_map(static fn ($m) => $m->cardId, $state->moodsInPlay()));
+        self::assertEqualsCanonicalizing($this->ids('Anger', 'Apathy'), $state->discardPile());
+    }
+
+    public function testReckoningDoesNothingUnlessChosenAndSkipsPlayersWithNoMoods(): void
+    {
+        $state = $this->state([1 => ['Reckoning', 'Anger'], 2 => ['Apathy']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Anger');
+        $this->seat($state, 2, 'Apathy');
+        self::assertFalse($this->plays->playMood($state, 1, $this->id('Reckoning'), new PlayerChoices([]))->isPending);
+        self::assertTrue($state->isInPlay($this->id('Anger')));
+
+        $three = $this->state([1 => ['Reckoning'], 2 => ['Apathy'], 3 => []]);
+        $three->startTurn(1);
+        $this->seat($three, 2, 'Apathy');
+        $paused = $this->plays->playMood($three, 1, $this->id('Reckoning'), new PlayerChoices(['reckon' => true]));
+        self::assertCount(2, $paused->pendingDecisions, 'player 3 has no mood and chooses nothing');
+    }
+
+    public function testShrewdnessSwapsOneOfYourMoodsForAnOpponentsOfNoGreaterValue(): void
+    {
+        $state = $this->state([1 => ['Shrewdness', 'Apathy'], 2 => ['Courage']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Apathy'); // 4
+        $this->seat($state, 2, 'Courage'); // 1
+        $this->play($state, 1, 'Shrewdness', ['own_mood_id' => $this->id('Apathy'), 'opponent_mood_id' => $this->id('Courage')]);
+
+        self::assertSame(2, $state->ownerOf($this->id('Apathy')));
+        self::assertSame(1, $state->ownerOf($this->id('Courage')));
+        self::assertTrue($state->isInPlay($this->id('Shrewdness')));
+    }
+
+    public function testShrewdnessAllowsAnEqualValueButNotAHigherOne(): void
+    {
+        $equal = $this->state([1 => ['Shrewdness', 'Apathy'], 2 => ['Complacency']]);
+        $equal->startTurn(1);
+        $this->seat($equal, 1, 'Apathy'); // 4
+        $this->seat($equal, 2, 'Complacency'); // 4
+        $this->play($equal, 1, 'Shrewdness', ['own_mood_id' => $this->id('Apathy'), 'opponent_mood_id' => $this->id('Complacency')]);
+        self::assertSame(2, $equal->ownerOf($this->id('Apathy')));
+
+        $higher = $this->state([1 => ['Shrewdness', 'Courage'], 2 => ['Apathy']]);
+        $higher->startTurn(1);
+        $this->seat($higher, 1, 'Courage'); // 1
+        $this->seat($higher, 2, 'Apathy'); // 4
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($higher, 1, 'Shrewdness', ['own_mood_id' => $this->id('Courage'), 'opponent_mood_id' => $this->id('Apathy')]);
+    }
+
+    public function testShrewdnessNeedsBothChoicesOrNeitherAndNeverTheCardItself(): void
+    {
+        $state = $this->state([1 => ['Shrewdness', 'Apathy'], 2 => ['Courage']]);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Courage');
+        $this->play($state, 1, 'Shrewdness');
+        self::assertSame(2, $state->ownerOf($this->id('Courage')), 'declined: nothing moves');
+
+        $half = $this->state([1 => ['Shrewdness'], 2 => ['Courage']]);
+        $half->startTurn(1);
+        $this->seat($half, 2, 'Courage');
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($half, 1, 'Shrewdness', ['opponent_mood_id' => $this->id('Courage')]);
+    }
+
+    public function testGrudgeGrantsAnExtraPlayForEachRoundTheChosenOpponentHasWon(): void
+    {
+        $state = $this->state([1 => ['Grudge'], 2 => []]);
+        $state->setRoundWins([1 => 0, 2 => 2]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Grudge', ['target_player_id' => 2]);
+
+        self::assertSame(2, $state->playsRemaining(), 'two round wins, two extra plays this turn');
+        self::assertSame(2, $state->effectState($this->id('Grudge'), 'grudgeTargetPlayerId'));
+    }
+
+    public function testGrudgeNeedsAnOpponentAndGrantsNothingAtZeroWins(): void
+    {
+        $state = $this->state([1 => ['Grudge'], 2 => []]);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Grudge', ['target_player_id' => 2]);
+        self::assertSame(0, $state->playsRemaining());
+
+        $self = $this->state([1 => ['Grudge']]);
+        $self->startTurn(1);
+        $this->expectException(InvalidChoiceException::class);
+        $this->play($self, 1, 'Grudge', ['target_player_id' => 1]);
+    }
+
+    public function testGrudgeGoesToTheBottomOfTheDeckInsteadOfLeavingPlay(): void
+    {
+        $discarded = $this->state([1 => ['Grudge']], ['Courage']);
+        $this->seat($discarded, 1, 'Grudge');
+        $discarded->moveInPlayToDiscard($this->id('Grudge'));
+        self::assertSame($this->ids('Courage', 'Grudge'), $discarded->deck());
+        self::assertSame([], $discarded->discardPile());
+        self::assertFalse($discarded->discardedThisRound(), 'nothing was put into the discard pile');
+
+        $bounced = $this->state([1 => ['Grudge']], ['Courage']);
+        $this->seat($bounced, 1, 'Grudge');
+        $bounced->moveInPlayToHand($this->id('Grudge'));
+        self::assertSame([], $bounced->hand(1));
+        self::assertSame($this->ids('Courage', 'Grudge'), $bounced->deck());
+
+        $taken = $this->state([1 => ['Grudge']], ['Courage']);
+        $this->seat($taken, 1, 'Grudge');
+        $taken->moveInPlayToPlayersHand($this->id('Grudge'), 2);
+        self::assertSame([], $taken->hand(2));
+        self::assertSame($this->ids('Courage', 'Grudge'), $taken->deck());
+    }
+
+    public function testGrudgeWinsOverElusivenessAndSetsOffNoDiscardTriggers(): void
+    {
+        $state = $this->state([1 => ['Rashness'], 2 => ['Grudge', 'Elusiveness', 'Sentimentality']], ['Courage']);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Grudge', 'Elusiveness', 'Sentimentality');
+        $state->setEffectActor(1);
+        $state->moveInPlayToDiscard($this->id('Grudge'));
+
+        self::assertContains($this->id('Grudge'), $state->deck(), 'the bottom of the deck, not the hand Elusiveness would have used');
+        self::assertSame([], $state->hand(2));
+        self::assertNotContains($this->id('Courage'), $state->hand(2), 'Sentimentality did not draw: nothing went to the discard pile');
+    }
+
     // ---- static value modifiers ----
 
     public function testArdorAddsTheNumberOfRedMoodsToEachOwnRedMood(): void

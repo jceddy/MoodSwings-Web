@@ -509,6 +509,16 @@ final class CardChoiceSchema
         'admiration' => [
             ['key' => 'target_discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => "A mood in the discard pile whose after-playing effect happens as though you had just played it (you'll then make that effect's choices)"],
         ],
+        'reckoning' => [
+            ['key' => 'reckon', 'type' => 'bool', 'required' => false, 'label' => 'Have each player choose one of their moods; every mood not chosen goes into the discard pile'],
+        ],
+        'shrewdness' => [
+            ['key' => 'own_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => 'Your other mood to swap (choose an opponent\'s mood below as well)'],
+            ['key' => 'opponent_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => false, 'label' => "An opponent's mood with a value less than or equal to that mood's, to swap for it", 'excludes_teammate' => true],
+        ],
+        'grudge' => [
+            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'other', 'required' => true, 'label' => "Opponent whose round wins give you extra plays", 'excludes_teammate' => true],
+        ],
         'resignation' => [
             ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => true, 'label' => 'Card to put on the bottom of the deck (cost to play this card)'],
         ],

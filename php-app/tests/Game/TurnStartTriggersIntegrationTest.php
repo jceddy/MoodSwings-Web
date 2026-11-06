@@ -1314,6 +1314,68 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertTrue($this->state()->isInPlay($mine));
     }
 
+    public function testPrudencesLookIsPrivateAndTheOrderPersistsAcrossRequests(): void
+    {
+        $prudence = $this->card('Prudence', 'hand', $this->p1);
+        $first = $this->card('Courage', 'deck', $this->p1, 0);
+        $second = $this->card('Joy', 'deck', $this->p1, 1);
+        $third = $this->card('Apathy', 'deck', $this->p1, 2);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $prudence, []);
+        $mine = $this->games->getState($this->gameId, $this->userIdOf($this->p1))['round']['pending_decision'];
+        self::assertEqualsCanonicalizing([$first, $second], array_column($mine['field']['options'], 'value'), 'the player sees the top two');
+        $theirs = $this->games->getState($this->gameId, $this->userIdOf($this->p2))['round']['pending_decision'];
+        self::assertArrayNotHasKey('field', $theirs, 'nobody else sees what is on top of the deck');
+
+        $this->games->respondToDecision($this->gameId, $this->p1, ['bottom_card_ids' => []]); // keep both
+        self::assertSame($this->p1, $this->pendingDecisionTarget(), 'which of the two goes on top');
+        $this->games->respondToDecision($this->gameId, $this->p1, ['top_card_id' => $second]);
+
+        self::assertSame([$second, $first, $third], $this->state()->deck($this->p1));
+    }
+
+    public function testReckoningKeepsOneMoodPerPlayerAcrossRequests(): void
+    {
+        $reckoning = $this->card('Reckoning', 'hand', $this->p1);
+        $mine = $this->card('Anger', 'in_play', $this->p1);
+        $keptTheirs = $this->card('Boredom', 'in_play', $this->p2);
+        $lostTheirs = $this->card('Apathy', 'in_play', $this->p2);
+        $this->card('Courage', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $reckoning, ['reckon' => true]);
+        self::assertSame(2, $this->answerEveryPendingDecision([
+            $this->p1 => ['chosen_mood_id_' . $this->p1 => $mine],
+            $this->p2 => ['chosen_mood_id_' . $this->p2 => $keptTheirs],
+        ]));
+
+        $state = $this->state();
+        self::assertTrue($state->isInPlay($mine));
+        self::assertTrue($state->isInPlay($keptTheirs));
+        self::assertFalse($state->isInPlay($lostTheirs));
+        self::assertFalse($state->isInPlay($reckoning), "player 1 chose Anger, so Reckoning itself goes too");
+        self::assertContains($reckoning, $state->discardPile());
+    }
+
+    public function testGrudgeGrantsExtraPlaysAtTheStartOfEachOfItsOwnersTurns(): void
+    {
+        $grudge = $this->card('Grudge', 'hand', $this->p1);
+        $opponentsMood = $this->card('Apathy', 'hand', $this->p2);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        // Round 1: player 1 plays Grudge against player 2; player 2 plays a 4 and wins the round.
+        $this->games->playMood($this->gameId, $this->p1, $grudge, ['target_player_id' => $this->p2]);
+        $this->games->playMood($this->gameId, $this->p2, $opponentsMood, []);
+        // Round 2: player 2 (the winner) goes first; when they pass it is player 1's turn, and player 2 has won one round.
+        $this->games->pass($this->gameId, $this->p2);
+
+        $state = $this->state();
+        self::assertSame($this->p1, $state->currentPlayerId());
+        self::assertSame(2, $state->playsRemaining(), "the ordinary play and one extra for player 2's round win");
+        $grudgeGrants = array_filter($state->pendingPlayGrants(), static fn (?array $g) => ($g['sourceCardId'] ?? null) === $grudge);
+        self::assertCount(1, $grudgeGrants);
+    }
+
     public function testGrievanceMakesAnOpponentWithMoreCardsPutOneOnTheBottomOfTheDeck(): void
     {
         $grievance = $this->card('Grievance', 'hand', $this->p1);

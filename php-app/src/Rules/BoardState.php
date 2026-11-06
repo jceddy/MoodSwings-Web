@@ -1163,6 +1163,13 @@ final class BoardState
     {
         $ownerId = $this->moodInPlay($cardId)->ownerId;
         $leavingEffectKey = $this->catalogRow($this->effectiveCardId($cardId))['effectKey'];
+        // Grudge: "If this mood would leave play, put it on the bottom of the deck instead." It is looked at before Elusiveness: a Grudge
+        // that Elusiveness would bounce to its owner's hand would only be sent to the bottom of the deck by this anyway.
+        if ($leavingEffectKey === 'grudge') {
+            $this->moveInPlayToBottomOfDeck($cardId);
+
+            return;
+        }
         // Elusiveness: an opponent's effect that would put one of its owner's moods into the discard pile puts it into their
         // hand instead -- so nothing reaches the discard pile, and nothing that watches the pile happens.
         if ($this->effectActorId !== null
@@ -1186,6 +1193,11 @@ final class BoardState
 
     public function moveInPlayToHand(int $cardId): void
     {
+        if ($this->catalogRow($this->effectiveCardId($cardId))['effectKey'] === 'grudge') {
+            $this->moveInPlayToBottomOfDeck($cardId); // Grudge: leaving play, into a hand included, sends it to the bottom of the deck
+
+            return;
+        }
         $owner = $this->moodInPlay($cardId)->ownerId;
         unset($this->moodsInPlay[$cardId]);
         $this->hands[$owner][] = $cardId;
@@ -1197,6 +1209,11 @@ final class BoardState
     public function moveInPlayToPlayersHand(int $cardId, int $newOwnerId): void
     {
         $this->moodInPlay($cardId);
+        if ($this->catalogRow($this->effectiveCardId($cardId))['effectKey'] === 'grudge') {
+            $this->moveInPlayToBottomOfDeck($cardId);
+
+            return;
+        }
         unset($this->moodsInPlay[$cardId]);
         $this->hands[$newOwnerId][] = $cardId;
         $this->recordMove($cardId, 'play', 'hand', toPlayerId: $newOwnerId);
@@ -1315,6 +1332,19 @@ final class BoardState
         }
         array_splice($this->decks[$key], $index, 1);
         $this->decks[$key][] = $cardId;
+        $this->recordMove($cardId, 'deck', 'deck', fromPlayerId: $playerId);
+    }
+
+    /** Prudence: moves a card already in $playerId's deck to the top of that deck. */
+    public function moveDeckCardToTop(int $playerId, int $cardId): void
+    {
+        $key = $this->deckKeyFor($playerId);
+        $index = array_search($cardId, $this->decks[$key] ?? [], true);
+        if ($index === false) {
+            throw new InvalidArgumentException("Card {$cardId} is not in player {$playerId}'s deck");
+        }
+        array_splice($this->decks[$key], $index, 1);
+        array_unshift($this->decks[$key], $cardId);
         $this->recordMove($cardId, 'deck', 'deck', fromPlayerId: $playerId);
     }
 

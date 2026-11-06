@@ -15109,6 +15109,18 @@ final class GameService
             }
         }
 
+        // Grudge: "During each of your turns, you may play an additional mood for each round the chosen player has won" -- read
+        // as the turn starts, from the opponent each Grudge was played against; lost if that Grudge leaves play first.
+        foreach ($state->moodsOwnedBy($playerId) as $mood) {
+            if ($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'] !== 'grudge') {
+                continue;
+            }
+            $grudgeTarget = $state->effectState($mood->cardId, 'grudgeTargetPlayerId');
+            for ($extra = $grudgeTarget === null ? 0 : $state->roundWinsOf((int) $grudgeTarget); $extra > 0; $extra--) {
+                $grants[] = ['sourceCardId' => $mood->cardId, 'requiresSourceInPlay' => true];
+            }
+        }
+
         foreach ($state->consumeBankedExtraPlaysFor($playerId) as $banked) {
             $grants[] = [...($banked['restriction'] ?? []), 'sourceCardId' => $state->effectiveCardId($banked['sourceCardId'])];
         }
