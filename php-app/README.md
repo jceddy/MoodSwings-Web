@@ -9519,8 +9519,9 @@ in custom sets is.
   - **Despair**: at the loser's end-of-round draw (`finishScoringAndAdvance()`), each of its owner's Despairs in play adds a
     card. Forgetfulness's "no one draws" skips it too, and it isn't applied in team formats (the losing team's single draw is
     a team decision there).
-  - **Opportunism**: `BoardState::moveHandToDiscard()` hands the card to the first opponent of the discarder, in seat order,
-    who has it in play -- straight from the pile into their hand (a teammate's discard doesn't count). Moods put into the
+  - **Opportunism**: `BoardState::moveHandToDiscard()` hands the card to the first opponent of the discarder who has it in
+    play, in seat order *starting with the active player* (the card's ruling for ties) -- straight from the pile into their
+    hand (a teammate's discard doesn't count). Moods put into the
     discard pile and a player's own discards are untouched.
   - **Sentimentality**: `moveInPlayToDiscard()` draws a card per Sentimentality of the mood's owner that isn't the mood
     leaving -- in play now, or gone earlier in the same resolution, so a sweep that takes Sentimentality first still pays out

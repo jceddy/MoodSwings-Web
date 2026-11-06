@@ -2996,13 +2996,19 @@ final class BoardState
     // --- discard triggers: Opportunism, Sentimentality, Rancor ---
 
     /**
-     * Opportunism: "Each time an opponent discards a card from their hand, you put that card into your hand." The first
-     * opponent of the discarder (seat order) with Opportunism in play takes it -- the card is only one -- and a teammate's
-     * discard isn't an opponent's.
+     * Opportunism: "Each time an opponent discards a card from their hand, you put that card into your hand." When more than one
+     * opponent of the discarder has Opportunism in play -- the card is only one -- the first in seat order starting with the
+     * active player (whose turn it is) takes it, and then turn order; a teammate's discard isn't an opponent's.
      */
     private function opportunismTakes(int $discarderId, int $cardId): void
     {
-        foreach ($this->activePlayerOrder() as $holderId) {
+        $order = $this->activePlayerOrder();
+        $start = $this->currentPlayerId !== null ? array_search($this->currentPlayerId, $order, true) : false;
+        if ($start !== false) {
+            $order = [...array_slice($order, $start), ...array_slice($order, 0, $start)];
+        }
+
+        foreach ($order as $holderId) {
             if ($holderId === $discarderId || $this->isTeammate($discarderId, $holderId)) {
                 continue;
             }

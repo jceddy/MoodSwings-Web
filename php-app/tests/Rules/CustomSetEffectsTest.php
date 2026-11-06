@@ -1325,14 +1325,41 @@ final class CustomSetEffectsTest extends TestCase
         self::assertEqualsCanonicalizing($this->ids('Apathy', 'Boredom'), $state->discardPile());
     }
 
-    public function testOpportunismGoesToTheFirstOpponentWithItInSeatOrder(): void
+    /** Player 1 holds a real Opportunism and player 3 a Creativity copying it (there is one Opportunism card); player 2 discards. */
+    private function opportunismTieBoard(int $activePlayer): BoardState
     {
-        $state = $this->state([1 => ['Apathy'], 2 => ['Opportunism'], 3 => ['Boredom']]);
-        $this->seat($state, 2, 'Opportunism');
-        $this->seat($state, 3, 'Boredom');
-        $state->moveHandToDiscard(1, $this->id('Apathy'));
+        $state = $this->state([1 => ['Opportunism'], 2 => ['Apathy'], 3 => ['Creativity']]);
+        $this->seat($state, 1, 'Opportunism');
+        $state->moveHandToInPlay(3, $this->id('Creativity'), $this->id('Opportunism'));
+        $state->startTurn($activePlayer);
 
-        self::assertSame($this->ids('Apathy'), $state->hand(2));
+        return $state;
+    }
+
+    public function testOpportunismTiesGoInSeatOrderStartingWithTheActivePlayer(): void
+    {
+        $three = $this->opportunismTieBoard(3);
+        $three->moveHandToDiscard(2, $this->id('Apathy'));
+        self::assertSame($this->ids('Apathy'), $three->hand(3), 'player 3 is the active player');
+        self::assertSame([], $three->hand(1));
+
+        $two = $this->opportunismTieBoard(2);
+        $two->moveHandToDiscard(2, $this->id('Apathy'));
+        self::assertSame($this->ids('Apathy'), $two->hand(3), 'after the active player 2 comes 3, before 1');
+
+        $one = $this->opportunismTieBoard(1);
+        $one->moveHandToDiscard(2, $this->id('Apathy'));
+        self::assertSame($this->ids('Apathy'), $one->hand(1), 'player 1 is the active player');
+    }
+
+    public function testOpportunismWithNoActivePlayerFallsBackToSeatOrder(): void
+    {
+        $state = $this->state([1 => ['Opportunism'], 2 => ['Apathy'], 3 => ['Creativity']]);
+        $this->seat($state, 1, 'Opportunism');
+        $state->moveHandToInPlay(3, $this->id('Creativity'), $this->id('Opportunism'));
+        $state->moveHandToDiscard(2, $this->id('Apathy'));
+
+        self::assertSame($this->ids('Apathy'), $state->hand(1));
     }
 
     public function testSentimentalityDrawsWhenAnotherOfYourMoodsIsDiscarded(): void
