@@ -9254,7 +9254,7 @@ in custom sets is.
   grant); Levelheadedness, Forgetfulness and Compassion are tier 2 and aren't implemented yet; until a card is in the
   `cards` table it simply doesn't exist in the game.
 - **"At the start of each of your turns" (`TurnStartEffect`).** Brooding, Covetousness, Fairness, FOMO,
-  Jealousy, Martyrdom, Maturity, Neglect, Rumination, Volatility and Wastefulness implement
+  Jealousy, Martyrdom, Maturity, Rumination, Volatility and Wastefulness implement
   `Rules/TurnStartEffect` (`turnStartRequests()` -- null = automatic, `[]` = nothing to decide, otherwise
   the `PendingDecisionRequest`s to ask; `applyTurnStart()` -- applies the answers and may return follow-up
   decisions, e.g. Brooding's discard once the card is in hand). `GameService::runTurnStartTriggers()` runs
@@ -9266,12 +9266,22 @@ in custom sets is.
   `resumeTurnStartTriggers()`; the moods still waiting to fire are kept in
   `game_rounds.turn_start_pending_card_ids`. The list is fixed when the turn begins (a mood that arrives
   mid-resolution doesn't fire until next turn), and the turn's owner doesn't choose the order. Decisions can
-  belong to other players (Jealousy/Neglect ask the affected opponent; Martyrdom asks each opponent for a
+  belong to other players (Jealousy asks the affected opponent; Martyrdom asks each opponent for a
   discard). Mood choices carry a server-computed `candidate_card_ids`, so the client and bots only offer
   legal moods. Fairness only asks when several moods tie for highest; Maturity uses the permanent value delta
   (`adjustChaosValueDelta()`); Wastefulness uses the new `BoardState::moveDeckTopToDiscard()` (a
   `deck`-to-`discard` card move, which `ReplayStateBuilder` replays). Bots decline the optional triggers,
   except that they take Covetousness's best target and keep FOMO by discarding their weakest card.
+- **"Before scoring" (`BeforeScoringEffect`).** Neglect (reworked in migration 0523: worth 2, "before scoring, each opponent
+  with no cards in hand puts one of their *highest value* moods into the discard pile") is the one card that fires between the
+  round's last play/pass and the scores being computed. `Rules/BeforeScoringEffect` mirrors `TurnStartEffect`
+  (`beforeScoringRequests()` / `applyBeforeScoring()`), and `GameService::advanceScoringPhases()` now runs, in order,
+  `runBeforeScoringTriggers()`, Enthusiasm/Passion's scoring decisions, then `finishScoringAndAdvance()`; it is re-entered after
+  every answer. The triggers that already fired this round are kept in `game_rounds.before_scoring_done`, so a round paused on one
+  never fires it twice, and the board is saved after the triggers so a later pause that reloads the state keeps their effects. A
+  decision uses type `before_scoring_trigger` (resumed by `resumeBeforeScoringTriggers()`). An opponent with a single highest value
+  mood loses it automatically; one tied for highest chooses (`candidate_card_ids` carries the tied moods). The live scoring preview
+  (`serializeScoringPreview()`) doesn't yet account for Neglect's discard.
 - **Resilience** is Hope-shaped: the same-turn play is granted by `MoodPlayService` and every later turn's by
   `computeFreshGrants()`, both from `ResilienceEffect::RESTRICTION` (a 0-3 mood from the discard pile, lost
   if Resilience leaves play first).
@@ -9499,7 +9509,9 @@ in custom sets is.
     to the discard pile: `bankExtraPlay()` now takes an optional restriction, kept on the banked entry
     (`game_players.banked_extra_plays` -- entries without one are Joy's and Generosity's, unchanged) and turned into
     grants by `computeFreshGrants()` (`['source' => 'discard', 'sourceCardId' => ...]`), so Restraint/Rudeness leave
-    them banked like any other banked play.
+    them banked like any other banked play. Migration 0523 reworked it: worth 0, and the banked plays carry
+    `requiresSourceAtTurnStart`, which `computeFreshGrants()` checks as the turn begins -- if Haunting is no longer its owner's
+    mood then, the plays are lost (once the turn has begun they are spent normally even if Haunting leaves).
 
 - **Round-order and round rules (batch 17).** Compassion, Forgetfulness and Levelheadedness (migration 0515).
   - **Compassion** is read straight off the board: `BoardState::firstPlayerOverride()` (what Honor and Awe already use)

@@ -501,7 +501,7 @@ final class CardChoiceSchema
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => true, 'label' => "An opponent's mood to put into its player's hand (they can't play cards with that name next turn)", 'excludes_teammate' => true, 'optional_if_no_targets' => true],
         ],
         'haunting' => [
-            ['key' => 'discard_card_ids', 'type' => 'hand_card', 'multi' => true, 'required' => false, 'label' => 'Cards to discard from your hand (you may play that many additional moods from the discard pile on your next turn)'],
+            ['key' => 'discard_card_ids', 'type' => 'hand_card', 'multi' => true, 'required' => false, 'label' => 'Cards to discard from your hand (you may play that many additional moods from the discard pile on your next turn, if you still have Haunting then)'],
         ],
         'optimism' => [
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => "One of your other moods whose after-playing effect happens an additional time (you'll then make that effect's choices)"],

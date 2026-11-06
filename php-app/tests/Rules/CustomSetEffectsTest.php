@@ -1224,7 +1224,7 @@ final class CustomSetEffectsTest extends TestCase
         self::assertEqualsCanonicalizing($this->ids('Apathy', 'Boredom'), $state->discardPile());
         $banked = $state->consumeBankedExtraPlaysFor(1);
         self::assertCount(2, $banked);
-        self::assertSame(['source' => 'discard'], $banked[0]['restriction']);
+        self::assertSame(['source' => 'discard', 'requiresSourceAtTurnStart' => true], $banked[0]['restriction']);
         self::assertSame($this->id('Haunting'), $banked[0]['sourceCardId']);
         self::assertSame([], $state->consumeBankedExtraPlaysFor(1), 'consumed once');
     }
