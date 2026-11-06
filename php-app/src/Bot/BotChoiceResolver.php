@@ -103,6 +103,9 @@ final class BotChoiceResolver
         'suspicion' => ['player_ids'],
         'cruelty' => ['opponent_player_ids'],
         'indecisiveness' => ['opponent_player_ids'],
+        // Rashness: "you may put one of your opponents' moods with a value of 1 or less into the discard pile" -- free for the
+        // acting player, so a bot takes a target whenever one exists (the field's own max_value filter keeps it legal).
+        'rashness' => ['target_mood_id'],
     ];
 
     /**

@@ -1397,6 +1397,40 @@ final class BotPlayerService
         return array_slice($hand, 0, 2);
     }
 
+    /**
+     * Haunting ("you may discard any number of cards from your hand; if you do, you may play that many additional moods from
+     * the discard pile on your next turn"): every card discarded banks one more play from the discard pile, and the card
+     * itself is then sitting there ready to be played -- so the bot discards exactly the cards that would be good plays
+     * (they score points, or have an ability with something to target) and keeps the rest in hand. Haunting itself (still in
+     * hand when this is evaluated) is never one of them.
+     *
+     * @return int[]
+     */
+    private function hauntingDiscardCardIds(BoardState $state, int $hauntingCardId, int $botGamePlayerId): array
+    {
+        return array_values(array_filter(
+            $state->hand($botGamePlayerId),
+            fn (int $handCardId): bool => $handCardId !== $hauntingCardId && $this->isGoodPlayFromDiscard($state, $handCardId),
+        ));
+    }
+
+    /** A card worth spending a banked discard-pile play on: it scores points, or its effect has a target to choose. */
+    private function isGoodPlayFromDiscard(BoardState $state, int $cardId): bool
+    {
+        if ($this->baseValue($state, $cardId) > 0) {
+            return true;
+        }
+
+        $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+        foreach (CardChoiceSchema::forEffectKey($effectKey) as $field) {
+            if (in_array($field['type'] ?? null, ['mood', 'player', 'discard_card'], true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function baseValue(BoardState $state, int $cardId): int
     {
         return $state->catalogRow($state->effectiveCardId($cardId))['baseValue'];
@@ -2207,7 +2241,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder',
+        'wonder', 'haunting',
     ];
 
     /**
@@ -2435,6 +2469,12 @@ final class BotPlayerService
             $targetMoodId = $this->scornTargetMoodId($state, $cardId, $botGamePlayerId);
 
             return $targetMoodId !== null ? ['target_mood_id' => $targetMoodId] : null;
+        }
+
+        if ($effectKey === 'haunting') {
+            $discardCardIds = $this->hauntingDiscardCardIds($state, $cardId, $botGamePlayerId);
+
+            return $discardCardIds !== [] ? ['discard_card_ids' => $discardCardIds] : [];
         }
 
         return $this->resolveSchemaFields(CardChoiceSchema::forEffectKey($effectKey), $state, $cardId, $botGamePlayerId, $effectKey);
