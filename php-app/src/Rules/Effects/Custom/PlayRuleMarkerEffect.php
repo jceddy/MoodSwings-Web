@@ -17,6 +17,7 @@ use MoodSwings\Rules\AbstractMoodEffect;
  *  - Reassurance ("Your opponents can't choose your moods with a value of 2 or less"): BoardState::isProtectedFromChoiceBy().
  *  - Elusiveness ("If an opponent's effect would put one of your moods into the discard pile, put it into your hand
  *    instead"): BoardState::moveInPlayToDiscard()'s replacement.
+ *  - Compassion ("The player with the fewest moods goes first each round"): BoardState::firstPlayerOverride().
  * Registered under each key so the card resolves; the engine finds the rule by the effective effect key (so a Creativity
  * copying one carries it too).
  */

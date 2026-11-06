@@ -11241,7 +11241,7 @@ final class GameService
      *
      * @return array{round_scored: bool, game_completed: bool}
      */
-    private function applyDrawRecipientDecision(int $gameId, int $roundId, int $recipientGamePlayerId): array
+    private function applyDrawRecipientDecision(int $gameId, int $roundId, int $recipientGamePlayerId, bool $skipDraw = false): array
     {
         $pdo = Connection::get();
         $roundStmt = $pdo->prepare('SELECT * FROM game_rounds WHERE id = :id');
@@ -11249,7 +11249,11 @@ final class GameService
         $round = $roundStmt->fetch();
 
         $state = $this->boardStates->load($gameId);
-        $state->drawCard($recipientGamePlayerId);
+        // Forgetfulness: no one draws at the end of the round, so the losing team has no draw to give out -- this only
+        // goes on to create the next round.
+        if (!$skipDraw) {
+            $state->drawCard($recipientGamePlayerId);
+        }
 
         $winningTeamId = (int) $round['winner_team_id'];
         // Honor (or Awe's own one-time version) can still override who
@@ -11268,7 +11272,9 @@ final class GameService
 
         $this->boardStates->save($gameId, $state);
 
-        $this->logEvent($gameId, $roundId, $recipientGamePlayerId, 'team_draw_recipient_decided', null, ['game_player_id' => $recipientGamePlayerId], $state);
+        if (!$skipDraw) {
+            $this->logEvent($gameId, $roundId, $recipientGamePlayerId, 'team_draw_recipient_decided', null, ['game_player_id' => $recipientGamePlayerId], $state);
+        }
 
         // Representative only when there's no override -- its TEAM is
         // what matters until that team's own decision resolves (see
@@ -13340,12 +13346,18 @@ final class GameService
             // untouched by resignation), but they're done playing -- skip
             // their draw the same way $turnOrder already excludes them
             // from winning.
-            foreach ($turnOrder as $playerId) {
-                if ($playerId !== $winnerId) {
-                    $state->drawCard($playerId);
+            // Forgetfulness: no one draws at the end of this round.
+            if (!$state->noEndOfRoundDraw()) {
+                foreach ($turnOrder as $playerId) {
+                    if ($playerId !== $winnerId) {
+                        $state->drawCard($playerId);
+                    }
                 }
             }
         }
+
+        // The round has been scored and its draws made: its flat score and no-draw switch end with it.
+        $state->resetRoundScoringFlags();
 
         $resolvedOrders = $this->resolvedAfterScoringOrders($roundId);
         $beforeAfterScoringHooks = $this->inPlayOwnershipSignature($state);
@@ -14018,6 +14030,15 @@ final class GameService
         // 'draw_recipient' branch actually draws the card AND creates the
         // next round (and its own turn_order decision) once resolved, so
         // only one game_team_decisions row is ever open at a time.
+        // Forgetfulness: no one draws this round, so there is no draw for the losing team to decide -- go straight on to the
+        // next round (the state was saved above with the flag still set; a new round starts without it).
+        if ($state->noEndOfRoundDraw()) {
+            $this->applyDrawRecipientDecision($gameId, $roundId, $this->teamMembers($gameId, $losingTeamId)[0], skipDraw: true);
+            $state->resetRoundScoringFlags();
+
+            return ['round_scored' => true, 'game_completed' => false, 'pending_decision' => true];
+        }
+
         $this->createTeamDecision($gameId, $roundId, $losingTeamId, 'draw_recipient', $this->teamMembers($gameId, $losingTeamId));
 
         return ['round_scored' => true, 'game_completed' => false, 'pending_decision' => true];
@@ -15277,6 +15298,7 @@ final class GameService
         $state->resetRoundHandDiscards();
         $state->resetRoundMoodPlays();
         $state->resetRoundChoiceShields();
+        $state->resetRoundScoringFlags();
         $state->resetTurnReactions();
 
         $format = $this->fetchGame($gameId)['format'];
@@ -22342,7 +22364,7 @@ final class GameService
     {
         $total = 0;
         foreach ($state->moodsOwnedBy($playerId) as $mood) {
-            $total += $state->valueOf($mood->cardId);
+            $total += $state->scoredValueOf($mood->cardId);
         }
 
         return $total;

@@ -1242,6 +1242,65 @@ final class CustomSetEffectsTest extends TestCase
         $this->play($second, 1, 'Haunting', ['discard_card_ids' => $this->ids('Boredom')]);
     }
 
+    // ---- round-order and round rules: Compassion, Forgetfulness, Levelheadedness ----
+
+    public function testCompassionSendsTheOnePlayerWithFewestMoodsFirst(): void
+    {
+        $state = $this->state([1 => ['Compassion', 'Anger'], 2 => ['Apathy', 'Boredom'], 3 => ['Joy', 'Courage', 'Creativity']]);
+        $this->seat($state, 1, 'Compassion', 'Anger');
+        $this->seat($state, 2, 'Apathy');
+        $this->seat($state, 2, 'Boredom');
+        $this->seat($state, 3, 'Joy', 'Courage', 'Creativity');
+        self::assertNull($state->firstPlayerOverride(), 'two players tied on two moods: the usual order');
+
+        $state->moveInPlayToDiscard($this->id('Boredom'));
+        self::assertSame(2, $state->firstPlayerOverride(), 'one mood is strictly fewest');
+    }
+
+    public function testCompassionDoesNothingWithoutItAndYieldsToAnExplicitChoice(): void
+    {
+        $without = $this->state([1 => ['Anger'], 2 => ['Apathy', 'Boredom']]);
+        $this->seat($without, 1, 'Anger');
+        self::assertNull($without->firstPlayerOverride());
+
+        $withHonor = $this->state([1 => ['Compassion', 'Anger'], 2 => ['Honor']]);
+        $this->seat($withHonor, 1, 'Compassion');
+        $this->seat($withHonor, 2, 'Honor');
+        $withHonor->setEffectState($this->id('Honor'), 'firstPlayerOverride', 3);
+        self::assertSame(3, $withHonor->firstPlayerOverride(), "Honor's explicit choice comes first");
+    }
+
+    public function testForgetfulnessQueuesAWinForfeitAndSwitchesOffTheRoundEndDraw(): void
+    {
+        $state = $this->state([1 => ['Forgetfulness']]);
+        $state->startTurn(1);
+        self::assertFalse($state->noEndOfRoundDraw());
+        $this->play($state, 1, 'Forgetfulness');
+
+        self::assertTrue($state->noEndOfRoundDraw());
+        self::assertSame(1, $state->consumePendingWinForfeits());
+        self::assertSame(0, $state->consumePendingWinForfeits(), 'taken once');
+        $state->resetRoundScoringFlags();
+        self::assertFalse($state->noEndOfRoundDraw(), 'a new round draws as usual');
+    }
+
+    public function testLevelheadednessScoresEveryMoodAsTwoForTheRound(): void
+    {
+        $state = $this->state([1 => ['Levelheadedness'], 2 => ['Apathy', 'Boredom']]);
+        $state->startTurn(1);
+        $this->seat($state, 2, 'Apathy', 'Boredom'); // 4 and 4
+        $scorer = new \MoodSwings\Rules\RoundScorer();
+        $this->play($state, 1, 'Levelheadedness'); // a 1
+
+        $scores = $scorer->score($state);
+        self::assertSame(2, $scores[1], 'one mood');
+        self::assertSame(4, $scores[2], 'two moods at 2 each, not 8');
+        self::assertSame(4, $state->valueOf($this->id('Apathy')), 'its real value is untouched for everything but scoring');
+
+        $state->resetRoundScoringFlags();
+        self::assertSame(8, $scorer->score($state)[2]);
+    }
+
     // ---- static value modifiers ----
 
     public function testArdorAddsTheNumberOfRedMoodsToEachOwnRedMood(): void

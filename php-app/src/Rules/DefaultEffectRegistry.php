@@ -177,6 +177,8 @@ use MoodSwings\Rules\Effects\Custom\ReflectionEffect;
 use MoodSwings\Rules\Effects\Custom\ReverieEffect;
 use MoodSwings\Rules\Effects\Custom\WarinessEffect;
 use MoodSwings\Rules\Effects\Custom\LongingEffect;
+use MoodSwings\Rules\Effects\Custom\ForgetfulnessEffect;
+use MoodSwings\Rules\Effects\Custom\LevelheadednessEffect;
 use MoodSwings\Rules\Effects\Custom\DeflectionEffect;
 use MoodSwings\Rules\Effects\Custom\HauntingEffect;
 use MoodSwings\Rules\Effects\Custom\OverconfidenceEffect;
@@ -581,13 +583,15 @@ final class DefaultEffectRegistry
         $registry->register('urgency', new UrgencyEffect());
 
         // Play-restriction cards (turn flags: BoardState::beginTurnFlags()).
-        foreach (['obstinacy', 'restraint', 'defensiveness', 'reassurance', 'elusiveness'] as $playRuleKey) {
+        foreach (['obstinacy', 'restraint', 'defensiveness', 'reassurance', 'elusiveness', 'compassion'] as $playRuleKey) {
             $registry->register($playRuleKey, new PlayRuleMarkerEffect());
         }
         $registry->register('rudeness', new RudenessEffect());
         $registry->register('solace', new SolaceEffect());
         $registry->register('deflection', new DeflectionEffect());
         $registry->register('haunting', new HauntingEffect());
+        $registry->register('forgetfulness', new ForgetfulnessEffect());
+        $registry->register('levelheadedness', new LevelheadednessEffect());
         $registry->register('pettiness', new PettinessEffect());
         $registry->register('overconfidence', new OverconfidenceEffect());
         $registry->register('restlessness', new CustomConditionalValueEffect(CustomConditionalValueEffect::DISTINCT_OWN_VALUES_AT_LEAST, 3));

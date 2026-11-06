@@ -1146,6 +1146,66 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertSame([], $state->bankedExtraPlaysByPlayer()[$this->p1] ?? [], 'spent into this turn\'s grants');
     }
 
+    public function testForgetfulnessTakesAWinFromThePreviousWinnerAndStopsTheRoundEndDraw(): void
+    {
+        $this->card('Courage', 'hand', $this->p1);
+        $forgetfulness = $this->card('Forgetfulness', 'hand', $this->p1);
+        $this->card('Boredom', 'hand', $this->p2);
+        $this->card('Apathy', 'deck', $this->p2, 0);
+        $this->card('Creativity', 'deck', $this->p2, 1);
+        $this->card('Joy', 'deck', $this->p2, 2);
+        $courage = (int) $this->pdo->query("SELECT gc.id FROM game_cards gc JOIN cards c ON c.id = gc.card_id WHERE gc.game_id = {$this->gameId} AND c.name = 'Courage'")->fetchColumn();
+
+        // Round 1: player 1 plays Courage and wins; player 2, the loser, draws.
+        $this->games->playMood($this->gameId, $this->p1, $courage, []);
+        $this->games->pass($this->gameId, $this->p2);
+        self::assertSame(1, (int) $this->pdo->query("SELECT wins_awarded FROM game_rounds WHERE game_id = {$this->gameId} AND round_number = 1")->fetchColumn());
+        self::assertCount(2, $this->state()->hand($this->p2), 'the loser drew at the end of round 1');
+
+        // Round 2: Forgetfulness takes player 1's round-1 win back, and nobody draws when it ends.
+        $this->games->playMood($this->gameId, $this->p1, $forgetfulness, []);
+        self::assertSame(0, (int) $this->pdo->query("SELECT wins_awarded FROM game_rounds WHERE game_id = {$this->gameId} AND round_number = 1")->fetchColumn(), 'the previous winner lost a round win');
+        self::assertTrue($this->state()->noEndOfRoundDraw(), 'saved with the round');
+        $this->games->pass($this->gameId, $this->p2);
+
+        self::assertCount(2, $this->state()->hand($this->p2), 'no one drew at the end of round 2');
+    }
+
+    public function testForgetfulnessInRoundOneTakesNothingAway(): void
+    {
+        $forgetfulness = $this->card('Forgetfulness', 'hand', $this->p1);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $forgetfulness, []);
+
+        self::assertSame(0, (int) $this->pdo->query("SELECT COUNT(*) FROM game_rounds WHERE game_id = {$this->gameId} AND status = 'scored'")->fetchColumn());
+        self::assertTrue($this->state()->noEndOfRoundDraw(), 'the round still has no end draw');
+    }
+
+    public function testLevelheadednessFlagIsSavedWithTheRound(): void
+    {
+        $levelheadedness = $this->card('Levelheadedness', 'hand', $this->p1);
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $levelheadedness, []);
+
+        self::assertSame(2, $this->state()->flatMoodScore());
+    }
+
+    public function testCompassionSendsTheFewestMoodsPlayerFirstEvenWhenAnotherWins(): void
+    {
+        $compassion = $this->card('Compassion', 'hand', $this->p1); // player 1 ends with one mood, worth 2
+        $this->card('Courage', 'in_play', $this->p2);
+        $this->card('Apathy', 'in_play', $this->p2); // player 2 has two, worth 5: they win the round
+        $this->card('Boredom', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $compassion, []);
+        $this->games->pass($this->gameId, $this->p2);
+
+        $state = $this->state();
+        self::assertSame($this->p1, $state->currentPlayerId(), 'Compassion: the player with the fewest moods goes first, not the winner');
+    }
+
     public function testGrievanceMakesAnOpponentWithMoreCardsPutOneOnTheBottomOfTheDeck(): void
     {
         $grievance = $this->card('Grievance', 'hand', $this->p1);

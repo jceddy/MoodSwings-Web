@@ -225,6 +225,23 @@ final class BoardState
      */
     private array $elusivenessOwners = [];
 
+    /**
+     * Levelheadedness: "This round, each mood scores 2 instead of its value." The score every mood contributes this
+     * round, or null for each mood's own value. Persisted on the live round (game_rounds.round_flat_mood_score) and
+     * gone with it -- the next round's row starts without one.
+     */
+    private ?int $flatMoodScore = null;
+
+    /** Forgetfulness: "This round, no one draws a card at the end of the round." Persisted like $flatMoodScore (game_rounds.round_no_end_draw). */
+    private bool $noEndOfRoundDraw = false;
+
+    /**
+     * Forgetfulness: how many times "the winner of the previous round loses a round win" has happened since the board
+     * was last saved. BoardStateRepository::save() applies them to the previous scored round's wins (it is called at
+     * every pause and at the end of a play) and clears the count, so none is lost to a Duplicity pause.
+     */
+    private int $pendingWinForfeits = 0;
+
     /** Pettiness/Overconfidence: the player may not play moods this turn. */
     public const TURN_NO_PLAYS = 'no_plays';
     /** Rudeness: no additional moods this turn, and no after-playing effects of the moods played in it. */
@@ -2596,6 +2613,7 @@ final class BoardState
         $this->currentRoundNumber = $roundNumber;
         $this->roundMoodPlays = [];
         $this->roundChoiceShields = [];
+        $this->resetRoundScoringFlags();
     }
 
     /**
@@ -2790,7 +2808,39 @@ final class BoardState
             }
         }
 
-        return null;
+        return $this->compassionFirstPlayer();
+    }
+
+    /**
+     * Compassion: "The player with the fewest moods goes first each round, regardless of who won the previous round. (If
+     * players are tied, the usual order applies.)" -- the one player with strictly fewer moods than every other active
+     * player, or null (the usual order: the round's winner) when none or no such player. An explicit choice (Honor, Awe)
+     * is looked at first, so it wins if both are somehow in play.
+     */
+    private function compassionFirstPlayer(): ?int
+    {
+        $inPlay = false;
+        foreach ($this->moodsInPlay as $mood) {
+            if ($this->catalogRow($this->effectiveCardId($mood->cardId))['effectKey'] === 'compassion') {
+                $inPlay = true;
+                break;
+            }
+        }
+        if (!$inPlay) {
+            return null;
+        }
+
+        $counts = [];
+        foreach ($this->activePlayerOrder() as $playerId) {
+            $counts[$playerId] = count($this->moodsOwnedBy($playerId));
+        }
+        if ($counts === []) {
+            return null;
+        }
+        $fewest = min($counts);
+        $holders = array_keys(array_filter($counts, static fn (int $count): bool => $count === $fewest));
+
+        return count($holders) === 1 ? $holders[0] : null;
     }
 
     /**
@@ -2925,6 +2975,58 @@ final class BoardState
     public function bankedExtraPlaysByPlayer(): array
     {
         return $this->bankedExtraPlays;
+    }
+
+    // --- round scoring flags: Levelheadedness, Forgetfulness ---
+
+    /** What every mood scores this round instead of its own value (Levelheadedness), or null. */
+    public function flatMoodScore(): ?int
+    {
+        return $this->flatMoodScore;
+    }
+
+    public function setFlatMoodScore(?int $score): void
+    {
+        $this->flatMoodScore = $score;
+    }
+
+    /** What $cardId contributes to its owner's score: the round's flat score if there is one, else its value. */
+    public function scoredValueOf(int $cardId): int
+    {
+        return $this->flatMoodScore ?? $this->valueOf($cardId);
+    }
+
+    /** Whether the players draw at the end of this round as usual -- false once Forgetfulness has been played. */
+    public function noEndOfRoundDraw(): bool
+    {
+        return $this->noEndOfRoundDraw;
+    }
+
+    public function setNoEndOfRoundDraw(bool $noDraw): void
+    {
+        $this->noEndOfRoundDraw = $noDraw;
+    }
+
+    /** Forgetfulness: the winner of the previous round loses a round win (applied when the board is next saved). */
+    public function forfeitPreviousRoundWin(): void
+    {
+        $this->pendingWinForfeits++;
+    }
+
+    /** Returns and clears the number of previous-round wins to take away. */
+    public function consumePendingWinForfeits(): int
+    {
+        $count = $this->pendingWinForfeits;
+        $this->pendingWinForfeits = 0;
+
+        return $count;
+    }
+
+    /** A round ends: the next one scores moods at their own values and ends with the usual draws. */
+    public function resetRoundScoringFlags(): void
+    {
+        $this->flatMoodScore = null;
+        $this->noEndOfRoundDraw = false;
     }
 
     // --- choosing moods: Solace / Reassurance protection and the effect actor (Elusiveness) ---

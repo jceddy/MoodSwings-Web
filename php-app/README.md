@@ -9499,6 +9499,21 @@ in custom sets is.
     grants by `computeFreshGrants()` (`['source' => 'discard', 'sourceCardId' => ...]`), so Restraint/Rudeness leave
     them banked like any other banked play.
 
+- **Round-order and round rules (batch 17).** Compassion, Forgetfulness and Levelheadedness (migration 0515).
+  - **Compassion** is read straight off the board: `BoardState::firstPlayerOverride()` (what Honor and Awe already use)
+    falls back to `compassionFirstPlayer()` -- the one active player with strictly fewer moods than every other (itself
+    counts), else the usual order (the round's winner). Honor's and Awe's explicit choices are looked at first.
+  - **Forgetfulness** takes a win off the previous scored round's `wins_awarded` (round wins are the sum of that
+    column, so a Corruption double becomes one; nothing in round 1 or after an Awe round) -- queued on the board
+    (`forfeitPreviousRoundWin()`) and applied by `BoardStateRepository::save()`, which runs at every pause, so a
+    Duplicity pause can't lose it and a repeat takes another. "No one draws at the end of the round" is
+    `game_rounds.round_no_end_draw`, checked at the loser's draw (and, in team formats, by skipping the losing team's
+    draw decision). Hurt Feelings is untouched.
+  - **Levelheadedness**: `game_rounds.round_flat_mood_score` (2) makes `RoundScorer` and the live board totals count every
+    mood as that (`BoardState::scoredValueOf()`), including Exhilaration's/Bliss's sums of own moods. Real values still
+    drive targeting, conditions and the bonuses that read a value (Enthusiasm, Passion). Both round flags are cleared
+    right after the round's draws, and a new round's row starts without them.
+
 
 ### Default selections mode (issue #274)
 

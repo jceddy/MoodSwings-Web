@@ -174,7 +174,7 @@ final class BoardStateRepository
         }
 
         $roundStmt = $pdo->prepare(
-            "SELECT current_turn_game_player_id, first_game_player_id, team_turn_1_game_player_id, plays_remaining, pending_play_grants, loop_state_signature_counts, chaos_loop_state, round_number, discarded_this_round, skip_scoring, skip_scoring_first_player_game_player_id, skip_scoring_source_card_id, skip_scoring_owner_game_player_id, awards_extra_win, awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id, round_value_bonuses, round_hand_discards, round_mood_plays, round_choice_shields, turn_flags, hurt_feelings_game_player_id FROM game_rounds
+            "SELECT current_turn_game_player_id, first_game_player_id, team_turn_1_game_player_id, plays_remaining, pending_play_grants, loop_state_signature_counts, chaos_loop_state, round_number, discarded_this_round, skip_scoring, skip_scoring_first_player_game_player_id, skip_scoring_source_card_id, skip_scoring_owner_game_player_id, awards_extra_win, awards_extra_win_source_card_id, awards_extra_win_owner_game_player_id, round_value_bonuses, round_hand_discards, round_mood_plays, round_choice_shields, round_flat_mood_score, round_no_end_draw, turn_flags, hurt_feelings_game_player_id FROM game_rounds
              WHERE game_id = :game_id AND status = 'in_progress'
              ORDER BY round_number DESC LIMIT 1"
         );
@@ -220,6 +220,8 @@ final class BoardStateRepository
             // plays made and the restrictions in force are stored.
             $turnFlags['basePlays'] = $roundRow['hurt_feelings_game_player_id'] !== null && (int) $roundRow['hurt_feelings_game_player_id'] === (int) $roundRow['current_turn_game_player_id'] ? 2 : 1;
             $state->restoreTurnFlags($turnFlags);
+            $state->setFlatMoodScore($roundRow['round_flat_mood_score'] !== null ? (int) $roundRow['round_flat_mood_score'] : null);
+            $state->setNoEndOfRoundDraw((bool) $roundRow['round_no_end_draw']);
             $state->restoreRoundChoiceShields($roundRow['round_choice_shields'] !== null ? json_decode((string) $roundRow['round_choice_shields'], true) : []);
             $state->restoreRoundMoodPlays($roundRow['round_mood_plays'] !== null ? json_decode((string) $roundRow['round_mood_plays'], true) : []);
             $state->restoreRoundColorBonuses($roundRow['round_value_bonuses'] !== null ? json_decode((string) $roundRow['round_value_bonuses'], true) : []);
@@ -400,14 +402,28 @@ final class BoardStateRepository
 
         // Vitality's round-long color bonuses and the round's hand-discards live on the live round's row (a no-op once the round is
         // scored: the end-of-round clear has already emptied the list by then).
-        $pdo->prepare("UPDATE game_rounds SET round_value_bonuses = :bonuses, round_hand_discards = :discarders, round_mood_plays = :plays, round_choice_shields = :shields WHERE game_id = :game_id AND status = 'in_progress'")
+        $pdo->prepare("UPDATE game_rounds SET round_value_bonuses = :bonuses, round_hand_discards = :discarders, round_mood_plays = :plays, round_choice_shields = :shields, round_flat_mood_score = :flat_score, round_no_end_draw = :no_draw WHERE game_id = :game_id AND status = 'in_progress'")
             ->execute([
                 'bonuses' => $state->roundColorBonuses() === [] ? null : json_encode($state->roundColorBonuses()),
                 'discarders' => $state->playersWhoDiscardedFromHandThisRound() === [] ? null : json_encode($state->playersWhoDiscardedFromHandThisRound()),
                 'plays' => $state->roundMoodPlays() === [] ? null : json_encode($state->roundMoodPlays()),
                 'shields' => $state->roundChoiceShields() === [] ? null : json_encode($state->roundChoiceShields()),
+                'flat_score' => $state->flatMoodScore(),
+                'no_draw' => $state->noEndOfRoundDraw() ? 1 : 0,
                 'game_id' => $gameId,
             ]);
+
+        // Forgetfulness: "the winner of the previous round loses a round win" -- the previous round is the last one scored (none in
+        // round 1, and an Awe round awarded no win, so there is nothing to take away from either). Round wins are the sum of
+        // wins_awarded over the scored rounds, so taking one away is lowering that row's count (never below 0; a Corruption
+        // round's two become one).
+        $forfeits = $state->consumePendingWinForfeits();
+        if ($forfeits > 0) {
+            $pdo->prepare(
+                "UPDATE game_rounds SET wins_awarded = GREATEST(CAST(wins_awarded AS SIGNED) - :forfeits, 0)
+                 WHERE id = (SELECT id FROM (SELECT id FROM game_rounds WHERE game_id = :game_id AND status = 'scored' ORDER BY round_number DESC LIMIT 1) AS previous_round)"
+            )->execute(['forfeits' => $forfeits, 'game_id' => $gameId]);
+        }
 
         // Same "always rewrite every row" convention as the game_cards
         // updates above, one UPDATE per seat regardless of whether that
