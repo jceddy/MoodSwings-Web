@@ -24127,6 +24127,18 @@ final class GameService
             ];
         }
 
+        // Levelheadedness: a round-wide switch (BoardState::flatMoodScore()), like Awe's and Corruption's above -- read from the round,
+        // not from the card, so it stays visible for exactly as long as the effect does even if Levelheadedness itself leaves play.
+        $flatMoodScore = $state->flatMoodScore();
+        if ($flatMoodScore !== null) {
+            $entries[] = [
+                'card_id' => 0,
+                'card_name' => 'Levelheadedness',
+                'owner_game_player_id' => 0,
+                'description' => "This round, each mood scores {$flatMoodScore} instead of its value (Levelheadedness).",
+            ];
+        }
+
         foreach ($state->moodsInPlay() as $mood) {
             $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
             $ownerName = $playerNames[$mood->ownerId] ?? 'A player';

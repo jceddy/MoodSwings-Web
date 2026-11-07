@@ -9278,6 +9278,10 @@ in custom sets is.
   card chosen in that sibling field to the pile list as soon as it is chosen (one delegated `change` listener rebuilds the checkbox
   list, keeping what was already ticked; the sibling is found through the field's own path, so a copy nested under Optimism, Admiration
   or Duplicity works too).
+- **Levelheadedness is shown on the board.** `GameService::scoringEffectEntries()` lists it among the round's scoring effects ("This round,
+  each mood scores 2 instead of its value (Levelheadedness)") whenever `BoardState::flatMoodScore()` is set -- like Awe's and Corruption's
+  entries it is read from the round, not from the card, so it stays up even if Levelheadedness leaves play, and disappears when the next
+  round starts.
 - **Bot choices for the community set.** Rashness's optional target is in `BotChoiceResolver::ALWAYS_FILLED_OPTIONAL_FIELDS` (taking
   an opponent's mood valued 1 or less costs the acting player nothing), so a bot always names one when it exists. Haunting has
   its own branch in `BotPlayerService` (`hauntingDiscardCardIds()`): the bot discards exactly the hand cards that would be good

@@ -2901,10 +2901,14 @@ dialog#deck-builder-dialog[open] {
     gap: 1.5rem;
 }
 
+/* The panels' minimum width scales with the card-size preference (--card-scale): 24rem holds about four default-size thumbnails
+   per row, so at a bigger size a fixed 24rem let the two panels sit side by side with only two or three cards across each
+   (the catalog looked "locked into two columns"). Scaled up, the panels stack once they could no longer hold roughly that many
+   across, and each then fills its rows from edge to edge. */
 .deck-builder-catalog,
 .deck-builder-deck,
 .deck-builder-sideboard {
-    flex: 1 1 24rem;
+    flex: 1 1 calc(24rem * var(--card-scale, 1));
     min-width: 0;
     max-width: 100%;
 }
