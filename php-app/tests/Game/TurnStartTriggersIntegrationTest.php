@@ -1250,6 +1250,28 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertSame([], $state->bankedExtraPlaysByPlayer()[$this->p1] ?? [], 'the banked play was consumed (and lost), not kept for later');
     }
 
+    // Levelheadedness's round-wide "each mood scores 2" is listed with the board's other scoring effects (Awe, Corruption...) for
+    // as long as the round lasts, and is gone once the next round starts.
+    public function testLevelheadednessIsShownAmongTheBoardsScoringEffectsForTheRound(): void
+    {
+        $levelheadedness = $this->card('Levelheadedness', 'hand', $this->p1);
+        $this->card('Apathy', 'hand', $this->p2);
+        $userId = (int) $this->pdo->query("SELECT user_id FROM game_players WHERE id = {$this->p1}")->fetchColumn();
+
+        self::assertSame([], $this->games->getState($this->gameId, $userId)['round']['scoring_effects']);
+
+        $this->games->playMood($this->gameId, $this->p1, $levelheadedness, []);
+        $descriptions = array_column($this->games->getState($this->gameId, $userId)['round']['scoring_effects'], 'description');
+        self::assertCount(1, $descriptions);
+        self::assertStringContainsString('each mood scores 2 instead of its value', $descriptions[0]);
+
+        $this->pdo->exec("UPDATE game_cards SET zone = 'discard', owner_game_player_id = NULL WHERE id = {$levelheadedness}"); // even if it leaves play
+        self::assertCount(1, $this->games->getState($this->gameId, $userId)['round']['scoring_effects']);
+
+        $this->games->pass($this->gameId, $this->p2); // the round ends
+        self::assertSame([], $this->games->getState($this->gameId, $userId)['round']['scoring_effects'], 'the next round scores normally');
+    }
+
     public function testForgetfulnessTakesAWinFromThePreviousWinnerAndStopsTheRoundEndDraw(): void
     {
         $this->card('Courage', 'hand', $this->p1);
