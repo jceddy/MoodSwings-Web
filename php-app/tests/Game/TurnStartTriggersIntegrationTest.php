@@ -1199,6 +1199,20 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertTrue($this->state()->isInPlay($other));
     }
 
+    // Longing's "put up to two cards from the discard pile into your hand" can take back the very card it just discarded.
+    public function testLongingCanTakeBackTheCardItJustDiscardedThroughAFullPlay(): void
+    {
+        $longing = $this->card('Longing', 'hand', $this->p1);
+        $discarded = $this->card('Courage', 'hand', $this->p1);
+        $this->card('Apathy', 'hand', $this->p2);
+
+        $this->games->playMood($this->gameId, $this->p1, $longing, ['hand_card_id' => $discarded, 'discard_card_ids' => [$discarded]]);
+
+        $state = $this->state();
+        self::assertTrue($state->isInHand($this->p1, $discarded), 'the discarded card came straight back');
+        self::assertNotContains($discarded, $state->discardPile());
+    }
+
     public function testHauntingsBankedPlaysBecomeDiscardOnlyGrantsOnTheNextTurn(): void
     {
         $haunting = $this->card('Haunting', 'hand', $this->p1);

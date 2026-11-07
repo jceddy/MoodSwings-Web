@@ -9272,6 +9272,12 @@ in custom sets is.
   (`adjustChaosValueDelta()`); Wastefulness uses the new `BoardState::moveDeckTopToDiscard()` (a
   `deck`-to-`discard` card move, which `ReplayStateBuilder` replays). Bots decline the optional triggers,
   except that they take Covetousness's best target and keep FOMO by discarding their weakest card.
+- **Longing can take back the card it discards.** The engine always allowed it (a pile pick may be the card just discarded), but the
+  web picker only listed cards already in the discard pile, so the card you were about to discard never appeared. The schema now marks
+  Longing's pile field with `also_offers_card_from: 'hand_card_id'` (see `CardChoiceSchema`'s docblock), and `game.js` adds the hand
+  card chosen in that sibling field to the pile list as soon as it is chosen (one delegated `change` listener rebuilds the checkbox
+  list, keeping what was already ticked; the sibling is found through the field's own path, so a copy nested under Optimism, Admiration
+  or Duplicity works too).
 - **Bot choices for the community set.** Rashness's optional target is in `BotChoiceResolver::ALWAYS_FILLED_OPTIONAL_FIELDS` (taking
   an opponent's mood valued 1 or less costs the acting player nothing), so a bot always names one when it exists. Haunting has
   its own branch in `BotPlayerService` (`hauntingDiscardCardIds()`): the bot discards exactly the hand cards that would be good

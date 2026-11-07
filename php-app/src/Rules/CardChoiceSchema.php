@@ -48,6 +48,11 @@ namespace MoodSwings\Rules;
  *     },                    // mirrors each effect class's own InvalidChoiceException checks exactly --
  *                           // see CardChoiceSchemaTest for the source cross-references. A field with
  *                           // no filter key has no such narrowing (every scope-eligible candidate is legal).
+ *     also_offers_card_from?: string, // discard_card (multi): the key of a hand_card field in the same play --
+ *                           // the card chosen there is put into the discard pile before this field's cards are
+ *                           // taken, so it is itself a legal pick here (Longing's "discard a card, then put up to
+ *                           // two cards from the discard pile into your hand"). The client adds it to this
+ *                           // field's candidates as soon as it is chosen.
  *     excludes_teammate?: bool, // player/mood: a static per-effect_key flag (like the rest of this schema,
  *                           // not computed per-request) marking the handful of cards whose printed text
  *                           // says "opponent" rather than "another player"/"any player" -- in Open Team
@@ -477,7 +482,7 @@ final class CardChoiceSchema
         ],
         'longing' => [
             ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard from your hand'],
-            ['key' => 'discard_card_ids', 'type' => 'discard_card', 'multi' => true, 'required' => false, 'label' => 'Up to 2 discard-pile cards to put into your hand (if you discard a card above)', 'count' => ['max' => 2]],
+            ['key' => 'discard_card_ids', 'type' => 'discard_card', 'multi' => true, 'required' => false, 'label' => 'Up to 2 discard-pile cards to put into your hand (if you discard a card above)', 'count' => ['max' => 2], 'also_offers_card_from' => 'hand_card_id'],
         ],
         'premonition' => [
             ['key' => 'draw_count', 'type' => 'value', 'required' => true, 'min' => 0, 'max' => 3, 'label' => 'Cards to draw (up to 3; you then put that many cards from your hand on the bottom of the deck)'],

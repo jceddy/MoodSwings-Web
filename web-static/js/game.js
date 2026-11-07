@@ -11863,6 +11863,44 @@
         return true;
     }
 
+    // The hand card currently chosen in the sibling hand_card field a discard_card field names with also_offers_card_from
+    // (see CardChoiceSchema), or null. The sibling's widget id is this field's own path with its last segment swapped, so it
+    // works for a nested (delegated/repeated) copy of the card's fields too; the field being built records its own path in
+    // alsoOffersFieldPaths first.
+    const alsoOffersFieldPaths = new WeakMap();
+
+    function discardedHandCardFor(field) {
+        const path = alsoOffersFieldPaths.get(field);
+        if (!field.also_offers_card_from || path === undefined) return null;
+        const sourceWidget = document.getElementById('choice-field-' + siblingPath(path, field.also_offers_card_from));
+        if (!sourceWidget || sourceWidget.value === '') return null;
+        return currentState.you.hand.find((c) => String(c.card_id) === sourceWidget.value) || null;
+    }
+
+    function siblingPath(path, siblingKey) {
+        return path.split('.').slice(0, -1).concat(siblingKey).join('.');
+    }
+
+    // Rebuilds every also_offers_card_from checkbox list whose source hand_card field just changed, keeping whatever was
+    // already ticked (and still offered). One delegated listener rather than one per field, so re-rendered panels don't leak.
+    document.addEventListener('change', (event) => {
+        const sourceId = event.target && event.target.id;
+        if (!sourceId || !sourceId.startsWith('choice-field-')) return;
+        for (const container of document.querySelectorAll('[data-also-offers-from="' + sourceId + '"]')) {
+            const entry = alsoOffersWidgets.get(container);
+            if (!entry) continue;
+            const stillTicked = new Set(Array.from(container.querySelectorAll('input:checked')).map((input) => input.value));
+            container.replaceChildren();
+            for (const option of fieldOptions(entry.field, entry.card)) {
+                const optionLabel = buildCheckboxOption(option);
+                if (stillTicked.has(String(option.value))) optionLabel.querySelector('input').checked = true;
+                container.appendChild(optionLabel);
+            }
+            updatePlayButtonEnabled();
+        }
+    });
+    const alsoOffersWidgets = new WeakMap();
+
     function fieldOptions(field, card) {
         switch (field.type) {
             case 'player':
@@ -11965,13 +12003,20 @@
                 // functionally, not just cosmetically: Corruption's own
                 // discard_card_ids field bottoms each cycled card onto its
                 // *owner's* deck in a duel.
-                return currentState.discard_pile
+                const pileOptions = currentState.discard_pile
                     .filter((c) => c.card_id !== card.card_id)
                     .filter((c) => matchesCardFilter(c, field.filter))
                     .map((c) => ({
                         value: c.card_id,
                         label: cardLabel(c) + (c.last_owner_name ? ' — ' + c.last_owner_name : ''),
                     }));
+                // also_offers_card_from (Longing): the hand card chosen in the sibling field is discarded first, so it
+                // is itself a card you can take back from the pile.
+                const justDiscarded = discardedHandCardFor(field);
+                if (justDiscarded && !pileOptions.some((option) => option.value === justDiscarded.card_id)) {
+                    pileOptions.push({ value: justDiscarded.card_id, label: cardLabel(justDiscarded) + ' — the card you discard' });
+                }
+                return pileOptions;
             case 'revealed_card':
                 // Cards just revealed to the whole table (Greed/Nosiness/Entitlement's opponent hand,
                 // Inspiration's top three) that sit in no zone the client lists: like 'grant_choice', the
@@ -12118,6 +12163,8 @@
             return select;
         }
 
+        if (field.also_offers_card_from) alsoOffersFieldPaths.set(field, path);
+
         const options = field.type === 'mode'
             ? field.options.map((value) => {
                 let label = capitalize(value).replace(/_/g, ' ');
@@ -12143,7 +12190,12 @@
         // per-item, so every field.multi field builds one of these
         // instead now -- see buildMultiCheckboxField() below.
         if (field.multi) {
-            return buildMultiCheckboxField(field, options, path);
+            const container = buildMultiCheckboxField(field, options, path);
+            if (field.also_offers_card_from) {
+                container.dataset.alsoOffersFrom = 'choice-field-' + siblingPath(path, field.also_offers_card_from);
+                alsoOffersWidgets.set(container, { field, card });
+            }
+            return container;
         }
 
         const select = document.createElement('select');
@@ -12358,7 +12410,7 @@
         const ids = Array.from(widget.querySelectorAll('input:checked')).map((input) => Number(input.value));
         const source = field.type === 'mood' ? currentState.in_play
             : field.type === 'hand_card' ? currentState.you.hand
-            : field.type === 'discard_card' ? currentState.discard_pile
+            : field.type === 'discard_card' ? currentState.discard_pile.concat(currentState.you.hand)
             : field.type === 'player' ? currentState.players
             : [];
         if (field.type === 'player') {
