@@ -1403,6 +1403,47 @@ final class BotPlayerService
     }
 
     /**
+     * Nostalgia with nothing in the discard pile is normally held back (its pickup has nothing to take), but its extra play is still
+     * an extra play -- and Urgency ("While in play -- worth 6 instead of 3 if you played two or more moods this round") turns on
+     * with it. That is worth playing Nostalgia for when it would decide the round: the bot has an Urgency in play that is not yet
+     * on, this would be its first play of the round (one play alone leaves Urgency off; once a mood has already been played this
+     * round, ANY play turns it on, so Nostalgia adds nothing), there is another card to spend the extra play on, and the points
+     * Nostalgia's play adds -- its own value plus Urgency's gain -- lift the bot's group from behind the best rival to at or
+     * above it, compared with just playing its best other card instead. Winning the round is how the bot wins the game, so no
+     * separate last-round check is needed.
+     *
+     * @param int[] $playableCardIds
+     */
+    private function nostalgiaUrgencyWouldDecideTheRound(BoardState $state, int $nostalgiaCardId, int $botGamePlayerId, array $playableCardIds): bool
+    {
+        if ($state->moodsPlayedThisRound($botGamePlayerId) > 0) {
+            return false;
+        }
+
+        $urgencyGain = 0;
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $row = $state->catalogRow($state->effectiveCardId($mood->cardId));
+            if ($row['effectKey'] === 'urgency' && $row['altValue'] !== null) {
+                $urgencyGain += max(0, $row['altValue'] - $state->valueOf($mood->cardId));
+            }
+        }
+        if ($urgencyGain === 0) {
+            return false;
+        }
+
+        $otherPlayValues = array_map(
+            fn (int $id): int => $this->baseValue($state, $id),
+            array_values(array_diff($playableCardIds, [$nostalgiaCardId])),
+        );
+        if ($otherPlayValues === []) {
+            return false; // nothing to spend the extra play on, so Urgency stays off
+        }
+        $bestOtherPlay = max($otherPlayValues);
+
+        return $this->wouldBecomeHighestScore($state, $botGamePlayerId, $bestOtherPlay, $bestOtherPlay + $this->baseValue($state, $nostalgiaCardId) + $urgencyGain);
+    }
+
+    /**
      * Orderliness ("choose odd numbers or even numbers; each of your other moods with a number of that type in its top right
      * corner has its value increased by 1"): the bot picks whichever type is the most common among the printed numbers of its
      * other moods in play, so the most moods get the +1. A tie -- including no other moods yet -- is broken the same way by the
@@ -1742,7 +1783,7 @@ final class BotPlayerService
         if ($effectKey === 'grief' && $state->discardPile() === []) {
             return false;
         }
-        if ($effectKey === 'nostalgia' && $state->discardPile() === []) {
+        if ($effectKey === 'nostalgia' && $state->discardPile() === [] && !$this->nostalgiaUrgencyWouldDecideTheRound($state, $cardId, $botGamePlayerId, $playableCardIds)) {
             return false;
         }
         if ($effectKey === 'fear' && !$this->fearHasAGoodReasonToPlayNow($state, $botGamePlayerId)) {
