@@ -878,6 +878,11 @@ final class BotPlayerService
 
                 return [$field['key'] => $counts === [] ? $field['options'][0] : array_key_first($counts)];
             }
+            if ($effectKey === 'fomo' && $field['type'] === 'hand_card' && $state->isSuppressed($sourceCardId)) {
+                // A suppressed FOMO scores nothing and has no other ability (suppression zeroes its value), so it is not worth a
+                // card: decline, and let it go into the discard pile.
+                return [];
+            }
             if ($effectKey === 'fomo' && $field['type'] === 'hand_card') {
                 // Keep FOMO (a 7) by discarding the least useful card in hand.
                 $worst = null;
