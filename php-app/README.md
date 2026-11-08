@@ -9283,7 +9283,8 @@ in custom sets is.
   each mood scores 2 instead of its value (Levelheadedness)") whenever `BoardState::flatMoodScore()` is set -- like Awe's and Corruption's
   entries it is read from the round, not from the card, so it stays up even if Levelheadedness leaves play, and disappears when the next
   round starts.
-- **Bot choices for the community set.** Rashness's optional target is in `BotChoiceResolver::ALWAYS_FILLED_OPTIONAL_FIELDS` (taking
+- **Bot choices for the community set.** Orderliness (`BotPlayerService::orderlinessParity()`) picks odd or even by whichever is the most
+  common among the printed numbers of the bot's other moods in play, breaking a tie by the rest of its hand, then to odd. Rashness's optional target is in `BotChoiceResolver::ALWAYS_FILLED_OPTIONAL_FIELDS` (taking
   an opponent's mood valued 1 or less costs the acting player nothing), so a bot always names one when it exists. Haunting has
   its own branch in `BotPlayerService` (`hauntingDiscardCardIds()`): the bot discards exactly the hand cards that would be good
   plays from the discard pile next turn -- they score points, or their effect has a mood/player/discard-pile target -- and

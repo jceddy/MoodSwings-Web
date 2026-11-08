@@ -1403,6 +1403,33 @@ final class BotPlayerService
     }
 
     /**
+     * Orderliness ("choose odd numbers or even numbers; each of your other moods with a number of that type in its top right
+     * corner has its value increased by 1"): the bot picks whichever type is the most common among the printed numbers of its
+     * other moods in play, so the most moods get the +1. A tie -- including no other moods yet -- is broken the same way by the
+     * rest of its hand (the moods it is likely to play next), and failing that falls to 'odd', the schema's first option.
+     */
+    private function orderlinessParity(BoardState $state, int $orderlinessCardId, int $botGamePlayerId): string
+    {
+        $inPlay = [];
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            if ($mood->cardId !== $orderlinessCardId) {
+                $inPlay[] = $mood->cardId;
+            }
+        }
+        $inHand = array_values(array_filter($state->hand($botGamePlayerId), fn (int $id): bool => $id !== $orderlinessCardId));
+
+        foreach ([$inPlay, $inHand] as $cardIds) {
+            $odd = count(array_filter($cardIds, fn (int $id): bool => $this->baseValue($state, $id) % 2 === 1));
+            $even = count($cardIds) - $odd;
+            if ($odd !== $even) {
+                return $odd > $even ? 'odd' : 'even';
+            }
+        }
+
+        return 'odd';
+    }
+
+    /**
      * Haunting ("you may discard any number of cards from your hand; if you do, you may play that many additional moods from
      * the discard pile on your next turn"): every card discarded banks one more play from the discard pile, and the card
      * itself is then sitting there ready to be played -- so the bot discards exactly the cards that would be good plays
@@ -2246,7 +2273,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting',
+        'wonder', 'haunting', 'orderliness',
     ];
 
     /**
@@ -2474,6 +2501,10 @@ final class BotPlayerService
             $targetMoodId = $this->scornTargetMoodId($state, $cardId, $botGamePlayerId);
 
             return $targetMoodId !== null ? ['target_mood_id' => $targetMoodId] : null;
+        }
+
+        if ($effectKey === 'orderliness') {
+            return ['parity' => $this->orderlinessParity($state, $cardId, $botGamePlayerId)];
         }
 
         if ($effectKey === 'haunting') {
