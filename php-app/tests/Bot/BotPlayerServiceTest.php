@@ -3497,6 +3497,36 @@ final class BotPlayerServiceTest extends TestCase
 
     // Haunting: the bot discards the hand cards that would be good plays from the discard pile next turn (they score points or
     // have something to target) and keeps the rest. Haunting itself is never discarded.
+    private function fomoTurnStartState(): BoardState
+    {
+        $catalog = $this->sampleCatalog() + [217 => $this->row('red', 'rare', 7, null, 'fomo', true, true, false)];
+        $state = new BoardState($catalog, DefaultEffectRegistry::build(), [1, 2, 3], [1 => [217, 55, 3]]);
+        $state->moveHandToInPlay(1, 217); // FOMO is in play; Apathy (4) and Charity (1) are still in hand
+
+        return $state;
+    }
+
+    // FOMO's turn-start trigger: the bot normally pays a card (its least useful) to keep a 7-point mood...
+    public function testFomoTurnStartDiscardsTheLeastUsefulCardToKeepAnUnsuppressedFomo(): void
+    {
+        $state = $this->fomoTurnStartState();
+        $field = ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false];
+
+        $answer = $this->bot->chooseDecisionAnswer($state, $field, 1, 'turn_start_trigger', 217);
+
+        self::assertArrayHasKey('discard_card_id', $answer);
+    }
+
+    // ...but a suppressed FOMO scores nothing, so it isn't worth a card: the bot declines and lets it go.
+    public function testFomoTurnStartDoesNotDiscardACardToKeepASuppressedFomo(): void
+    {
+        $state = $this->fomoTurnStartState();
+        $state->suppress(217, 'end_of_round');
+        $field = ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false];
+
+        self::assertSame([], $this->bot->chooseDecisionAnswer($state, $field, 1, 'turn_start_trigger', 217));
+    }
+
     public function testHauntingDiscardsTheHandCardsThatWouldBeGoodPlays(): void
     {
         $catalog = $this->sampleCatalog() + [

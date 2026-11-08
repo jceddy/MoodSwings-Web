@@ -9271,7 +9271,8 @@ in custom sets is.
   legal moods. Fairness only asks when several moods tie for highest; Maturity uses the permanent value delta
   (`adjustChaosValueDelta()`); Wastefulness uses the new `BoardState::moveDeckTopToDiscard()` (a
   `deck`-to-`discard` card move, which `ReplayStateBuilder` replays). Bots decline the optional triggers,
-  except that they take Covetousness's best target and keep FOMO by discarding their weakest card.
+  except that they take Covetousness's best target and keep FOMO by discarding their weakest card -- unless that FOMO is suppressed (it
+  then scores nothing and has no other ability), in which case they decline and let it go.
 - **Longing can take back the card it discards.** The engine always allowed it (a pile pick may be the card just discarded), but the
   web picker only listed cards already in the discard pile, so the card you were about to discard never appeared. The schema now marks
   Longing's pile field with `also_offers_card_from: 'hand_card_id'` (see `CardChoiceSchema`'s docblock), and `game.js` adds the hand
