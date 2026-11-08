@@ -3527,6 +3527,43 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $this->bot->chooseDecisionAnswer($state, $field, 1, 'turn_start_trigger', 217));
     }
 
+    private function orderlinessState(array $inPlayIds, array $handIds = []): BoardState
+    {
+        $catalog = $this->sampleCatalog() + [235 => $this->row('blue', 'rare', 0, null, 'orderliness', false, true, true)];
+        $state = new BoardState($catalog, DefaultEffectRegistry::build(), [1, 2, 3], [1 => [235, ...$inPlayIds, ...$handIds]]);
+        foreach ($inPlayIds as $id) {
+            $state->moveHandToInPlay(1, $id);
+        }
+
+        return $state;
+    }
+
+    // Orderliness: the bot picks the most common type among its moods' printed numbers.
+    public function testOrderlinessPicksEvenWhenMostOfTheBotsMoodsHaveEvenPrintedNumbers(): void
+    {
+        $state = $this->orderlinessState([55, 5, 3]); // Apathy 4, Complacency 4 (even), Charity 1 (odd)
+
+        self::assertSame(['parity' => 'even'], $this->bot->buildChoicesForCard($state, 235, 1));
+    }
+
+    public function testOrderlinessPicksOddWhenMostOfTheBotsMoodsHaveOddPrintedNumbers(): void
+    {
+        $state = $this->orderlinessState([3, 7, 55]); // Charity 1, Courage 1 (odd), Apathy 4 (even)
+
+        self::assertSame(['parity' => 'odd'], $this->bot->buildChoicesForCard($state, 235, 1));
+    }
+
+    // A tie among the moods in play is broken by the rest of the hand.
+    public function testOrderlinessBreaksATieWithTheRestOfTheHand(): void
+    {
+        $state = $this->orderlinessState([55, 3], [5, 8, 7]); // in play: 4 (even), 1 (odd); hand: 4 (even), 3 (odd), 1 (odd) -> odd
+
+        self::assertSame(['parity' => 'odd'], $this->bot->buildChoicesForCard($state, 235, 1));
+
+        $state = $this->orderlinessState([55, 3], [5, 9, 3]); // hand: 4 (even), 6 (even), 1 (odd) -> even
+        self::assertSame(['parity' => 'even'], $this->bot->buildChoicesForCard($state, 235, 1));
+    }
+
     public function testHauntingDiscardsTheHandCardsThatWouldBeGoodPlays(): void
     {
         $catalog = $this->sampleCatalog() + [
