@@ -1470,6 +1470,54 @@ final class BotPlayerServiceTest extends TestCase
     }
 
     /**
+     * Urgency (worth 3, or 6 once its owner has played two moods this round) is turned on by Nostalgia's extra play even with the
+     * discard pile empty. The bot has Urgency in play (3) and holds Nostalgia (0) and Apathy (4); the rival has 4 + 6 = 10 in play
+     * (plus $rivalExtra). Apathy alone brings the bot to 7, but Nostalgia then Apathy plays two moods, so Urgency goes to 6 and the
+     * bot reaches 3 + 3 + 0 + 4 = 10.
+     */
+    private function urgencyNostalgiaState(array $rivalMoodIds = [5, 30]): BoardState
+    {
+        $catalog = $this->sampleCatalog() + [254 => $this->row('green', 'uncommon', 3, 6, 'urgency', false, true, false)];
+        $state = new BoardState($catalog, DefaultEffectRegistry::build(), [1, 2, 3], [1 => [254, 128, 55], 2 => $rivalMoodIds]);
+        $state->moveHandToInPlay(1, 254);
+        foreach ($rivalMoodIds as $id) {
+            $state->moveHandToInPlay(2, $id); // Complacency 4, Bashfulness 6
+        }
+
+        return $state;
+    }
+
+    public function testChooseActionPlaysNostalgiaWithAnEmptyPileWhenItsExtraPlayTurnsUrgencyOnAndWinsTheRound(): void
+    {
+        $state = $this->urgencyNostalgiaState();
+
+        $action = $this->bot->chooseAction($state, [128, 55], 1);
+
+        self::assertSame(128, $action['card_id']);
+    }
+
+    // Not decisive (the rival is at 11, out of reach even with Urgency on): Nostalgia stays deprioritized.
+    public function testChooseActionStillDeprioritizesNostalgiaWhenUrgencyStillWouldNotWinTheRound(): void
+    {
+        $state = $this->urgencyNostalgiaState([5, 30, 48]); // 4 + 6 + 1 = 11
+
+        $action = $this->bot->chooseAction($state, [128, 55], 1);
+
+        self::assertSame(55, $action['card_id']);
+    }
+
+    // Once the bot has already played a mood this round, any play turns Urgency on, so Nostalgia adds nothing.
+    public function testChooseActionDoesNotNeedNostalgiaForUrgencyOnceAMoodWasAlreadyPlayedThisRound(): void
+    {
+        $state = $this->urgencyNostalgiaState();
+        $state->restoreRoundMoodPlays([1 => 1]);
+
+        $action = $this->bot->chooseAction($state, [128, 55], 1);
+
+        self::assertSame(55, $action['card_id']);
+    }
+
+    /**
      * The instant the discard pile has even one card in it, Nostalgia
      * reverts to its ordinary EARLY_PRIORITY_EFFECT_KEYS boosted
      * treatment -- its own value (0) plus EARLY_PRIORITY_BONUS (10)

@@ -9283,6 +9283,10 @@ in custom sets is.
   each mood scores 2 instead of its value (Levelheadedness)") whenever `BoardState::flatMoodScore()` is set -- like Awe's and Corruption's
   entries it is read from the round, not from the card, so it stays up even if Levelheadedness leaves play, and disappears when the next
   round starts.
+- **Bots play Nostalgia for Urgency.** A bot normally holds Nostalgia back while the discard pile is empty, but
+  `BotPlayerService::nostalgiaUrgencyWouldDecideTheRound()` plays it anyway when it has an Urgency in play that is not yet on, this would
+  be its first play of the round (one play alone leaves Urgency off; after any earlier play this round, every play turns it on), it has
+  another card for the extra play, and Nostalgia's value plus Urgency's +3 lifts the bot's group from behind the best rival to at or above it.
 - **Bot choices for the community set.** Orderliness (`BotPlayerService::orderlinessParity()`) picks odd or even by whichever is the most
   common among the printed numbers of the bot's other moods in play, breaking a tie by the rest of its hand, then to odd. Rashness's optional target is in `BotChoiceResolver::ALWAYS_FILLED_OPTIONAL_FIELDS` (taking
   an opponent's mood valued 1 or less costs the acting player nothing), so a bot always names one when it exists. Haunting has
