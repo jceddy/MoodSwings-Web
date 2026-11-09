@@ -9315,7 +9315,8 @@ in custom sets is.
   in-play mood that implements `Rules/ValueModifyingEffect` (memoized per effect key) on top of
   everything else it computes, so a modifier stacks with a one-time "value becomes N", a conditional alt value
   or a chaos delta rather than replacing it. A modifier must read only colors, printed numbers and effect
-  state -- never `valueOf()` -- or modifiers would recurse into each other. "Printed number" is the card's
+  state -- never `valueOf()` -- or modifiers would recurse into each other. Ardor counts the red moods its owner has *besides itself*
+  (migration 0532: it used to count itself too), and Possessiveness needs three cards in the discard pile (it was five). "Printed number" is the card's
   base value through any Creativity copy; Verve reuses Patience/Glee's `playedInRound`/`playedByPlayerId`
   tag; Orderliness remembers its choice as `orderlinessParity`. Competitiveness (1 more than the highest
   opposing mood *that doesn't have this ability*, or 1 with none) is a plain `computeValue()`; leaving out

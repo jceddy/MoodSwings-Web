@@ -189,15 +189,15 @@ final class CustomSetEffectsTest extends TestCase
 
     public function testPossessivenessCountsTheDiscardPile(): void
     {
-        $state = $this->state([1 => ['Possessiveness']], discardNames: ['Apathy', 'Complacency', 'Creativity', 'Courage']);
+        $state = $this->state([1 => ['Possessiveness']], discardNames: ['Apathy', 'Complacency']);
         $state->startTurn(1);
         $this->seat($state, 1, 'Possessiveness');
         self::assertSame(0, $state->valueOf($this->id('Possessiveness')));
 
-        $state = $this->state([1 => ['Possessiveness']], discardNames: ['Apathy', 'Complacency', 'Creativity', 'Courage', 'Charity']);
+        $state = $this->state([1 => ['Possessiveness']], discardNames: ['Apathy', 'Complacency', 'Creativity']);
         $state->startTurn(1);
         $this->seat($state, 1, 'Possessiveness');
-        self::assertSame(6, $state->valueOf($this->id('Possessiveness')));
+        self::assertSame(6, $state->valueOf($this->id('Possessiveness')), 'three cards in the discard pile is enough');
     }
 
     public function testEquanimityCountsEvenNumberedMoodsIncludingZero(): void
@@ -1827,18 +1827,28 @@ final class CustomSetEffectsTest extends TestCase
 
     // ---- static value modifiers ----
 
-    public function testArdorAddsTheNumberOfRedMoodsToEachOwnRedMood(): void
+    public function testArdorAddsTheNumberOfOtherRedMoodsToEachOwnRedMood(): void
     {
         $state = $this->state([1 => ['Ardor', 'Anger', 'Creativity'], 2 => ['Boredom']]);
         $state->startTurn(1);
         $this->seat($state, 1, 'Ardor', 'Anger', 'Creativity');
         $this->seat($state, 2, 'Boredom');
 
-        // Ardor and Anger are red (0 + 2 each); Creativity is blue; the opponent's red mood isn't counted or boosted.
-        self::assertSame(2, $state->valueOf($this->id('Ardor')));
-        self::assertSame(2, $state->valueOf($this->id('Anger')));
+        // Ardor counts the red moods besides itself (just Anger, so 1); Ardor and Anger are both red and both get +1. Creativity is blue;
+        // the opponent's red mood isn't counted or boosted.
+        self::assertSame(1, $state->valueOf($this->id('Ardor')));
+        self::assertSame(1, $state->valueOf($this->id('Anger')));
         self::assertSame(0, $state->valueOf($this->id('Creativity')));
         self::assertSame(4, $state->valueOf($this->id('Boredom')));
+    }
+
+    public function testArdorAloneAddsNothingBecauseItDoesNotCountItself(): void
+    {
+        $state = $this->state([1 => ['Ardor']]);
+        $state->startTurn(1);
+        $this->seat($state, 1, 'Ardor');
+
+        self::assertSame(0, $state->valueOf($this->id('Ardor')));
     }
 
     public function testHumilityBoostsOwnMoodsPrintedZeroToTwo(): void

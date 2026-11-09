@@ -479,7 +479,7 @@ final class DefaultEffectRegistry
         $registry->register('equanimity', new CustomConditionalValueEffect(CustomConditionalValueEffect::EVEN_NUMBERED_MOODS_AT_LEAST, 4));
         $registry->register('exuberance', new CustomConditionalValueEffect(CustomConditionalValueEffect::OTHER_OWN_RED_MOODS_AT_LEAST, 2));
         $registry->register('hellbent', new CustomConditionalValueEffect(CustomConditionalValueEffect::OWN_HAND_EMPTY));
-        $registry->register('possessiveness', new CustomConditionalValueEffect(CustomConditionalValueEffect::DISCARD_PILE_AT_LEAST, 5));
+        $registry->register('possessiveness', new CustomConditionalValueEffect(CustomConditionalValueEffect::DISCARD_PILE_AT_LEAST, 3));
         $registry->register('ruthlessness', new CustomConditionalValueEffect(CustomConditionalValueEffect::ANY_OPPONENT_HAND_EMPTY));
         $registry->register('temperance', new CustomConditionalValueEffect(CustomConditionalValueEffect::OWN_HAND_FEWER_THAN_EACH_OTHER));
         $registry->register('solidarity', new SolidarityEffect());
