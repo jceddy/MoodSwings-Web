@@ -6699,6 +6699,28 @@
             wonderColorsEl.hidden = true;
         }
 
+        // orderliness_parity only exists on an in-play Orderliness (the odd/even it was played with) -- hidden for every other card.
+        const orderlinessParityEl = document.getElementById('card-detail-orderliness-parity');
+        if (card.orderliness_parity) {
+            orderlinessParityEl.textContent = 'Chosen: ' + card.orderliness_parity + ' — your other moods with ' + card.orderliness_parity +
+                ' numbers in the top right corner have their value increased by 1.';
+            orderlinessParityEl.hidden = false;
+        } else {
+            orderlinessParityEl.hidden = true;
+        }
+
+        // value_modifiers: every in-play mood currently raising (or lowering) this card's value through a static "while in play" ability
+        // (Orderliness, Ardor, Humility, Kinship, Verve) -- "+1 from Orderliness". Only on in-play cards, so hidden elsewhere.
+        const valueModifiersEl = document.getElementById('card-detail-value-modifiers');
+        if (card.value_modifiers && card.value_modifiers.length > 0) {
+            valueModifiersEl.textContent = card.value_modifiers
+                .map((entry) => (entry.amount > 0 ? '+' : '\u2212') + Math.abs(entry.amount) + ' from ' + entry.source_name)
+                .join(', ');
+            valueModifiersEl.hidden = false;
+        } else {
+            valueModifiersEl.hidden = true;
+        }
+
         // has_unused_play_grant only exists (and is only ever true) on an
         // in-play card whose own effect (Hope, Grace, ...) granted an extra
         // play that hasn't been spent yet -- see GameService::getState()'s

@@ -2148,6 +2148,29 @@ final class BoardState
     }
 
     /**
+     * What staticValueModifiersFor() adds to $cardId, broken down by the mood adding it -- for the card detail view ("+1 from Orderliness").
+     * Only sources that actually change this card's value are listed.
+     *
+     * @return array<int, array{sourceCardId: int, amount: int}>
+     */
+    public function staticValueModifierBreakdownFor(int $cardId): array
+    {
+        $breakdown = [];
+        foreach ($this->moodsInPlay as $sourceCardId => $source) {
+            $effectKey = $this->catalogRow($this->effectiveCardId($sourceCardId))['effectKey'];
+            if (!($this->valueModifierEffectKeys[$effectKey] ??= $this->registry->has($effectKey) && $this->registry->for($effectKey) instanceof ValueModifyingEffect)) {
+                continue;
+            }
+            $amount = $this->registry->for($effectKey)->valueModifierFor($this, $sourceCardId, $cardId);
+            if ($amount !== 0) {
+                $breakdown[] = ['sourceCardId' => $sourceCardId, 'amount' => $amount];
+            }
+        }
+
+        return $breakdown;
+    }
+
+    /**
      * Vitality: "until the end of this round, each of your moods of that color has its value increased by
      * N" -- remembered as a round-long (player, color, amount) entry rather than stamped on moods, so it
      * reaches every mood that player owns of that color for the rest of the round, whenever it was played

@@ -19881,6 +19881,8 @@ final class GameService
                 // that would otherwise show up twice. Every other card's
                 // detail view reads this as null/absent.
                 'wonder_colors' => $serialized['effect_key'] === 'wonder' ? array_values(array_unique($state->effectState($cardId, 'colors') ?? [])) : null,
+                'orderliness_parity' => $serialized['effect_key'] === 'orderliness' ? $state->effectState($cardId, 'orderlinessParity') : null,
+                'value_modifiers' => $this->valueModifierEntries($state, $cardId, $names),
             ];
         }
 
@@ -20533,6 +20535,8 @@ final class GameService
                         'temporary_ownership' => $this->temporaryOwnershipInfo($state, $cardId, $names, $playerNames),
                         'bliss_discard_color' => $serialized['effect_key'] === 'bliss' ? $state->effectState($cardId, 'blissColor') : null,
                         'wonder_colors' => $serialized['effect_key'] === 'wonder' ? array_values(array_unique($state->effectState($cardId, 'colors') ?? [])) : null,
+                        'orderliness_parity' => $serialized['effect_key'] === 'orderliness' ? $state->effectState($cardId, 'orderlinessParity') : null,
+                        'value_modifiers' => $this->valueModifierEntries($state, $cardId, $names),
                     ];
                 },
                 array_keys($state->moodsInPlay()),
@@ -20883,6 +20887,8 @@ final class GameService
                         'temporary_ownership' => $this->temporaryOwnershipInfo($state, $cardId, $names, $playerNames),
                         'bliss_discard_color' => $serialized['effect_key'] === 'bliss' ? $state->effectState($cardId, 'blissColor') : null,
                         'wonder_colors' => $serialized['effect_key'] === 'wonder' ? array_values(array_unique($state->effectState($cardId, 'colors') ?? [])) : null,
+                        'orderliness_parity' => $serialized['effect_key'] === 'orderliness' ? $state->effectState($cardId, 'orderlinessParity') : null,
+                        'value_modifiers' => $this->valueModifierEntries($state, $cardId, $names),
                     ];
                 },
                 array_keys($state->moodsInPlay()),
@@ -22268,6 +22274,25 @@ final class GameService
             'is_suppressed' => $suppressions !== [],
             'suppressions' => $suppressions,
         ];
+    }
+
+    /**
+     * Every mood in play that is currently changing $cardId's value through a static "while in play -- each of your moods that ... has its value
+     * increased" ability (Ardor, Humility, Kinship, Verve, Orderliness), for the card detail view's "+1 from Orderliness".
+     *
+     * @param array<int, string> $names
+     * @return array<int, array{source_card_id: int, source_name: string, amount: int}>
+     */
+    private function valueModifierEntries(BoardState $state, int $cardId, array $names): array
+    {
+        return array_map(
+            static fn (array $entry): array => [
+                'source_card_id' => $entry['sourceCardId'],
+                'source_name' => $names[$entry['sourceCardId']] ?? 'a card',
+                'amount' => $entry['amount'],
+            ],
+            $state->staticValueModifierBreakdownFor($cardId),
+        );
     }
 
     private function affectingEntries(BoardState $state, int $cardId, array $names): array
