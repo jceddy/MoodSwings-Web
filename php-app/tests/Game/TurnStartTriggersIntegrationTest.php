@@ -296,6 +296,27 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         return $scores;
     }
 
+    // Orderliness's card detail says which parity was chosen, and each mood it boosts lists "+1 from Orderliness".
+    public function testCardDetailsShowOrderlinessParityAndWhichMoodsItBoosts(): void
+    {
+        $orderliness = $this->card('Orderliness', 'hand', $this->p1);
+        $odd = $this->card('Courage', 'in_play', $this->p1); // printed 1 (odd): boosted by odd
+        $even = $this->card('Complacency', 'in_play', $this->p1); // printed 4 (even): not
+        $userId = (int) $this->pdo->query("SELECT user_id FROM game_players WHERE id = {$this->p1}")->fetchColumn();
+
+        $this->games->playMood($this->gameId, $this->p1, $orderliness, ['parity' => 'odd']);
+        $inPlay = [];
+        foreach ($this->games->getState($this->gameId, $userId)['in_play'] as $card) {
+            $inPlay[$card['card_id']] = $card;
+        }
+
+        self::assertSame('odd', $inPlay[$orderliness]['orderliness_parity']);
+        self::assertNull($inPlay[$odd]['orderliness_parity']);
+        self::assertSame([['source_card_id' => $orderliness, 'source_name' => 'Orderliness', 'amount' => 1]], $inPlay[$odd]['value_modifiers']);
+        self::assertSame([], $inPlay[$even]['value_modifiers']);
+        self::assertSame([], $inPlay[$orderliness]['value_modifiers'], 'Orderliness does not boost itself');
+    }
+
     // Neglect fires before scoring (not at the start of a turn): the opponent's single highest value mood goes automatically,
     // so it doesn't count toward their score.
     public function testNeglectDiscardsAnEmptyHandedOpponentsHighestMoodBeforeScoring(): void

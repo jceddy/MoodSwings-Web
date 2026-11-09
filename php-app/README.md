@@ -9287,6 +9287,10 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Card details explain value modifiers.** An in-play card's serialized form now carries `value_modifiers` (every mood currently raising or lowering its
+  value through a `ValueModifyingEffect` -- Orderliness, Ardor, Humility, Kinship, Verve -- from `BoardState::staticValueModifierBreakdownFor()`), which
+  the card detail view lists as "+1 from Orderliness"; and an in-play Orderliness carries `orderliness_parity`, shown as "Chosen: odd -- your other
+  moods with odd numbers ... +1". The same fields are in the replay snapshots.
 - **Revealed-card picks show the cards.** A `revealed_card` decision (Nosiness, Greed, Entitlement, Inspiration, Prudence) used to be a dropdown of
   "Name (color, value)" labels and nothing else. `serializePendingDecision()` now also sends `field.cards` -- the same `serializeCard()` objects the
   hand renders -- exactly where it already sent `options` (so a private look still only reaches the player meant to see it), and `buildFieldRow()` in
