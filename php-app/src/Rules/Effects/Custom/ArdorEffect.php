@@ -9,8 +9,9 @@ use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\ValueModifyingEffect;
 
 /**
- * Ardor: "While in play -- Each of your red moods has its value increased by the number of red moods you
- * have." Ardor is red, so it counts itself and is increased by it too. Two Ardors each apply.
+ * Ardor: "While in play -- Each of your red moods has its value increased by the number of other red moods you
+ * have." "Other" is relative to Ardor itself, so each Ardor counts the red moods its owner has besides itself; Ardor is
+ * red, so it is still one of the moods that gets the increase. Two Ardors each apply (and each counts the other).
  */
 final class ArdorEffect extends AbstractMoodEffect implements ValueModifyingEffect
 {
@@ -23,7 +24,7 @@ final class ArdorEffect extends AbstractMoodEffect implements ValueModifyingEffe
 
         $redMoods = 0;
         foreach ($state->moodsOwnedBy($ownerId) as $mood) {
-            if ($state->colorOf($mood->cardId) === 'red') {
+            if ($mood->cardId !== $sourceCardId && $state->colorOf($mood->cardId) === 'red') {
                 $redMoods++;
             }
         }
