@@ -3612,6 +3612,41 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['parity' => 'even'], $this->bot->buildChoicesForCard($state, 235, 1));
     }
 
+    private function belligerenceState(array $opponentMoodIds): BoardState
+    {
+        $catalog = $this->sampleCatalog() + [219 => $this->row('red', 'uncommon', 2, null, 'belligerence', false, false, true)];
+        $state = new BoardState($catalog, DefaultEffectRegistry::build(), [1, 2, 3], [1 => [219], 2 => $opponentMoodIds]);
+        foreach ($opponentMoodIds as $id) {
+            $state->moveHandToInPlay(2, $id);
+        }
+
+        return $state;
+    }
+
+    // Belligerence: an optional yes/no the generic resolver never fills -- the bot opts in when discarding its opponents' low moods
+    // improves its standing...
+    public function testBelligerenceIsOptedInToWhenItDiscardsOpponentPointsFromLowMoods(): void
+    {
+        $state = $this->belligerenceState([3, 48, 55]); // Charity 1, Panic 1 (qualify), Apathy 4 (stays)
+
+        self::assertSame(['discard_qualifying_moods' => true], $this->bot->buildChoicesForCard($state, 219, 1));
+    }
+
+    // ...and leaves it blank when nothing would change: no opponent mood is valued 2 or less, or the only ones are worth 0.
+    public function testBelligerenceIsLeftBlankWhenNoOpponentMoodQualifies(): void
+    {
+        $state = $this->belligerenceState([55, 5]); // Apathy 4, Complacency 4
+
+        self::assertSame([], $this->bot->buildChoicesForCard($state, 219, 1));
+    }
+
+    public function testBelligerenceIsLeftBlankWhenTheOnlyQualifyingMoodsScoreNothing(): void
+    {
+        $state = $this->belligerenceState([38]); // Fear 0
+
+        self::assertSame([], $this->bot->buildChoicesForCard($state, 219, 1));
+    }
+
     public function testHauntingDiscardsTheHandCardsThatWouldBeGoodPlays(): void
     {
         $catalog = $this->sampleCatalog() + [
