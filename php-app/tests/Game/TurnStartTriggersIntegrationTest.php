@@ -661,6 +661,32 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         self::assertContains($lost, $state->discardPile());
     }
 
+    // Nosiness's pick is offered with each revealed card's full details (art ids, rules text...), not just a "Name (color, value)" label,
+    // so the player choosing can look at what they are choosing between.
+    public function testNosinessPendingDecisionCarriesTheRevealedCardsDetails(): void
+    {
+        $nosiness = $this->card('Nosiness', 'hand', $this->p1);
+        $this->card('Creativity', 'hand', $this->p1);
+        $this->card('Complacency', 'hand', $this->p2);
+        $this->card('Apathy', 'hand', $this->p2);
+        $userId = (int) $this->pdo->query("SELECT user_id FROM game_players WHERE id = {$this->p1}")->fetchColumn();
+
+        $this->games->playMood($this->gameId, $this->p1, $nosiness, ['target_player_id' => $this->p2]);
+        $field = $this->games->getState($this->gameId, $userId)['round']['pending_decision']['field'];
+
+        self::assertSame('revealed_card', $field['type']);
+        self::assertCount(2, $field['options']);
+        self::assertCount(2, $field['cards']);
+        $names = array_column($field['cards'], 'name');
+        sort($names);
+        self::assertSame(['Apathy', 'Complacency'], $names);
+        foreach ($field['cards'] as $card) {
+            self::assertArrayHasKey('rules_text', $card);
+            self::assertArrayHasKey('catalog_card_id', $card);
+            self::assertContains($card['card_id'], array_column($field['options'], 'value'));
+        }
+    }
+
     public function testEntitlementRevealPathLetsItsOwnerTakeACardAndPlayItAtOnce(): void
     {
         $entitlement = $this->card('Entitlement', 'hand', $this->p1);

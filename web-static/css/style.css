@@ -3559,3 +3559,11 @@ dialog#deck-builder-dialog[open] {
         font-size: calc(1.3rem * var(--card-scale, 1));
     }
 }
+
+/* A revealed_card choice (Nosiness, Greed, ...): the candidates as card thumbnails above the dropdown, so each can be opened for its details. */
+.choice-field-revealed-cards__thumbs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}

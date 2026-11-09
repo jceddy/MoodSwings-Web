@@ -9287,6 +9287,10 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Revealed-card picks show the cards.** A `revealed_card` decision (Nosiness, Greed, Entitlement, Inspiration, Prudence) used to be a dropdown of
+  "Name (color, value)" labels and nothing else. `serializePendingDecision()` now also sends `field.cards` -- the same `serializeCard()` objects the
+  hand renders -- exactly where it already sent `options` (so a private look still only reaches the player meant to see it), and `buildFieldRow()` in
+  `game.js` shows them as a row of thumbnails above the dropdown, each opening the usual card detail view.
 - **Bots play Nostalgia for Urgency.** A bot normally holds Nostalgia back while the discard pile is empty, but
   `BotPlayerService::nostalgiaUrgencyWouldDecideTheRound()` plays it anyway when it has an Urgency in play that is not yet on, this would
   be its first play of the round (one play alone leaves Urgency off; after any earlier play this round, every play turns it on), it has
