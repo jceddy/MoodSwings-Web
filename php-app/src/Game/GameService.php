@@ -23999,6 +23999,12 @@ final class GameService
                     ],
                     array_map(intval(...), $field['candidate_card_ids'] ?? []),
                 );
+                // The same card objects the hand and board render (art, rules text, value...), so the responder can open each
+                // candidate's details instead of choosing between bare "Name (color, value)" labels. Sent exactly where the options are.
+                $field['cards'] = array_map(
+                    fn (int $candidateId): array => $this->serializeCard($revealedState, $candidateId, $revealedNames, null),
+                    array_map(intval(...), $field['candidate_card_ids'] ?? []),
+                );
             }
             $result['field'] = $field;
         }

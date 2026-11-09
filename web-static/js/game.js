@@ -12365,6 +12365,24 @@
         const widget = buildFieldWidget(field, card, path);
         widget.addEventListener('change', onChange);
         label.appendChild(widget);
+
+        // A 'revealed_card' field (Nosiness, Greed, Entitlement, Inspiration, Prudence...) picks among cards that sit in no zone the
+        // board lists, so the dropdown's bare "Name (color, value)" labels were all a responder had to go on. field.cards (the same card
+        // objects the hand renders) become a row of thumbnails above it, each opening the usual card detail view.
+        if (field.type === 'revealed_card' && Array.isArray(field.cards) && field.cards.length > 0) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'choice-field-revealed-cards';
+            const thumbs = document.createElement('div');
+            thumbs.className = 'choice-field-revealed-cards__thumbs';
+            for (const revealed of field.cards) {
+                thumbs.appendChild(buildCardThumb(revealed, { onClick: () => openCardDetail(revealed) }));
+            }
+            wrapper.appendChild(thumbs);
+            wrapper.appendChild(label);
+
+            return wrapper;
+        }
+
         return label;
     }
 
