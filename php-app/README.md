@@ -9283,6 +9283,10 @@ in custom sets is.
   each mood scores 2 instead of its value (Levelheadedness)") whenever `BoardState::flatMoodScore()` is set -- like Awe's and Corruption's
   entries it is read from the round, not from the card, so it stays up even if Levelheadedness leaves play, and disappears when the next
   round starts.
+- **Bots opt in to Belligerence when it helps.** Its "put all of your opponents' moods valued 2 or less into the discard pile" is an optional
+  yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
+  `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
+  Discarding only zero-point moods, or none at all, leaves it blank.
 - **Bots play Nostalgia for Urgency.** A bot normally holds Nostalgia back while the discard pile is empty, but
   `BotPlayerService::nostalgiaUrgencyWouldDecideTheRound()` plays it anyway when it has an Urgency in play that is not yet on, this would
   be its first play of the round (one play alone leaves Urgency off; after any earlier play this round, every play turns it on), it has

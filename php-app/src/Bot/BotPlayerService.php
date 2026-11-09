@@ -1444,6 +1444,53 @@ final class BotPlayerService
     }
 
     /**
+     * Belligerence ("you may put all of your opponents' moods with a value of 2 or less into the discard pile"): an optional yes/no the
+     * generic resolver never fills, so the bot decides here. It opts in when discarding those moods would improve its standing -- its own
+     * group's round score minus the best rival group's, scored through the real RoundScorer on a copy of the board with the moods gone
+     * (so conditional values and mood counts are accounted for) -- and otherwise leaves it blank. A zero-point mood changes nothing, so
+     * discarding only such moods is no swing.
+     */
+    private function belligerenceSwingsPointsInFavor(BoardState $state, int $botGamePlayerId): bool
+    {
+        $opponentIds = array_values(array_filter(
+            $state->activePlayerOrder(),
+            fn (int $id): bool => $id !== $botGamePlayerId && !$state->isTeammate($botGamePlayerId, $id),
+        ));
+        $targetCardIds = [];
+        foreach ($state->moodsInPlay() as $mood) {
+            if (in_array($mood->ownerId, $opponentIds, true) && $state->valueOf($mood->cardId) <= 2) {
+                $targetCardIds[] = $mood->cardId;
+            }
+        }
+        if ($targetCardIds === []) {
+            return false;
+        }
+
+        $after = clone $state;
+        foreach ($targetCardIds as $targetCardId) {
+            $after->moveInPlayToDiscard($targetCardId);
+        }
+
+        return $this->roundLead($after, $botGamePlayerId) > $this->roundLead($state, $botGamePlayerId);
+    }
+
+    /** The bot's group's round score minus the best rival group's (a teammate counts with the bot; rivals are grouped among themselves too). */
+    private function roundLead(BoardState $state, int $botGamePlayerId): int
+    {
+        $scores = (new RoundScorer())->score($state);
+        $groups = [];
+        foreach ($state->activePlayerOrder() as $id) {
+            $isMine = $id === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $id);
+            $key = $isMine ? 'mine' : 'rival-' . min(array_filter($state->activePlayerOrder(), fn (int $other): bool => $other === $id || $state->isTeammate($id, $other)));
+            $groups[$key] = ($groups[$key] ?? 0) + ($scores[$id] ?? 0);
+        }
+        $mine = $groups['mine'] ?? 0;
+        unset($groups['mine']);
+
+        return $mine - ($groups === [] ? 0 : max($groups));
+    }
+
+    /**
      * Orderliness ("choose odd numbers or even numbers; each of your other moods with a number of that type in its top right
      * corner has its value increased by 1"): the bot picks whichever type is the most common among the printed numbers of its
      * other moods in play, so the most moods get the +1. A tie -- including no other moods yet -- is broken the same way by the
@@ -2314,7 +2361,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness',
+        'wonder', 'haunting', 'orderliness', 'belligerence',
     ];
 
     /**
@@ -2546,6 +2593,10 @@ final class BotPlayerService
 
         if ($effectKey === 'orderliness') {
             return ['parity' => $this->orderlinessParity($state, $cardId, $botGamePlayerId)];
+        }
+
+        if ($effectKey === 'belligerence') {
+            return $this->belligerenceSwingsPointsInFavor($state, $botGamePlayerId) ? ['discard_qualifying_moods' => true] : [];
         }
 
         if ($effectKey === 'haunting') {
