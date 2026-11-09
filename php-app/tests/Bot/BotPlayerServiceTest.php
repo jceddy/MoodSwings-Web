@@ -3647,6 +3647,55 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $this->bot->buildChoicesForCard($state, 219, 1));
     }
 
+    // Scorn's while-in-play reaction: playing another mood lets the bot suppress an opponent's mood of the same color.
+    private function scornReactionState(bool $botHasScorn = true, array $opponentMoodIds = [5, 55]): BoardState
+    {
+        $state = $this->boardState(hands: [1 => [24, 7, 3], 2 => $opponentMoodIds]);
+        if ($botHasScorn) {
+            $state->moveHandToInPlay(1, 24); // Scorn
+        }
+        foreach ($opponentMoodIds as $id) {
+            $state->moveHandToInPlay(2, $id); // Complacency (white, 4), Apathy (black, 4)
+        }
+
+        return $state;
+    }
+
+    public function testPlayingAMoodWithScornInPlaySuppressesAnOpponentsMoodOfTheSameColor(): void
+    {
+        $state = $this->scornReactionState();
+
+        // Courage (7) is white: the opponent's white Complacency (5), not their black Apathy, can be suppressed.
+        $choices = $this->bot->buildChoicesForCard($state, 7, 1);
+
+        self::assertSame(5, $choices['scorn_suppress_target']);
+    }
+
+    // The reaction the bot supplies is accepted and applied by the real play service.
+    public function testTheBotsScornReactionIsAppliedWhenItPlaysTheMood(): void
+    {
+        $state = $this->scornReactionState();
+        $state->startTurn(1);
+
+        $action = $this->bot->chooseAction($state, [7, 3], 1);
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, $action['card_id'], new \MoodSwings\Rules\PlayerChoices($action['choices']));
+
+        // Whichever of Courage (white, 1) / Charity (white, 1) it played, the opponent's white Complacency is suppressed until the round ends.
+        self::assertTrue($state->isSuppressed(5));
+        self::assertFalse($state->isSuppressed(55), 'the black Apathy does not share a color with the played card');
+    }
+
+    public function testNoScornReactionWhenNoOpponentMoodSharesTheColorOrScornIsNotInPlay(): void
+    {
+        // The only opponent mood is black, and Courage is white.
+        $state = $this->scornReactionState(opponentMoodIds: [55]);
+        self::assertArrayNotHasKey('scorn_suppress_target', $this->bot->buildChoicesForCard($state, 7, 1));
+
+        // Without Scorn in play there is no reaction at all.
+        $state = $this->scornReactionState(botHasScorn: false);
+        self::assertArrayNotHasKey('scorn_suppress_target', $this->bot->buildChoicesForCard($state, 7, 1));
+    }
+
     public function testHauntingDiscardsTheHandCardsThatWouldBeGoodPlays(): void
     {
         $catalog = $this->sampleCatalog() + [

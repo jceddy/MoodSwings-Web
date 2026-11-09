@@ -2330,6 +2330,11 @@ final class BotPlayerService
             return null;
         }
 
+        $scornTargetMoodId = $this->scornReactionTargetMoodId($state, $cardId, $botGamePlayerId);
+        if ($scornTargetMoodId !== null) {
+            $choices['scorn_suppress_target'] = $scornTargetMoodId;
+        }
+
         $chaosEffectKey = $state->chaosEffectKeyFor($cardId);
         if ($chaosEffectKey !== null) {
             $chaosChoices = $this->resolveSchemaFields(ChaosCardChoiceSchema::forEffectKey($chaosEffectKey), $state, $cardId, $botGamePlayerId, $chaosEffectKey);
@@ -5610,6 +5615,45 @@ final class BotPlayerService
         }
 
         return $bestAnyId;
+    }
+
+    /**
+     * Scorn's "While in play -- each time you play another mood, you may suppress a mood that shares a color with it until the end of
+     * this round": a reaction that rides along with the played card's own choices ('scorn_suppress_target', see CardChoiceSchema::REACTIONS)
+     * and costs the bot nothing, so whenever it has a Scorn in play and an opponent's mood shares the played card's color, it suppresses
+     * the best such mood (the same suppressionTargetPriority() ranking Scorn's own mandatory target uses -- never a Hope/Grace, which
+     * suppression doesn't touch, and nothing worth 0). The color is the card's once it is in play (Imagination can recolor it), found on a
+     * copy of the board; Creativity is skipped, since what it copies -- and so its color -- isn't known yet. Null when there is nothing worth
+     * suppressing.
+     */
+    private function scornReactionTargetMoodId(BoardState $state, int $playedCardId, int $botGamePlayerId): ?int
+    {
+        if (!$state->playerHasMoodInPlay($botGamePlayerId, 'scorn')
+            || $state->catalogRow($state->effectiveCardId($playedCardId))['effectKey'] === 'creativity'
+        ) {
+            return null;
+        }
+
+        $simulated = clone $state;
+        if ($simulated->isInHand($botGamePlayerId, $playedCardId)) {
+            $simulated->moveHandToInPlay($botGamePlayerId, $playedCardId);
+        }
+        $playedColor = $simulated->colorOf($playedCardId);
+        if ($playedColor === 'colorless') {
+            return null;
+        }
+
+        $best = null;
+        foreach ($this->nonTeammateOpponentMoodIds($simulated, $botGamePlayerId) as $candidateId) {
+            if ($simulated->colorOf($candidateId) !== $playedColor || $simulated->isSuppressed($candidateId)) {
+                continue;
+            }
+            if ($best === null || $this->suppressionTargetPriority($simulated, $candidateId) > $this->suppressionTargetPriority($simulated, $best)) {
+                $best = $candidateId;
+            }
+        }
+
+        return $best !== null && $this->suppressionTargetPriority($simulated, $best) > 0 ? $best : null;
     }
 
     /**
