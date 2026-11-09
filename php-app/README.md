@@ -9287,6 +9287,9 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Belligerence starts checked in default selections mode.** `withChoiceDefault()` has a hand-authored exception to "optional fields are left
+  alone": Belligerence's optional yes/no (`discard_qualifying_moods`) gets `default: true`, and `game.js`'s checkbox widget now honours a `default === true`.
+  With the mode off the box is unchecked as before.
 - **Card details explain value modifiers.** An in-play card's serialized form now carries `value_modifiers` (every mood currently raising or lowering its
   value through a `ValueModifyingEffect` -- Orderliness, Ardor, Humility, Kinship, Verve -- from `BoardState::staticValueModifierBreakdownFor()`), which
   the card detail view lists as "+1 from Orderliness"; and an in-play Orderliness carries `orderliness_parity`, shown as "Chosen: odd -- your other

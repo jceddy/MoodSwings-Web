@@ -16580,6 +16580,30 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('green', $colorField['default']);
     }
 
+    // Belligerence's optional "put the opponents' low moods into the discard pile" starts checked in default selections mode -- the one
+    // optional yes/no that does -- and stays blank with the mode off.
+    public function testDefaultSelectionsModeChecksBelligerencesOptionalYesNoByDefault(): void
+    {
+        foreach ([true, false] as $defaultSelectionsMode) {
+            $suffix = $defaultSelectionsMode ? 'on' : 'off';
+            $u1 = $this->insertUser("dsbell1{$suffix}");
+            $u2 = $this->insertUser("dsbell2{$suffix}");
+            $gameId = $this->insertGameRow('standard', 2, $u1, defaultSelectionsMode: $defaultSelectionsMode);
+            $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+            $this->insertGamePlayer($gameId, $u2, 1);
+            $belligerenceId = $this->insertGameCard($gameId, 219, 'hand', $p1); // Belligerence
+            $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+            $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+            $field = self::findFieldByKey(self::findByCardId($hand, $belligerenceId)['choice_fields'], 'discard_qualifying_moods');
+            if ($defaultSelectionsMode) {
+                self::assertTrue($field['default']);
+            } else {
+                self::assertArrayNotHasKey('default', $field);
+            }
+        }
+    }
+
     public function testDefaultSelectionsModeDefaultsImaginationsColorToFirstOptionWhenNothingInPlay(): void
     {
         $u1 = $this->insertUser('dsimagempty1');
