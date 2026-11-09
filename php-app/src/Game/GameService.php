@@ -21968,9 +21968,17 @@ final class GameService
      *   issue's own flagship example of a smarter-than-generic default),
      *   falling back to the same first-option baseline if $ownerId has
      *   no moods in play yet to have a most-represented color at all.
+     * - One hand-authored exception to "optional fields are left alone":
+     *   Belligerence's optional yes/no defaults to true (checked).
      */
     private function withChoiceDefault(BoardState $state, array $field, string $effectKey, int $ownerId): array
     {
+        // Belligerence's optional yes/no ("put all of your opponents' moods valued 2 or less into the discard pile") is the one optional
+        // checkbox that starts checked: using the ability is the obvious play, so the player unchecks it rather than remembering to tick it.
+        if ($effectKey === 'belligerence' && ($field['key'] ?? null) === 'discard_qualifying_moods' && ($field['type'] ?? null) === 'bool') {
+            return [...$field, 'default' => true];
+        }
+
         if (($field['required'] ?? false) !== true || ($field['type'] ?? null) !== 'mode') {
             return $field;
         }

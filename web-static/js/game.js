@@ -12095,6 +12095,8 @@
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.id = 'choice-field-' + path;
+            // "Default selections" mode: a few optional yes/no fields (Belligerence) start checked.
+            if (field.default === true) checkbox.checked = true;
             return checkbox;
         }
 
