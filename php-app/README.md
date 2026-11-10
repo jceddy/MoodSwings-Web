@@ -9287,6 +9287,11 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Angst's discard.** The optional "put one of your blue or red moods into the discard pile; if you do, play an additional mood from the discard
+  pile" was never filled, so Angst was a bare mood. `BotPlayerService::angstDiscardMoodId()` tries each of the bot's own blue/red moods on a copy of the
+  board: the mood goes to the pile, the bot's own `chooseAction()` picks what it would play from the pile (the discarded mood included), that card joins the
+  board, and `roundLead()` is compared with leaving things alone. It discards the mood with the biggest gain of at least 1; extra-play and other lasting
+  moods (Validation, Duplicity, Hope, Grace, ...) are never given up. Abilities the follow-up play would trigger aren't counted.
 - **Bots use the mass-effect cards.** Rage, Wrath and Reckoning (discard), Repentance (suppress) and Chagrin, Hesitation and Disorientation (bounce) are
   optional sweeps the bot never opted into. `BotPlayerService::massEffectChoices()` tries each candidate answer (the plain yes; Hesitation's "all" or a
   single red/green opponent mood; every value on the board for Disorientation and Repentance; Reckoning with each player keeping their best mood) on a copy

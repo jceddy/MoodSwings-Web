@@ -5496,7 +5496,7 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([26, 76], $action['choices']['target_mood_ids']);
     }
     /** @param array<int, int[]> $moodsByPlayer */
-    private function removalState(int $cardId, array $moodsByPlayer): BoardState
+    private function removalState(int $cardId, array $moodsByPlayer, array $pileIds = []): BoardState
     {
         $catalog = $this->sampleCatalog() + [
             1001 => $this->row('black', 'mythic', 2, null, 'malevolence', false, false, true),
@@ -5513,7 +5513,7 @@ final class BotPlayerServiceTest extends TestCase
         foreach ($moodsByPlayer as $playerId => $ids) {
             $hands[$playerId] = [...($hands[$playerId] ?? []), ...$ids];
         }
-        $state = new BoardState($catalog, DefaultEffectRegistry::build(), [1, 2, 3], $hands);
+        $state = new BoardState($catalog, DefaultEffectRegistry::build(), [1, 2, 3], $hands, [], $pileIds);
         foreach ($moodsByPlayer as $playerId => $ids) {
             foreach ($ids as $id) {
                 $state->moveHandToInPlay($playerId, $id);
@@ -5694,5 +5694,33 @@ final class BotPlayerServiceTest extends TestCase
                 self::assertLessThan($before, $scoring($state), "card {$cardId} should take down an opponent mood");
             }
         }
+    }
+
+    public function testAngstDiscardsABlueOrRedMoodOnlyWhenThePileHoldsABetterPlay(): void
+    {
+        // Avoidance (blue, 3) goes to the pile to make room for Betrayal (6), which the follow-up play would be.
+        $state = $this->removalState(54, [1 => [29]], [56]);
+        self::assertSame(['discard_mood_id' => 29], $this->bot->buildChoicesForCard($state, 54, 1));
+
+        // The only thing in the pile is Courage (1): trading a 3 for it loses points.
+        $state = $this->removalState(54, [1 => [29]], [7]);
+        self::assertSame([], $this->bot->buildChoicesForCard($state, 54, 1));
+
+        // An empty pile, or no blue or red mood to give up, leaves Angst bare.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(54, [1 => [29]]), 54, 1));
+        $state = $this->removalState(54, [1 => [55]], [56]);
+        self::assertSame([], $this->bot->buildChoicesForCard($state, 54, 1));
+    }
+
+    public function testAngstsDiscardResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(54, [1 => [29]], [56]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 54, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 54, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertFalse($state->isInPlay(29));
+        self::assertContains(29, $state->discardPile());
     }
 }

@@ -2546,7 +2546,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst',
     ];
 
     /**
@@ -2668,6 +2668,12 @@ final class BotPlayerService
             $targetMoodIds = $this->pureRemovalTargetMoodIds($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'angst') {
+            $discardMoodId = $this->angstDiscardMoodId($state, $cardId, $botGamePlayerId);
+
+            return $discardMoodId !== null ? ['discard_mood_id' => $discardMoodId] : [];
         }
 
         if (isset(self::MASS_EFFECT_ACTIONS[$effectKey])) {
@@ -4953,6 +4959,63 @@ final class BotPlayerService
         }
 
         return $simulated;
+    }
+
+    /** Set while angstDiscardMoodId() is predicting the bot's follow-up play, so that play can't start another prediction of its own. */
+    private bool $predictingAngstFollowUp = false;
+
+    /**
+     * Angst ("you may put one of your blue or red moods into the discard pile; if you do, you may play an additional mood this turn from the discard pile"):
+     * the optional discard was never filled, so Angst was a bare mood. Discarding costs that mood's points but buys a play from the pile, so the bot
+     * only does it when the trade comes out ahead. For each of its own blue/red moods it predicts the outcome on a copy of the board: the mood goes to
+     * the pile, the bot's own chooseAction() picks what it would play from the pile (so the prediction matches the play it will really make, including
+     * the mood it just discarded), that card joins the board, and the round lead (roundLead()) is compared with leaving everything alone. It discards
+     * the mood with the biggest gain of at least 1. Effects the follow-up play would trigger aren't counted, so replaying a discarded mood for its ability
+     * isn't a reason by itself. Moods that give the bot extra plays or other lasting value (PROTECTED_EFFECT_KEYS, Hope, Grace, Stubbornness,
+     * Melancholy) are never discarded.
+     */
+    private function angstDiscardMoodId(BoardState $state, int $angstCardId, int $botGamePlayerId): ?int
+    {
+        if ($this->predictingAngstFollowUp) {
+            return null;
+        }
+
+        $sim = $this->withCardInPlay($state, $angstCardId, $botGamePlayerId);
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+        $untouchable = [...self::PROTECTED_EFFECT_KEYS, 'hope', 'grace', 'stubbornness', 'melancholy'];
+
+        $best = null;
+        $bestGain = 0;
+        $this->predictingAngstFollowUp = true;
+        try {
+            foreach ($sim->moodsOwnedBy($botGamePlayerId) as $mood) {
+                $effectKey = $sim->catalogRow($sim->effectiveCardId($mood->cardId))['effectKey'];
+                if ($mood->cardId === $angstCardId
+                    || !in_array($sim->colorOf($mood->cardId), ['blue', 'red'], true)
+                    || in_array($effectKey, $untouchable, true)
+                ) {
+                    continue;
+                }
+
+                $after = clone $sim;
+                $after->moveInPlayToDiscard($mood->cardId);
+                $pile = $after->discardPile();
+                $next = $this->chooseAction($after, $pile, $botGamePlayerId);
+                if ($next !== null) {
+                    $after->moveDiscardToInPlay($botGamePlayerId, $next['card_id']);
+                }
+
+                $gain = $this->roundLead($after, $botGamePlayerId) - $baseline;
+                if ($gain > $bestGain) {
+                    $best = $mood->cardId;
+                    $bestGain = $gain;
+                }
+            }
+        } finally {
+            $this->predictingAngstFollowUp = false;
+        }
+
+        return $best;
     }
 
     /** Whether a mass effect removes moods for good ('discard', 'suppress') or only sends them back to be replayed ('hand'), which is worth less. */
