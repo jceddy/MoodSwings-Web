@@ -5534,6 +5534,7 @@ final class BotPlayerServiceTest extends TestCase
             1019 => $this->row('black', 'uncommon', 2, null, 'pettiness', false, false, true),
             1020 => $this->row('green', 'rare', 3, null, 'shrewdness', false, false, true),
             1021 => $this->row('blue', 'rare', 2, null, 'optimism', false, false, true),
+            1022 => $this->row('blue', 'rare', 1, null, 'admiration', false, false, true),
         ];
         $hands = [1 => [$cardId, ...$handIds]] + $otherHands;
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -6280,5 +6281,33 @@ final class BotPlayerServiceTest extends TestCase
 
         $plays->resolvePendingDecisions($state, 1021, 1, new \MoodSwings\Rules\PlayerChoices($choices), $result->invocationChoices, $result->invocationSeq, ['delegate_choices' => new \MoodSwings\Rules\PlayerChoices($answer)], $result->duplicityEligibleSources);
         self::assertFalse($state->isInPlay(56), 'the repeated Courage discarded the opponent\'s Betrayal');
+    }
+
+    public function testAdmirationReplaysTheDiscardPileMoodWhoseEffectWillDoTheMost(): void
+    {
+        // Courage in the pile would discard the opponent's Betrayal (6); Apathy has no after-playing effect.
+        $state = $this->removalState(1022, [2 => [56]], [55, 7]);
+        self::assertSame(['target_discard_card_id' => 7], $this->bot->buildChoicesForCard($state, 1022, 1));
+
+        // Nothing worth replaying: only Apathy in the pile, or Courage with nothing to hit.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1022, [2 => [56]], [55]), 1022, 1));
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1022, [2 => [55]], [7]), 1022, 1));
+    }
+
+    public function testTheBotAnswersAdmirationsReplayedEffectAsTheAdmirationItself(): void
+    {
+        $state = $this->removalState(1022, [2 => [56]], [7]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1022, 1);
+        $plays = new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build());
+        $result = $plays->playMood($state, 1, 1022, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        $request = $result->pendingDecisions[0];
+        $answer = $this->bot->chooseDecisionAnswer($state, $request->field, 1, $request->decisionType, 1022, [], $result->invocationChoices->toArray());
+        self::assertSame(['delegate_choices' => ['target_mood_ids' => [56]]], $answer);
+
+        $plays->resolvePendingDecisions($state, 1022, 1, new \MoodSwings\Rules\PlayerChoices($choices), $result->invocationChoices, $result->invocationSeq, ['delegate_choices' => new \MoodSwings\Rules\PlayerChoices($answer)], $result->duplicityEligibleSources);
+        self::assertFalse($state->isInPlay(56));
+        self::assertContains(7, $state->discardPile(), 'the replayed mood stays in the pile');
     }
 }
