@@ -6048,4 +6048,36 @@ final class BotPlayerServiceTest extends TestCase
             self::assertFalse($state->isInPlay($gone));
         }
     }
+
+    public function testWorryReturnsACheapMoodToHandToSendSmallOpposingMoodsHome(): void
+    {
+        // Charity (white, 1) goes back to hand with Dignity (3) and Kindness (2): the lead rises by 2, the bounce threshold.
+        $state = $this->removalState(52, [1 => [3], 2 => [8], 3 => [17]]);
+        $choices = $this->bot->buildChoicesForCard($state, 52, 1);
+        self::assertSame(3, $choices['hand_mood_id']);
+        self::assertEqualsCanonicalizing([8, 17], $choices['target_mood_ids']);
+    }
+
+    public function testWorryStaysBareWithoutAWhiteOrBlackMoodOrASufficientGain(): void
+    {
+        // No white or black mood of its own to return.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(52, [1 => [30], 2 => [8]]), 52, 1));
+        // Apathy (black, 4) coming home costs more than the lone Dignity (3) leaving the opponent.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(52, [1 => [55], 2 => [8]]), 52, 1));
+        // The opponent's mood is above 3.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(52, [1 => [3], 2 => [56]]), 52, 1));
+    }
+
+    public function testWorryResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(52, [1 => [3], 2 => [8], 3 => [17]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 52, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 52, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertContains(3, $state->hand(1));
+        self::assertContains(8, $state->hand(2));
+        self::assertContains(17, $state->hand(3));
+    }
 }

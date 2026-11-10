@@ -9287,10 +9287,12 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
-- **Bots use Hostility.** Both parts of "put one of your black or green moods into the discard pile; if you do, put up to two moods valued 3 or less into the
-  discard pile" were left blank. `BotPlayerService::hostilityChoices()` takes each sparable black/green mood of its own, works out the two best opponent moods
-  worth 3 or less once that mood has gone (a snowballing Validation/Hope/Grace first, then by value), and runs the card's own rule code on a copy of the
-  board. It uses the sacrifice with the biggest `roundLead()` gain, if that is at least 1, and only ever removes opponents' moods.
+- **Bots use Hostility and Worry.** Both parts of Hostility ("put one of your black or green moods into the discard pile; if you do, put up to two moods
+  valued 3 or less into the discard pile") and Worry (the same with a white or black mood returned to hand, and the two moods sent back to their players'
+  hands) were left blank. `BotPlayerService::sacrificeAndSweepChoices()` takes each sparable mood of its own of the right colors, works out the two best
+  opponent moods worth 3 or less once that mood has gone (a snowballing Validation/Hope/Grace first, then by value), and runs the card's own rule code on a
+  copy of the board. It uses the sacrifice with the biggest `roundLead()` gain -- at least 1 for Hostility, at least 2 for Worry (a returned mood can be
+  played again) -- and only ever removes opponents' moods.
 - **Bots use Vindictiveness.** "Put one of your other moods into the discard pile; if you do, put a mood with a lower value than that mood's into the discard
   pile" can never gain points (the target is worth less than the sacrifice), so what it buys is removing a mood worth more than its printed value.
   `BotPlayerService::vindictivenessChoices()` tries every pair of one of its own moods and one opponent mood on a copy of the board with the card's own rule
