@@ -3811,6 +3811,77 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $this->bot->buildChoicesForCard($state, 205, 1));
     }
 
+    // Reminiscence / Remorse / Reverie: put the best discard-pile card on the bottom of the deck and draw -- a free card.
+    private function lootState(array $handIds, array $pileIds, array $botMoodIds = [], array $deck = [3]): BoardState
+    {
+        $catalog = $this->sampleCatalog() + [
+            188 => $this->row('blue', 'common', 3, null, 'reminiscence', false, false, true),
+            212 => $this->row('black', 'common', 0, null, 'remorse', false, false, true),
+            190 => $this->row('blue', 'mythic', 2, null, 'reverie', false, true, true),
+            258 => $this->row('green', 'common', 3, null, 'warmth', false, false, true),
+            1000 => $this->row('colorless', 'common', 0, null, 'possessiveness', false, true, false),
+        ];
+        $state = new BoardState($catalog, DefaultEffectRegistry::build(), [1, 2, 3], [1 => [...$handIds, ...$botMoodIds]], $deck, $pileIds);
+        foreach ($botMoodIds as $id) {
+            $state->moveHandToInPlay(1, $id);
+        }
+
+        return $state;
+    }
+
+    public function testReminiscenceAndRemorseAlwaysPutTheBestPileCardOnTheDeckBottom(): void
+    {
+        foreach ([188, 212] as $cardId) {
+            $state = $this->lootState([$cardId], [7, 55]); // Courage (1), Apathy (4): the best leaves the pile
+
+            self::assertSame(['discard_card_id' => 55], $this->bot->buildChoicesForCard($state, $cardId, 1));
+        }
+    }
+
+    public function testTheLootStaysBareWithAnEmptyPileOrAMoodThatDependsOnThePileSize(): void
+    {
+        self::assertSame([], $this->bot->buildChoicesForCard($this->lootState([188], []), 188, 1));
+        // Sadness (74) and Possessiveness both care how many cards are in the pile.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->lootState([188], [55, 7], [74]), 188, 1));
+        self::assertSame([], $this->bot->buildChoicesForCard($this->lootState([188], [55, 7], [1000]), 188, 1));
+    }
+
+    public function testPlayingReminiscenceWithTheLootKeepsTheHandAsBigAsItWas(): void
+    {
+        $state = $this->lootState([188], [55, 7]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 188, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 188, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertCount(1, $state->hand(1), 'Reminiscence is played (-1) and the loot draws a card (+1)');
+        self::assertNotContains(55, $state->discardPile());
+    }
+
+    // Reverie's reaction: while it is in play, every other mood the bot plays also loots -- never the card the played mood already takes.
+    public function testReveriesReactionLootsOnEveryOtherPlayAndSkipsACardTheSamePlayTakes(): void
+    {
+        $state = $this->lootState([7, 188], [55, 5], botMoodIds: [190]); // Courage (1) to play; Reverie in play; pile: Apathy (4), Complacency (4)
+
+        self::assertSame(55, $this->bot->buildChoicesForCard($state, 7, 1)['reverie_discard_card_id']);
+
+        // Playing Reminiscence itself takes Apathy for its own loot, so the reaction takes the next best.
+        $both = $this->bot->buildChoicesForCard($state, 188, 1);
+        self::assertSame(55, $both['discard_card_id']);
+        self::assertSame(5, $both['reverie_discard_card_id']);
+    }
+
+    // Warmth: a free card from the pile, but only with two or more red and/or white moods in play.
+    public function testWarmthTakesTheBestPileCardOnlyWithTwoRedOrWhiteMoods(): void
+    {
+        // Warmth is green. Charity (3) and Courage (7) are white: two of them in play enables it.
+        $enabled = $this->lootState([258], [55, 5], botMoodIds: [3, 7]);
+        self::assertSame(['discard_card_id' => 55], $this->bot->buildChoicesForCard($enabled, 258, 1));
+
+        $notEnough = $this->lootState([258], [55, 5], botMoodIds: [3]);
+        self::assertSame([], $this->bot->buildChoicesForCard($notEnough, 258, 1));
+    }
+
     public function testHauntingDiscardsTheHandCardsThatWouldBeGoodPlays(): void
     {
         $catalog = $this->sampleCatalog() + [

@@ -342,8 +342,10 @@ final class BotPlayerService
      * discard pile's own SIZE -- Sadness (SadnessEffect: +2 per card in
      * the discard pile, unconditional, any color) and Wonder
      * (WonderEffect: +2 per in-play mood AND per discard-pile card
-     * matching whichever color was chosen after playing it). Used only
-     * by nostalgiaDiscardCardId() below (confirmed by the maintainer) --
+     * matching whichever color was chosen after playing it) -- and Possessiveness
+     * (worth 6 once the pile holds three cards, so taking cards out of it can switch
+     * that off). Used by the discard-pile pick-ups (nostalgiaDiscardCardId(),
+     * longingChoices(), discardPileLootCardId(), warmthChoices()) (confirmed by the maintainer) --
      * a bot with one of these already in play depends on the discard
      * pile staying full, so Nostalgia's own discard pickup would shrink
      * it right back down and undo part of its own investment; every
@@ -359,7 +361,7 @@ final class BotPlayerService
      *
      * @var string[]
      */
-    private const DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS = ['sadness', 'wonder'];
+    private const DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS = ['sadness', 'wonder', 'possessiveness'];
 
     /**
      * Every effect key whose whole printed ability is a play-grant
@@ -1491,6 +1493,72 @@ final class BotPlayerService
     }
 
     /**
+     * Reminiscence / Remorse / Reverie ("you may put a card from the discard pile on the bottom of the deck; if you do, draw a card"), and Reverie's
+     * "each time you play another mood, you may do this": a free card -- one comes out of the pile, one is drawn -- so the bot always does it when it can.
+     * The card it puts away is the best in the pile (draftPriorityRank()): it is gone for good, which keeps an opponent's Nostalgia/Longing/Warmth from
+     * recovering it. It holds back when the pile is empty, and when a mood in play depends on the pile's size (DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS, the
+     * same rule the other pick-ups follow). $takenIds are cards the same play already names elsewhere (a Reverie reaction mustn't pick the card the played
+     * Reminiscence is taking); the played card itself is never a candidate (it may be coming out of the pile).
+     *
+     * @param int[] $takenIds
+     */
+    private function discardPileLootCardId(BoardState $state, int $playedCardId, int $botGamePlayerId, array $takenIds): ?int
+    {
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            if (in_array($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'], self::DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS, true)) {
+                return null;
+            }
+        }
+
+        $best = null;
+        foreach ($state->discardPile() as $pileCardId) {
+            if ($pileCardId === $playedCardId || in_array($pileCardId, $takenIds, true)) {
+                continue;
+            }
+            if ($best === null || $this->draftPriorityRank($state, $pileCardId) > $this->draftPriorityRank($state, $best)) {
+                $best = $pileCardId;
+            }
+        }
+
+        return $best;
+    }
+
+    /** Every int found anywhere in a choices array (a card id named by one choice, so another choice must not reuse it). @return int[] */
+    private function idsIn(array $choices): array
+    {
+        $ids = [];
+        array_walk_recursive($choices, static function ($value) use (&$ids): void {
+            if (is_int($value)) {
+                $ids[] = $value;
+            }
+        });
+
+        return $ids;
+    }
+
+    /**
+     * Warmth ("if there are two or more red and/or white moods, you may put a card from the discard pile into your hand"): a free card whenever the
+     * condition holds, judged on a copy of the board with Warmth in play (it counts in its own right if Imagination recolors it). The bot takes the best
+     * card in the pile (draftPriorityRank()), unless a mood in play depends on the pile's size (as Reminiscence's loot does).
+     *
+     * @return array{discard_card_id?: int}
+     */
+    private function warmthChoices(BoardState $state, int $warmthCardId, int $botGamePlayerId): array
+    {
+        $simulated = clone $state;
+        if ($simulated->isInHand($botGamePlayerId, $warmthCardId)) {
+            $simulated->moveHandToInPlay($botGamePlayerId, $warmthCardId);
+        }
+        if (\MoodSwings\Rules\Effects\Custom\CustomEffectSupport::countMoodsOfColors($simulated, ['red', 'white']) < 2) {
+            return [];
+        }
+
+        $pickedCardId = $this->discardPileLootCardId($state, $warmthCardId, $botGamePlayerId, []);
+
+        return $pickedCardId !== null ? ['discard_card_id' => $pickedCardId] : [];
+    }
+
+    /**
      * Longing ("you may discard a card from your hand; if you do, put up to two cards from the discard pile into your hand"): the optional
      * discard-and-pick-up was never filled, so a bot played Longing as a bare mood. It nets a card -- one goes out, up to two come back, and the
      * discarded card is itself in the pile, so the bot is never worse off in cards -- and, as seen in a real game, the extra card matters for hand-size
@@ -2440,6 +2508,13 @@ final class BotPlayerService
             $choices['scorn_suppress_target'] = $scornTargetMoodId;
         }
 
+        if ($state->playerHasMoodInPlay($botGamePlayerId, 'reverie')) {
+            $reverieCardId = $this->discardPileLootCardId($state, $cardId, $botGamePlayerId, $this->idsIn($choices));
+            if ($reverieCardId !== null) {
+                $choices['reverie_discard_card_id'] = $reverieCardId;
+            }
+        }
+
         $chaosEffectKey = $state->chaosEffectKeyFor($cardId);
         if ($chaosEffectKey !== null) {
             $chaosChoices = $this->resolveSchemaFields(ChaosCardChoiceSchema::forEffectKey($chaosEffectKey), $state, $cardId, $botGamePlayerId, $chaosEffectKey);
@@ -2471,7 +2546,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth',
     ];
 
     /**
@@ -2707,6 +2782,16 @@ final class BotPlayerService
 
         if ($effectKey === 'longing') {
             return $this->longingChoices($state, $cardId, $botGamePlayerId);
+        }
+
+        if ($effectKey === 'reminiscence' || $effectKey === 'remorse' || $effectKey === 'reverie') {
+            $lootCardId = $this->discardPileLootCardId($state, $cardId, $botGamePlayerId, []);
+
+            return $lootCardId !== null ? ['discard_card_id' => $lootCardId] : [];
+        }
+
+        if ($effectKey === 'warmth') {
+            return $this->warmthChoices($state, $cardId, $botGamePlayerId);
         }
 
         if ($effectKey === 'impartiality') {

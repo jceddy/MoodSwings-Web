@@ -9287,6 +9287,11 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use the discard-pile loot cards.** Reminiscence, Remorse, Reverie (and Reverie's while-in-play reaction) and Warmth all hand the player a free card
+  from the discard pile through an optional field the bot never filled. `BotPlayerService::discardPileLootCardId()` now names the best pile card
+  (`draftPriorityRank()`, excluding the card being played and anything the same play already took), which also denies it to opponents; it stays blank when
+  the pile is empty or the bot owns a mood that depends on the pile's size (Sadness, Wonder, Possessiveness). Warmth is only used when, with Warmth in play,
+  the bot would have two red or white moods. Brooding and Rapport's second loot are not covered.
 - **Bots use Longing's discard-and-pick-up.** Both fields are optional, so the bot always played Longing as a bare mood -- which in a real game (export of
   game 572) made it pass twice rather than play any card, because every play shrank its hand and switched off Composure's 6 ("more cards in your hand
   than each other player"). `BotPlayerService::longingChoices()` now discards the card it would least miss (lowest `draftPriorityRank()`) and takes back the
