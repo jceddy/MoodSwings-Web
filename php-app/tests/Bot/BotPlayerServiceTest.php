@@ -3696,6 +3696,69 @@ final class BotPlayerServiceTest extends TestCase
         self::assertArrayNotHasKey('scorn_suppress_target', $this->bot->buildChoicesForCard($state, 7, 1));
     }
 
+    // Impartiality: suppression hits every other mood of the chosen parity, the bot's own included -- so the bot picks the parity that leaves
+    // it furthest ahead, not always odd.
+    private function impartialityState(array $botMoodIds, array $opponentMoodIds): BoardState
+    {
+        $catalog = $this->sampleCatalog() + [158 => $this->row('white', 'uncommon', 2, null, 'impartiality', false, false, true)];
+        $state = new BoardState($catalog, DefaultEffectRegistry::build(), [1, 2, 3], [1 => [158, ...$botMoodIds], 2 => $opponentMoodIds]);
+        foreach ($botMoodIds as $id) {
+            $state->moveHandToInPlay(1, $id);
+        }
+        foreach ($opponentMoodIds as $id) {
+            $state->moveHandToInPlay(2, $id);
+        }
+
+        return $state;
+    }
+
+    public function testImpartialityPicksEvenWhenThatSuppressesTheOpponentAndSparesTheBot(): void
+    {
+        // Bot: Charity 1 (odd), Courage 1 (odd). Opponent: Apathy 4 + Complacency 4 (even). Odd would only hurt the bot.
+        $state = $this->impartialityState([3, 7], [55, 5]);
+
+        self::assertSame(['parity' => 'even'], $this->bot->buildChoicesForCard($state, 158, 1));
+    }
+
+    public function testImpartialityPicksOddWhenThatSuppressesTheOpponentAndSparesTheBot(): void
+    {
+        // Bot: Apathy 4, Complacency 4 (even, spared by odd). Opponent: Charity 1, Dignity 3, Courage 1 (odd, suppressed by odd).
+        $state = $this->impartialityState([55, 5], [3, 8, 7]);
+
+        self::assertSame(['parity' => 'odd'], $this->bot->buildChoicesForCard($state, 158, 1));
+    }
+
+    // Discernment: the parity with the most replaceable cards in hand, all of which it reveals; Discernment itself never counts.
+    private function discernmentState(array $handIds): BoardState
+    {
+        $catalog = $this->sampleCatalog() + [151 => $this->row('white', 'uncommon', 2, null, 'discernment', false, false, true)];
+
+        return new BoardState($catalog, DefaultEffectRegistry::build(), [1, 2, 3], [1 => [151, ...$handIds]]);
+    }
+
+    public function testDiscernmentRevealsTheReplaceableCardsOfTheParityItHasMoreOf(): void
+    {
+        // Charity 1, Courage 1 (odd, replaceable); Complacency 4 (even, too valuable to cycle); Dignity 3 (odd, but above the cutoff).
+        $state = $this->discernmentState([3, 7, 5, 8]);
+
+        self::assertSame(['parity' => 'odd', 'reveal_card_ids' => [3, 7]], $this->bot->buildChoicesForCard($state, 151, 1));
+    }
+
+    public function testDiscernmentPicksEvenWhenMoreReplaceableCardsAreEven(): void
+    {
+        // Fear (38) and Disorientation (35) are both printed 0 (even) and replaceable; Charity (3) is the lone odd one.
+        $state = $this->discernmentState([38, 35, 3]);
+
+        self::assertSame(['parity' => 'even', 'reveal_card_ids' => [38, 35]], $this->bot->buildChoicesForCard($state, 151, 1));
+    }
+
+    public function testDiscernmentRevealsNothingWhenNoCardIsReplaceable(): void
+    {
+        $state = $this->discernmentState([55, 5]); // Apathy 4, Complacency 4
+
+        self::assertSame(['parity' => 'odd'], $this->bot->buildChoicesForCard($state, 151, 1));
+    }
+
     public function testHauntingDiscardsTheHandCardsThatWouldBeGoodPlays(): void
     {
         $catalog = $this->sampleCatalog() + [
