@@ -888,7 +888,7 @@ final class BotPlayerService
 
         // "At the start of each of your turns" moods (TurnStartEffect) whose optional choice is free or
         // plainly worth taking -- the generic resolver below never fills an optional field. Anything not
-        // listed (Brooding, Martyrdom, Rumination, Wastefulness) is left declined, the conservative default.
+        // listed (Martyrdom, Rumination, Wastefulness) is left declined, the conservative default.
         if ($decisionType === 'turn_start_trigger' && $sourceCardId !== null && $state->isInPlay($sourceCardId)) {
             $effectKey = $state->catalogRow($state->effectiveCardId($sourceCardId))['effectKey'];
             if ($effectKey === 'covetousness' && isset($field['candidate_card_ids'])) {
@@ -901,6 +901,16 @@ final class BotPlayerService
                 }
 
                 return $best === null ? [] : [$field['key'] => $best];
+            }
+            if ($effectKey === 'brooding' && $field['key'] === 'take_card_id') {
+                $takeCardId = $this->broodingTakeCardId($state, $botGamePlayerId);
+
+                return $takeCardId === null ? [] : [$field['key'] => $takeCardId];
+            }
+            if ($effectKey === 'brooding' && $field['key'] === 'discard_hand_card_id') {
+                $discardCardId = $this->broodingDiscardCardId($state, $botGamePlayerId);
+
+                return $discardCardId === null ? [] : [$field['key'] => $discardCardId];
             }
             if ($effectKey === 'vitality' && $field['key'] === 'color') {
                 // The color the bot has the most moods of (each gets +2).
@@ -1748,6 +1758,48 @@ final class BotPlayerService
         }
 
         return $best !== null ? ['target_mood_id' => $best] : [];
+    }
+
+    /**
+     * The hand card Brooding's discard gives up: the one the bot would miss least (the lowest draftPriorityRank()), never one of the lasting-value cards in
+     * PROTECTED_EFFECT_KEYS (Validation, Duplicity, Exhilaration, Hope, Grace), which are worth keeping whatever their printed value. Null with no such card.
+     */
+    private function broodingDiscardCardId(BoardState $state, int $botGamePlayerId): ?int
+    {
+        $worst = null;
+        foreach ($state->hand($botGamePlayerId) as $handCardId) {
+            if (in_array($state->catalogRow($state->effectiveCardId($handCardId))['effectKey'], self::PROTECTED_EFFECT_KEYS, true)) {
+                continue;
+            }
+            if ($worst === null || $this->draftPriorityRank($state, $handCardId) < $this->draftPriorityRank($state, $worst)) {
+                $worst = $handCardId;
+            }
+        }
+
+        return $worst;
+    }
+
+    /**
+     * Brooding ("at the start of each of your turns, you may put a card from the discard pile into your hand; if you do, discard a card from your hand"):
+     * the optional pick-up was always declined. It is a loot -- one card in, one out -- so the bot takes the best card in the pile when it is strictly better
+     * than the card it would then discard (broodingDiscardCardId()), improving the hand a little every turn. It holds back when the discard would feed an
+     * opponent (discardingFromHandHelpsAnOpponent()), and with an empty pile or nothing it could discard.
+     */
+    private function broodingTakeCardId(BoardState $state, int $botGamePlayerId): ?int
+    {
+        $worstHandCardId = $this->broodingDiscardCardId($state, $botGamePlayerId);
+        if ($worstHandCardId === null || $this->discardingFromHandHelpsAnOpponent($state, $botGamePlayerId)) {
+            return null;
+        }
+
+        $best = null;
+        foreach ($state->discardPile() as $pileCardId) {
+            if ($best === null || $this->draftPriorityRank($state, $pileCardId) > $this->draftPriorityRank($state, $best)) {
+                $best = $pileCardId;
+            }
+        }
+
+        return $best !== null && $this->draftPriorityRank($state, $best) > $this->draftPriorityRank($state, $worstHandCardId) ? $best : null;
     }
 
     /** Doubt bans the colors it reveals for everyone: the bot reveals cards from at most this many colors, so its random draws and its own hand stay mostly playable. */

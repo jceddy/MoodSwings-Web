@@ -5539,6 +5539,7 @@ final class BotPlayerServiceTest extends TestCase
             1024 => $this->row('blue', 'uncommon', 1, null, 'doubt', false, false, true),
             1025 => $this->row('blue', 'uncommon', 2, null, 'yearning', false, false, true),
             1026 => $this->row('white', 'uncommon', 3, null, 'encouragement', false, true, true),
+            1027 => $this->row('black', 'uncommon', 0, null, 'brooding', false, true, false),
         ];
         $hands = [1 => [$cardId, ...$handIds]] + $otherHands;
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -6444,5 +6445,53 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame(6, $state->valueOf(33));
         self::assertLessThan(6, $before);
+    }
+
+    /** A state at the start of the bot's turn with Brooding already in play, a hand and a discard pile. */
+    private function broodingState(array $handIds, array $pileIds, array $opponentMoods = []): BoardState
+    {
+        $state = $this->removalState(1027, $opponentMoods, $pileIds, $handIds);
+        $state->moveHandToInPlay(1, 1027);
+
+        return $state;
+    }
+
+    public function testBroodingTakesTheBestPileCardOnlyWhenItBeatsTheCardItWouldDiscard(): void
+    {
+        $field = ['key' => 'take_card_id', 'type' => 'discard_card', 'required' => false];
+
+        // Intimidation (tier 40) beats Apathy (tier 1).
+        self::assertSame(['take_card_id' => 67], $this->bot->chooseDecisionAnswer($this->broodingState([55], [67, 7]), $field, 1, 'turn_start_trigger', 1027));
+        // Nothing in the pile beats the worst hand card.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->broodingState([55], [7]), $field, 1, 'turn_start_trigger', 1027));
+        // An empty hand has nothing to discard afterwards.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->broodingState([], [67]), $field, 1, 'turn_start_trigger', 1027));
+        // An opponent's Opportunism would take the discarded card.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->broodingState([55], [67], [2 => [1017]]), $field, 1, 'turn_start_trigger', 1027));
+    }
+
+    public function testBroodingsDiscardGivesUpTheWorstCardButKeepsProtectedOnes(): void
+    {
+        $field = ['key' => 'discard_hand_card_id', 'type' => 'hand_card', 'required' => true];
+
+        self::assertSame(['discard_hand_card_id' => 55], $this->bot->chooseDecisionAnswer($this->broodingState([67, 55], []), $field, 1, 'turn_start_trigger', 1027));
+        // Validation (26) is worth keeping whatever it is printed at, so Apathy goes even though Validation ranks lower.
+        self::assertSame(['discard_hand_card_id' => 55], $this->bot->chooseDecisionAnswer($this->broodingState([26, 55], []), $field, 1, 'turn_start_trigger', 1027));
+    }
+
+    public function testBroodingsTwoStepsResolveInTheRealGame(): void
+    {
+        $state = $this->broodingState([55], [67]);
+        $brooding = DefaultEffectRegistry::build()->for('brooding');
+        $take = ['key' => 'take_card_id', 'type' => 'discard_card', 'required' => false];
+        $takeAnswer = $this->bot->chooseDecisionAnswer($state, $take, 1, 'turn_start_trigger', 1027);
+
+        $followUps = $brooding->applyTurnStart($state, 1027, 1, ['take_card_id' => new \MoodSwings\Rules\PlayerChoices($takeAnswer)]);
+        self::assertSame('discard_hand_card_id', $followUps[0]->key);
+        $discardAnswer = $this->bot->chooseDecisionAnswer($state, $followUps[0]->field, 1, 'turn_start_trigger', 1027);
+        $brooding->applyTurnStart($state, 1027, 1, ['discard_hand_card_id' => new \MoodSwings\Rules\PlayerChoices($discardAnswer)]);
+
+        self::assertSame([67], $state->hand(1));
+        self::assertContains(55, $state->discardPile());
     }
 }

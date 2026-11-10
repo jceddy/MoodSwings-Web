@@ -9287,6 +9287,11 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Brooding's loot.** Brooding ("at the start of each of your turns, you may put a card from the discard pile into your hand; if you do, discard a
+  card from your hand") was always declined at the turn-start prompt. `BotPlayerService::broodingTakeCardId()` takes the best card in the pile when it is strictly
+  better than the card it would then discard (`broodingDiscardCardId()`: the lowest `draftPriorityRank()` in hand, never a Validation/Duplicity/Exhilaration/Hope/Grace),
+  so the hand improves a little every turn. It holds back when the discard would feed an opponent (`discardingFromHandHelpsAnOpponent()`), and with an empty pile or
+  nothing it could discard. Martyrdom, Rumination and Wastefulness are still declined.
 - **Bots use Encouragement's dice boost.** The optional "choose a mood with dice in its lower left corner; it uses the dice total or its top right number, whichever is
   higher" was never chosen. `BotPlayerService::encouragementChoices()` only considers the bot's own and a teammate's moods (an opponent's would be a gift), runs the
   card's own rule code for each one with a printed dice value on a copy of the board, and names the one that gains the most `roundLead()`, if at least 1.
