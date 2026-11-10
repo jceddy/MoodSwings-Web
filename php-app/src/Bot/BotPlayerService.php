@@ -888,7 +888,7 @@ final class BotPlayerService
 
         // "At the start of each of your turns" moods (TurnStartEffect) whose optional choice is free or
         // plainly worth taking -- the generic resolver below never fills an optional field. Anything not
-        // listed (Wastefulness) is left declined, the conservative default.
+        // listed is left declined, the conservative default.
         if ($decisionType === 'turn_start_trigger' && $sourceCardId !== null && $state->isInPlay($sourceCardId)) {
             $effectKey = $state->catalogRow($state->effectiveCardId($sourceCardId))['effectKey'];
             if ($effectKey === 'covetousness' && isset($field['candidate_card_ids'])) {
@@ -901,6 +901,9 @@ final class BotPlayerService
                 }
 
                 return $best === null ? [] : [$field['key'] => $best];
+            }
+            if ($effectKey === 'wastefulness' && $field['key'] === 'discard_top_card') {
+                return $this->wastefulnessMillsTheDeck($state, $botGamePlayerId) ? [$field['key'] => true] : [];
             }
             if ($effectKey === 'rumination' && $field['key'] === 'target_mood_id') {
                 $moodId = $this->ruminationMoodId($state, $botGamePlayerId, $roundWinsNeededToWinGameByPlayerId);
@@ -1768,6 +1771,47 @@ final class BotPlayerService
         }
 
         return $best !== null ? ['target_mood_id' => $best] : [];
+    }
+
+    /** Wastefulness only mills while the deck still has at least this many cards, so it never runs the deck dry. */
+    private const WASTEFULNESS_MIN_DECK_SIZE = 3;
+
+    /** How much a mood that grows with the discard pile gains, roughly, from one more card in it: Sadness's +2 a card, Wonder's chance of one, Possessiveness's jump. */
+    private const PILE_GROWTH_BENEFIT = ['sadness' => 2, 'wonder' => 1, 'possessiveness' => 3];
+
+    /** Possessiveness needs this many cards in the pile; once the pile has them, another card adds nothing for it. */
+    private const POSSESSIVENESS_PILE_THRESHOLD = 5;
+
+    /**
+     * Wastefulness ("at the start of each of your turns, you may put the top card of the deck into the discard pile"): always declined before. A fuller pile
+     * is worth something only to a mood that grows with it (PILE_GROWTH_BENEFIT: Sadness, Wonder, Possessiveness, whose bonus stops at
+     * POSSESSIVENESS_PILE_THRESHOLD cards), and it helps whoever owns one -- so the bot mills when its own side's moods of that kind would gain more than the
+     * opponents' would, counted without looking at the card on top (it isn't known to the bot). It never mills a deck of fewer than
+     * WASTEFULNESS_MIN_DECK_SIZE cards.
+     */
+    private function wastefulnessMillsTheDeck(BoardState $state, int $botGamePlayerId): bool
+    {
+        if (count($state->deck($botGamePlayerId)) < self::WASTEFULNESS_MIN_DECK_SIZE) {
+            return false;
+        }
+
+        $pileSize = count($state->discardPile());
+        $ours = 0;
+        $theirs = 0;
+        foreach ($state->moodsInPlay() as $mood) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            $benefit = self::PILE_GROWTH_BENEFIT[$effectKey] ?? 0;
+            if ($effectKey === 'possessiveness' && $pileSize >= self::POSSESSIVENESS_PILE_THRESHOLD) {
+                $benefit = 0;
+            }
+            if ($mood->ownerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $mood->ownerId)) {
+                $ours += $benefit;
+            } else {
+                $theirs += $benefit;
+            }
+        }
+
+        return $ours > $theirs;
     }
 
     /**

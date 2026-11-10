@@ -9287,6 +9287,10 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Wastefulness's mill.** Wastefulness ("at the start of each of your turns, you may put the top card of the deck into the discard pile") was always declined at the
+  turn-start prompt, which was the last of the turn-start moods the bots ignored. A fuller pile only helps a mood that grows with it, so
+  `BotPlayerService::wastefulnessMillsTheDeck()` mills when its own side's such moods (Sadness, Wonder, Possessiveness -- whose bonus stops at five cards) would gain
+  more than the opponents' would, counted without looking at the card on top, and never from a deck of fewer than three cards.
 - **Bots use Rumination to replay a mood.** Rumination ("at the start of each of your turns, you may put one of your moods into your hand") was always declined at the
   turn-start prompt. Bouncing a mood is how the bot replays one whose after-playing effect is worth having again, using the turn's own play on it -- the idea behind
   Fear's replay. `BotPlayerService::ruminationMoodId()` plays the turn out on a copy of the board for each of its moods (returned to hand, the bot's own

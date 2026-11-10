@@ -5542,6 +5542,8 @@ final class BotPlayerServiceTest extends TestCase
             1027 => $this->row('black', 'uncommon', 0, null, 'brooding', false, true, false),
             1028 => $this->row('black', 'rare', 1, null, 'martyrdom', false, true, false),
             1029 => $this->row('blue', 'rare', 1, null, 'rumination', false, true, false),
+            1030 => $this->row('green', 'rare', 0, null, 'wastefulness', false, true, false),
+            1031 => $this->row('black', 'mythic', 0, null, 'sadness', false, true, false),
         ];
         $hands = [1 => [$cardId, ...$handIds]] + $otherHands;
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -6568,5 +6570,42 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertContains(7, $state->hand(1));
         self::assertFalse($state->isInPlay(7));
+    }
+
+    /** The bot's turn with Wastefulness in play, own moods, and the opponent's moods. */
+    private function wastefulnessState(array $ownMoods, array $opponentMoods, array $deck = [3, 5, 7]): BoardState
+    {
+        $state = $this->removalState(1030, [1 => $ownMoods, 2 => $opponentMoods], [], [], $deck);
+        $state->moveHandToInPlay(1, 1030);
+
+        return $state;
+    }
+
+    public function testWastefulnessMillsOnlyWhenItHelpsTheBotsPileMoodsMoreThanTheOpponents(): void
+    {
+        $field = ['key' => 'discard_top_card', 'type' => 'bool', 'required' => false];
+
+        // Sadness (+2 a card in the pile) is the bot's.
+        self::assertSame(['discard_top_card' => true], $this->bot->chooseDecisionAnswer($this->wastefulnessState([74], [55]), $field, 1, 'turn_start_trigger', 1030));
+        // Both sides have one: no edge.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->wastefulnessState([74], [1031]), $field, 1, 'turn_start_trigger', 1030));
+        // Only the opponent has one.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->wastefulnessState([55], [1031]), $field, 1, 'turn_start_trigger', 1030));
+        // Nothing grows with the pile.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->wastefulnessState([55], [56]), $field, 1, 'turn_start_trigger', 1030));
+        // A nearly empty deck is left alone.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->wastefulnessState([74], [55], [3, 5]), $field, 1, 'turn_start_trigger', 1030));
+    }
+
+    public function testWastefulnessMillResolvesInTheRealGame(): void
+    {
+        $state = $this->wastefulnessState([74], [55]);
+        $field = ['key' => 'discard_top_card', 'type' => 'bool', 'required' => false];
+        $answer = $this->bot->chooseDecisionAnswer($state, $field, 1, 'turn_start_trigger', 1030);
+
+        DefaultEffectRegistry::build()->for('wastefulness')->applyTurnStart($state, 1030, 1, ['discard_top_card' => new \MoodSwings\Rules\PlayerChoices($answer)]);
+
+        self::assertSame([3], $state->discardPile());
+        self::assertSame([5, 7], $state->deck(1));
     }
 }
