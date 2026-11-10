@@ -1673,6 +1673,45 @@ final class BotPlayerService
         return 1;
     }
 
+    /** Doubt bans the colors it reveals for everyone: the bot reveals cards from at most this many colors, so its random draws and its own hand stay mostly playable. */
+    private const DOUBT_MAX_BANNED_COLORS = 2;
+
+    /**
+     * Doubt ("you may reveal any number of cards from your hand and put them on the bottom of the deck, then draw that many; during the next round, players
+     * can't play moods that share a color with any of the revealed cards"): the optional reveal was never made. It is Zeal's cycle for several cards at
+     * once, with the cost that every revealed color is banned for everyone next round -- the bot's own hand included. So the bot reveals only its weak
+     * cards (draft tier ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD or lower, the same bar Zeal and Rapport use), never one whose color a card it is keeping shares
+     * (that would ban a card it means to play), and only cards from the DOUBT_MAX_BANNED_COLORS colors it has the most weak cards in (then the weakest
+     * ones). With nothing weak to cycle it leaves Doubt bare.
+     *
+     * @return array{reveal_card_ids?: int[]}
+     */
+    private function doubtChoices(BoardState $state, int $doubtCardId, int $botGamePlayerId): array
+    {
+        $weakByColor = [];
+        $keptColors = [];
+        foreach ($state->hand($botGamePlayerId) as $handCardId) {
+            if ($handCardId === $doubtCardId) {
+                continue;
+            }
+            $color = $state->colorOf($handCardId);
+            if ($state->catalogRow($state->effectiveCardId($handCardId))['draftPriorityScore'] <= self::ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD) {
+                $weakByColor[$color][] = $handCardId;
+            } else {
+                $keptColors[$color] = true;
+            }
+        }
+        $weakByColor = array_diff_key($weakByColor, $keptColors);
+        if ($weakByColor === []) {
+            return [];
+        }
+
+        $rankOf = fn (array $cardIds): int => array_sum(array_map(fn (int $id): int => $this->draftPriorityRank($state, $id), $cardIds));
+        uasort($weakByColor, fn (array $a, array $b): int => [count($b), $rankOf($a)] <=> [count($a), $rankOf($b)]);
+
+        return ['reveal_card_ids' => array_merge(...array_values(array_slice($weakByColor, 0, self::DOUBT_MAX_BANNED_COLORS)))];
+    }
+
     /** Effects whose repeat is worth having for the hand they take from or empty out, which the round lead can't show (Compulsion, Intimidation, Suspicion, Paranoia). */
     private const HAND_PRESSURE_EFFECT_KEYS = ['compulsion', 'intimidation', 'suspicion', 'paranoia'];
 
@@ -3203,7 +3242,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness', 'instability', 'shrewdness', 'arrogance', 'corruption', 'optimism', 'admiration',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness', 'instability', 'shrewdness', 'arrogance', 'corruption', 'optimism', 'admiration', 'doubt',
     ];
 
     /**
@@ -3331,6 +3370,10 @@ final class BotPlayerService
             $pair = $this->instabilityCandidateMoodIds($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGameByPlayerId);
 
             return $pair !== [] ? ['candidate_mood_ids' => $pair] : [];
+        }
+
+        if ($effectKey === 'doubt') {
+            return $this->doubtChoices($state, $cardId, $botGamePlayerId);
         }
 
         if ($effectKey === 'admiration') {

@@ -9287,6 +9287,10 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Doubt's reveal.** Doubt ("reveal any number of cards from your hand, put them on the bottom of the deck and draw that many; next round nobody can play
+  a mood sharing a color with a revealed card") is Zeal's cycle for several cards at once, with the cost that every revealed color is banned for everyone -- the
+  bot's own hand included. `BotPlayerService::doubtChoices()` reveals only weak cards (draft tier 2 or lower, the bar Zeal and Rapport use), never one whose color a
+  card it is keeping shares, and only from the two colors it has the most weak cards in (then the weakest). With nothing weak to cycle it leaves Doubt bare.
 - **Bots use Rapport's loots.** Rapport ("put a card from your hand on the bottom of the deck, then draw a card; with two or more white and/or black moods, do it
   a second time") is Zeal's cycle, so its first loot now follows Zeal's policy (`shouldAttemptZealCycle()`): the bot cycles its worst card (by draft priority) when
   that card is weak enough -- draft tier 2 or lower -- to be worth swapping for a random one, and leaves it when it has nothing else in hand or only strong cards.

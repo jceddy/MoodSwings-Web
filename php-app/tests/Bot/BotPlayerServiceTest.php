@@ -5536,6 +5536,7 @@ final class BotPlayerServiceTest extends TestCase
             1021 => $this->row('blue', 'rare', 2, null, 'optimism', false, false, true),
             1022 => $this->row('blue', 'rare', 1, null, 'admiration', false, false, true),
             1023 => $this->row('white', 'rare', 2, null, 'rapport', false, false, true),
+            1024 => $this->row('blue', 'uncommon', 1, null, 'doubt', false, false, true),
         ];
         $hands = [1 => [$cardId, ...$handIds]] + $otherHands;
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -6353,5 +6354,36 @@ final class BotPlayerServiceTest extends TestCase
 
         $plays->resolvePendingDecisions($state, 1023, 1, new \MoodSwings\Rules\PlayerChoices($choices), $result->invocationChoices, $result->invocationSeq, ['second_hand_card_id' => new \MoodSwings\Rules\PlayerChoices($answer)], $result->duplicityEligibleSources);
         self::assertCount(2, $state->hand(1), 'two cards put on the bottom, two drawn: the hand is the size it was');
+    }
+
+    public function testDoubtRevealsWeakCardsWhoseColorNoKeptCardShares(): void
+    {
+        // Apathy (black, weak) shares its color with the kept Intimidation, so it stays; Complacency (white, weak) goes. Compulsion (red) stays too.
+        $state = $this->removalState(1024, [2 => [56]], [], [55, 5, 86, 67]);
+        self::assertSame(['reveal_card_ids' => [5]], $this->bot->buildChoicesForCard($state, 1024, 1));
+    }
+
+    public function testDoubtBansAtMostTwoColorsAndLeavesStrongHandsAlone(): void
+    {
+        // Three weak colors, nothing kept: the two white cards (Chivalry, Dignity) and the weakest of the others (Avoidance, blue).
+        $state = $this->removalState(1024, [2 => [56]], [], [55, 4, 8, 29]);
+        $choices = $this->bot->buildChoicesForCard($state, 1024, 1);
+        self::assertEqualsCanonicalizing([4, 8, 29], $choices['reveal_card_ids']);
+
+        // Only strong cards in hand.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1024, [2 => [56]], [], [86, 67]), 1024, 1));
+    }
+
+    public function testDoubtsRevealResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1024, [2 => [56]], [], [55, 5, 86, 67], [3, 7]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1024, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1024, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertNotContains(5, $state->hand(1));
+        self::assertSame(['white'], $state->effectState(1024, 'bannedColors'));
+        self::assertCount(4, $state->hand(1), 'one card went to the bottom and one was drawn');
     }
 }
