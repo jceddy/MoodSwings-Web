@@ -9287,6 +9287,12 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use the pure-removal cards.** Courage (a mood valued 5+ into the discard pile), Spite (an even value), Anxiety (an odd value into its owner's hand)
+  and Malevolence (odd or even printed number) all pick "up to two players, one mood each" through an optional field the bot never filled. They now share
+  Shock's pick (`BotPlayerService::opponentRemovalTargetMoodIds()`): each non-teammate opponent's best qualifying mood, the two best across different
+  opponents, an opponent's Validation first unless that loses the game. Anxiety's bounce skips Validation priority and moods valued under 3, and Malevolence
+  names whichever parity removes more value. Targets are judged on a copy of the board with the played card already in play, since the effect re-checks each
+  target's value when it resolves.
 - **Bots use the discard-pile loot cards.** Reminiscence, Remorse, Reverie (and Reverie's while-in-play reaction) and Warmth all hand the player a free card
   from the discard pile through an optional field the bot never filled. `BotPlayerService::discardPileLootCardId()` now names the best pile card
   (`draftPriorityRank()`, excluding the card being played and anything the same play already took), which also denies it to opponents; it stays blank when

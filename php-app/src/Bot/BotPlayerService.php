@@ -2546,7 +2546,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence',
     ];
 
     /**
@@ -2662,6 +2662,16 @@ final class BotPlayerService
             $targetMoodIds = $this->shockTargetMoodIds($state, $botGamePlayerId, $cardId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if (in_array($effectKey, ['courage', 'spite', 'anxiety'], true)) {
+            $targetMoodIds = $this->pureRemovalTargetMoodIds($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
+
+            return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'malevolence') {
+            return $this->malevolenceChoices($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
         }
 
         if ($effectKey === 'creativity') {
@@ -4921,6 +4931,79 @@ final class BotPlayerService
     }
 
     /**
+     * A copy of the board with $cardId already in play, which is the board its after-playing effect resolves against -- a mood whose value depends on
+     * the board (a count of moods, say) can read differently once the played card has joined it. Targets for Courage/Spite/Anxiety/Malevolence are
+     * judged on this copy, since their effects re-check each target's value or parity when they resolve.
+     */
+    private function withCardInPlay(BoardState $state, int $cardId, int $botGamePlayerId): BoardState
+    {
+        $simulated = clone $state;
+        if ($simulated->isInHand($botGamePlayerId, $cardId)) {
+            $simulated->moveHandToInPlay($botGamePlayerId, $cardId);
+        }
+
+        return $simulated;
+    }
+
+    /**
+     * The lowest current value Anxiety bothers to bounce: sending a 1-value mood back just hands its owner a cheap replay (and its ability again), so
+     * only an odd mood worth at least this much is a worthwhile target.
+     */
+    private const ANXIETY_MIN_TARGET_VALUE = 3;
+
+    /**
+     * Courage ("put a mood with a value of 5 or more into the discard pile"), Spite (an even value) and Anxiety (an odd value, into its owner's hand) all
+     * choose up to two players and one qualifying mood each, but the field is optional so the bot left them bare. They now use the same pick as Shock
+     * (opponentRemovalTargetMoodIds()): each opponent's best qualifying mood, the two best across different opponents. Anxiety's bounce skips an
+     * opponent's Validation priority and anything under ANXIETY_MIN_TARGET_VALUE. The bot never targets itself or a teammate.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     * @return int[]
+     */
+    private function pureRemovalTargetMoodIds(string $effectKey, BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame, array $roundWinsNeededToWinGameByPlayerId): array
+    {
+        $state = $this->withCardInPlay($state, $cardId, $botGamePlayerId);
+        $qualifies = match ($effectKey) {
+            'courage' => fn (int $moodId): bool => $state->valueOf($moodId) >= 5,
+            'spite' => fn (int $moodId): bool => $state->valueOf($moodId) % 2 === 0,
+            default => fn (int $moodId): bool => $state->valueOf($moodId) % 2 !== 0 && $state->valueOf($moodId) >= self::ANXIETY_MIN_TARGET_VALUE,
+        };
+
+        return $this->opponentRemovalTargetMoodIds($state, $botGamePlayerId, $cardId, $qualifies, $effectKey !== 'anxiety', $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
+    }
+
+    /**
+     * Malevolence ("choose odd or even ... each chosen player puts one of their moods with that number in its top right corner into the discard pile"):
+     * the bot compares what each parity would remove -- the total current value of the opponent moods that parity's printed number lets it hit -- and
+     * names the better one (odd on a tie), with those targets. With nothing to hit under either parity it names a parity and no targets, as it did before.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     * @return array{parity: string, target_mood_ids?: int[]}
+     */
+    private function malevolenceChoices(BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame, array $roundWinsNeededToWinGameByPlayerId): array
+    {
+        $state = $this->withCardInPlay($state, $cardId, $botGamePlayerId);
+        $best = ['parity' => 'odd', 'ids' => [], 'total' => -1];
+        foreach (['odd', 'even'] as $parity) {
+            $ids = $this->opponentRemovalTargetMoodIds(
+                $state,
+                $botGamePlayerId,
+                $cardId,
+                fn (int $moodId): bool => \MoodSwings\Rules\Effects\Custom\CustomEffectSupport::hasParity($state, $moodId, $parity),
+                true,
+                $roundWinsNeededToWinGame,
+                $roundWinsNeededToWinGameByPlayerId,
+            );
+            $total = array_sum(array_map(fn (int $id): int => $state->valueOf($id), $ids));
+            if ($total > $best['total']) {
+                $best = ['parity' => $parity, 'ids' => $ids, 'total' => $total];
+            }
+        }
+
+        return $best['ids'] !== [] ? ['parity' => $best['parity'], 'target_mood_ids' => $best['ids']] : ['parity' => $best['parity']];
+    }
+
+    /**
      * Mirrors ShockEffect::MAXIMUM_VALUE (that class's own private
      * constant, so duplicated here rather than referenced directly) --
      * a mood above this value is never a legal Shock target at all, so
@@ -4953,6 +5036,30 @@ final class BotPlayerService
      */
     private function shockTargetMoodIds(BoardState $state, int $botGamePlayerId, ?int $shockCardId = null, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): array
     {
+        return $this->opponentRemovalTargetMoodIds(
+            $state,
+            $botGamePlayerId,
+            $shockCardId,
+            fn (int $moodId): bool => $state->valueOf($moodId) <= self::SHOCK_MAX_TARGET_VALUE,
+            true,
+            $roundWinsNeededToWinGame,
+            $roundWinsNeededToWinGameByPlayerId,
+        );
+    }
+
+    /**
+     * The "up to two moods, at most one per player" removal pick shared by Shock, Courage, Spite, Anxiety and Malevolence: each non-teammate
+     * opponent's own highest-value mood that satisfies $qualifies, the two best across different opponents (never the bot's own or a teammate's).
+     * With $validationFirst an opponent's Validation is taken ahead of whatever of theirs is worth more, unless that loses the game
+     * (validationRemovalLosesTheGame(), which needs $removalCardId to project the board) -- a bounce card passes false, since the Validation would
+     * simply be replayed.
+     *
+     * @param callable(int): bool $qualifies
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     * @return int[]
+     */
+    private function opponentRemovalTargetMoodIds(BoardState $state, int $botGamePlayerId, ?int $removalCardId, callable $qualifies, bool $validationFirst, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): array
+    {
         $bestMoodIdByOpponent = [];
         $validationMoodIdByOpponent = [];
         foreach ($state->activePlayerOrder() as $playerId) {
@@ -4963,13 +5070,13 @@ final class BotPlayerService
             $bestMoodId = null;
             $validationMoodId = null;
             foreach ($state->moodsOwnedBy($playerId) as $mood) {
-                if ($state->valueOf($mood->cardId) > self::SHOCK_MAX_TARGET_VALUE) {
+                if (!$qualifies($mood->cardId)) {
                     continue;
                 }
                 if ($bestMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestMoodId)) {
                     $bestMoodId = $mood->cardId;
                 }
-                if ($this->isValidationMood($state, $mood->cardId)
+                if ($validationFirst && $this->isValidationMood($state, $mood->cardId)
                     && ($validationMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($validationMoodId))
                 ) {
                     $validationMoodId = $mood->cardId;
@@ -5005,7 +5112,7 @@ final class BotPlayerService
         );
         $validationPicks = array_slice($validationFirst, 0, 2);
 
-        return $shockCardId !== null && $this->validationRemovalLosesTheGame($state, $shockCardId, $botGamePlayerId, $validationPicks, $valuePicks, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId)
+        return $removalCardId !== null && $this->validationRemovalLosesTheGame($state, $removalCardId, $botGamePlayerId, $validationPicks, $valuePicks, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId)
             ? $valuePicks
             : $validationPicks;
     }

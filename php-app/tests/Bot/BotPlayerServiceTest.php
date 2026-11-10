@@ -5495,4 +5495,74 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame([26, 76], $action['choices']['target_mood_ids']);
     }
+    /** @param array<int, int[]> $moodsByPlayer */
+    private function removalState(int $cardId, array $moodsByPlayer): BoardState
+    {
+        $catalog = $this->sampleCatalog() + [1001 => $this->row('black', 'mythic', 2, null, 'malevolence', false, false, true)];
+        $hands = [1 => [$cardId]];
+        foreach ($moodsByPlayer as $playerId => $ids) {
+            $hands[$playerId] = [...($hands[$playerId] ?? []), ...$ids];
+        }
+        $state = new BoardState($catalog, DefaultEffectRegistry::build(), [1, 2, 3], $hands);
+        foreach ($moodsByPlayer as $playerId => $ids) {
+            foreach ($ids as $id) {
+                $state->moveHandToInPlay($playerId, $id);
+            }
+        }
+
+        return $state;
+    }
+
+    public function testCourageDiscardsTheBestOpponentMoodValuedFiveOrMore(): void
+    {
+        // Bashfulness (6) qualifies; Apathy (4) does not; the bot's own Betrayal (6) is never a target.
+        $state = $this->removalState(7, [1 => [56], 2 => [30], 3 => [55]]);
+
+        self::assertSame(['target_mood_ids' => [30]], $this->bot->buildChoicesForCard($state, 7, 1));
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(7, [1 => [56], 3 => [55]]), 7, 1));
+    }
+
+    public function testSpiteDiscardsAnEvenValuedMoodFromEachOfTwoOpponents(): void
+    {
+        // Apathy (4) and Bashfulness (6) are even; Dignity (3) is not.
+        $state = $this->removalState(76, [2 => [55, 8], 3 => [30]]);
+
+        self::assertSame(['target_mood_ids' => [30, 55]], $this->bot->buildChoicesForCard($state, 76, 1));
+    }
+
+    public function testAnxietyBouncesOddMoodsButNotTheOneValuedMoods(): void
+    {
+        // Patience (5) and Dignity (3) are worth bouncing; Charity (1) is not.
+        $state = $this->removalState(28, [2 => [21, 3], 3 => [8]]);
+
+        self::assertSame(['target_mood_ids' => [21, 8]], $this->bot->buildChoicesForCard($state, 28, 1));
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(28, [2 => [3]]), 28, 1));
+    }
+
+    public function testMalevolenceNamesTheParityThatRemovesTheMostValue(): void
+    {
+        // Odd takes Patience (5) and Dignity (3) = 8; even could only take Apathy (4).
+        $state = $this->removalState(1001, [2 => [21, 55], 3 => [8]]);
+        self::assertSame(['parity' => 'odd', 'target_mood_ids' => [21, 8]], $this->bot->buildChoicesForCard($state, 1001, 1));
+
+        // Even now wins: Apathy (4) and Bashfulness (6) against odd's lone Dignity (3).
+        $state = $this->removalState(1001, [2 => [55, 8], 3 => [30]]);
+        self::assertSame(['parity' => 'even', 'target_mood_ids' => [30, 55]], $this->bot->buildChoicesForCard($state, 1001, 1));
+    }
+
+    /** Discipline's value reads differently once the played card has joined the board, so the targets are judged with it in play. */
+    public function testThePureRemovalCardsResolveTheirChoicesInTheRealGame(): void
+    {
+        $registry = DefaultEffectRegistry::build();
+        foreach ([[7, [2 => [30], 3 => [56]]], [76, [2 => [55], 3 => [30]]], [76, [2 => [9], 3 => [55]]], [28, [2 => [21], 3 => [8]]], [1001, [2 => [21, 55], 3 => [8]]]] as [$cardId, $moods]) {
+            $state = $this->removalState($cardId, $moods);
+            $state->startTurn(1);
+            $choices = $this->bot->buildChoicesForCard($state, $cardId, 1);
+            $before = count($state->moodsInPlay());
+
+            (new \MoodSwings\Rules\MoodPlayService($registry))->playMood($state, 1, $cardId, new \MoodSwings\Rules\PlayerChoices($choices));
+
+            self::assertLessThan($before + 1, count($state->moodsInPlay()), "card {$cardId} should remove or bounce at least one mood");
+        }
+    }
 }
