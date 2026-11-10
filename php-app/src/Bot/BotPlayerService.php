@@ -1581,6 +1581,55 @@ final class BotPlayerService
         return false;
     }
 
+    /**
+     * Instability ("you may choose two moods from the same opponent; they choose one and give it to you, then you give them one of your moods"): the
+     * optional pair was never named, so the swap never happened. The opponent decides which of the two moods they part with, so the bot judges a pair by
+     * its worse outcome: for each of the two it moves that mood to itself on a copy of the board, has the bot give back whatever its own
+     * instabilityMoodToGive() would (the same choice it makes when it answers this decision for real, Instability itself included), and scores the board by
+     * round lead (roundLead()); the pair is worth the smaller of the two scores. It names the pair of one opponent's moods with the best worst case, if
+     * that beats not using Instability by at least 1. Teammates are never asked, and an opponent needs at least two moods.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     * @return int[] the two mood ids, or [] to leave Instability alone
+     */
+    private function instabilityCandidateMoodIds(BoardState $state, int $instabilityCardId, int $botGamePlayerId, array $roundWinsNeededToWinGameByPlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $instabilityCardId, $botGamePlayerId);
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+        $best = [];
+        $bestGain = 0;
+        foreach ($sim->activePlayerOrder() as $opponentId) {
+            if ($opponentId === $botGamePlayerId || $sim->isTeammate($botGamePlayerId, $opponentId)) {
+                continue;
+            }
+
+            $moodIds = array_values(array_map(static fn ($mood) => $mood->cardId, $sim->moodsOwnedBy($opponentId)));
+            for ($i = 0; $i < count($moodIds); $i++) {
+                for ($j = $i + 1; $j < count($moodIds); $j++) {
+                    $worstLead = null;
+                    foreach ([$moodIds[$i], $moodIds[$j]] as $takenId) {
+                        $after = clone $sim;
+                        $after->giveInPlayToPlayer($takenId, $botGamePlayerId);
+                        $ownIds = array_map(static fn ($mood) => $mood->cardId, $after->moodsOwnedBy($botGamePlayerId));
+                        $givenId = $this->instabilityMoodToGive($after, $ownIds, $botGamePlayerId, $opponentId, $roundWinsNeededToWinGameByPlayerId);
+                        if ($givenId !== null) {
+                            $after->giveInPlayToPlayer($givenId, $opponentId);
+                        }
+                        $lead = $this->roundLead($after, $botGamePlayerId);
+                        $worstLead = $worstLead === null ? $lead : min($worstLead, $lead);
+                    }
+
+                    if ($worstLead !== null && $worstLead - $baseline > $bestGain) {
+                        $bestGain = $worstLead - $baseline;
+                        $best = [$moodIds[$i], $moodIds[$j]];
+                    }
+                }
+            }
+        }
+
+        return $best;
+    }
+
     /** Pettiness is for protecting a lead a single play could close: the bot's lead has to be no more than this. */
     private const PETTINESS_MAX_LEAD_TO_PROTECT = 4;
 
@@ -2850,7 +2899,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness', 'instability',
     ];
 
     /**
@@ -2972,6 +3021,12 @@ final class BotPlayerService
             $targetMoodIds = $this->pureRemovalTargetMoodIds($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'instability') {
+            $pair = $this->instabilityCandidateMoodIds($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGameByPlayerId);
+
+            return $pair !== [] ? ['candidate_mood_ids' => $pair] : [];
         }
 
         if ($effectKey === 'pettiness') {

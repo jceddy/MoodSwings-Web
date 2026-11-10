@@ -6111,4 +6111,31 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertContains(1014, $state->discardPile());
     }
+
+    public function testInstabilityNamesTheOpponentsTwoBestMoodsWhenTheSwapIsAGuaranteedGain(): void
+    {
+        // Whichever of Betrayal and Bashfulness (both 6) the opponent gives up, the bot hands back its 1-point Courage and comes out ahead.
+        $state = $this->removalState(96, [1 => [7], 2 => [56, 30]]);
+        $choices = $this->bot->buildChoicesForCard($state, 96, 1);
+        self::assertEqualsCanonicalizing([56, 30], $choices['candidate_mood_ids']);
+    }
+
+    public function testInstabilityStaysBareWhenTheWorstCaseIsNoBetter(): void
+    {
+        // The opponent would give up a 1-point mood for the bot's 3-point Dignity.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(96, [1 => [8], 2 => [7, 3]]), 96, 1));
+        // An opponent needs two moods to choose between.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(96, [1 => [7], 2 => [56]]), 96, 1));
+    }
+
+    public function testInstabilitysChoiceIsAcceptedByTheRealGame(): void
+    {
+        $state = $this->removalState(96, [1 => [7], 2 => [56, 30]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 96, 1);
+
+        $result = (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 96, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertNotEmpty($result->pendingDecisions, 'the opponent is asked which of the two moods to give up');
+    }
 }

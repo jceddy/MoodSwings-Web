@@ -9287,6 +9287,11 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Instability's swap.** The optional pair ("choose two moods from the same opponent; they give you one, then you give them one of yours") was never
+  named. The opponent decides which of the two they part with, so `BotPlayerService::instabilityCandidateMoodIds()` judges each pair of one opponent's moods
+  by its worse outcome: it moves each of the two to the bot on a copy of the board, has the bot give back whatever its own `instabilityMoodToGive()` would
+  (the same pick it makes when it answers this decision for real), and scores the board with `roundLead()`. It names the pair with the best worst case, if
+  that beats not using Instability by at least 1. Teammates are never asked, and an opponent needs two moods.
 - **Bots use Pettiness to protect a narrow lead.** The optional "discard a card; if you do, choose a player who can't play moods during their next turn" was
   never used. The bot can't see what a rival holds, so `BotPlayerService::pettinessChoices()` applies a conservative rule: when its group leads the round by
   1 to 4 (`roundLead()`, Pettiness in play), it names the rival with the most points this round who still has cards in hand, and pays with the card it would
