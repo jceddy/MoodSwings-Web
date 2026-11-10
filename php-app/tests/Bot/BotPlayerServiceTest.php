@@ -5516,6 +5516,7 @@ final class BotPlayerServiceTest extends TestCase
             1015 => $this->row('green', 'uncommon', 3, 7, 'fascination', false, false, true),
             1016 => $this->row('blue', 'common', 0, null, 'apathy', false, false, false),
             1017 => $this->row('black', 'rare', 0, null, 'opportunism', false, false, true),
+            1018 => $this->row('red', 'common', 2, null, 'vindictiveness', false, false, true),
         ];
         $hands = [1 => [$cardId, ...$handIds]];
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -5985,5 +5986,34 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame(0, $state->valueOf(30));
         self::assertContains(1016, $state->discardPile());
+    }
+
+    public function testVindictivenessTradesACheapMoodForAnOpponentsValidation(): void
+    {
+        // Dignity (3) goes so that Validation (1), which keeps handing its owner extra plays, can follow it.
+        $state = $this->removalState(1018, [1 => [8], 2 => [26]]);
+        self::assertSame(['discard_mood_id' => 8, 'target_mood_id' => 26], $this->bot->buildChoicesForCard($state, 1018, 1));
+    }
+
+    public function testVindictivenessStaysBareWithoutASnowballTargetOrWhenItWouldCostTheLead(): void
+    {
+        // Nothing but plain moods: in points the trade can only lose.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1018, [1 => [8], 2 => [7]]), 1018, 1));
+        // The bot leads by 2 (Vindictiveness 2 + Dignity 3 + Apathy 4 against Validation 1 + Betrayal 6); either sacrifice would end that lead.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1018, [1 => [8, 55], 2 => [26, 56]]), 1018, 1));
+        // The only own mood is worth more than the sacrifice cap.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1018, [1 => [56], 2 => [26]]), 1018, 1));
+    }
+
+    public function testVindictivenessResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1018, [1 => [8], 2 => [26]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1018, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1018, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertFalse($state->isInPlay(26));
+        self::assertFalse($state->isInPlay(8));
     }
 }

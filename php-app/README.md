@@ -9287,6 +9287,12 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Vindictiveness.** "Put one of your other moods into the discard pile; if you do, put a mood with a lower value than that mood's into the discard
+  pile" can never gain points (the target is worth less than the sacrifice), so what it buys is removing a mood worth more than its printed value.
+  `BotPlayerService::vindictivenessChoices()` tries every pair of one of its own moods and one opponent mood on a copy of the board with the card's own rule
+  code, and uses a pair when the round lead (`roundLead()`) rises by 1+ anyway, or the target is an opponent's snowballing mood (Validation, Hope, Grace) and
+  the sacrifice is worth 3 or less -- unless that would turn a round lead the bot has into none. It prefers the biggest gain, then a snowball target, then the
+  cheapest sacrifice; the bot's own lasting-value moods are never sacrificed.
 - **Bots use Shame's discard.** The optional "discard a card from your hand; if you do, suppress all other moods that share a color with it" was never made.
   Since the suppression hits the bot's own moods of that color too, `BotPlayerService::shameDiscardCardId()` works out each color it could name on a copy of
   the board with the card's own rule code -- discarding the card it would miss least of that color -- and scores it with `roundLead()`. It takes the color with

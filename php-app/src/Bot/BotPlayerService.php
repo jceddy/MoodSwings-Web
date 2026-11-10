@@ -1581,6 +1581,78 @@ final class BotPlayerService
         return false;
     }
 
+    /** The most the bot will pay (an own mood's value) to remove an opponent's snowballing mood with Vindictiveness. */
+    private const VINDICTIVENESS_MAX_ENGINE_SACRIFICE_VALUE = 3;
+
+    /** Effect keys whose moods keep producing plays every turn, which is worth more than their own printed value (Validation, Hope, Grace). */
+    private const SNOWBALL_EFFECT_KEYS = ['validation', 'hope', 'grace'];
+
+    /**
+     * Vindictiveness ("you may put one of your other moods into the discard pile; if you do, you may put a mood with a lower value than that mood's into
+     * the discard pile"): the target has to be worth less than the sacrifice, so in plain points it can never come out ahead -- what it buys is removing a
+     * mood worth more than its printed value. The bot tries every pair of one of its own other moods and one opponent mood on a copy of the board, with the
+     * card's own rule code, and uses a pair when either the round lead (roundLead()) rises by at least 1 anyway (scoring can be uneven), or the target is an
+     * opponent's snowballing mood (SNOWBALL_EFFECT_KEYS: Validation, Hope, Grace -- extra plays every turn) and the sacrifice costs no more than
+     * VINDICTIVENESS_MAX_ENGINE_SACRIFICE_VALUE -- unless that would turn a round lead the bot has into none. Among usable pairs it prefers the biggest gain,
+     * then a snowball target, then the cheapest sacrifice. Moods with lasting value of the bot's own (PROTECTED_EFFECT_KEYS, Hope, Grace, Stubbornness,
+     * Melancholy) are never sacrificed.
+     *
+     * @return array{discard_mood_id?: int, target_mood_id?: int}
+     */
+    private function vindictivenessChoices(BoardState $state, int $cardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $cardId, $botGamePlayerId);
+        $untouchable = [...self::PROTECTED_EFFECT_KEYS, 'hope', 'grace', 'stubbornness', 'melancholy'];
+        $sacrifices = [];
+        foreach ($sim->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $effectKey = $sim->catalogRow($sim->effectiveCardId($mood->cardId))['effectKey'];
+            if ($mood->cardId !== $cardId && !in_array($effectKey, $untouchable, true)) {
+                $sacrifices[] = $mood->cardId;
+            }
+        }
+        $targets = $this->nonTeammateOpponentMoodIds($sim, $botGamePlayerId);
+        if ($sacrifices === [] || $targets === []) {
+            return [];
+        }
+
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+        $best = null;
+        foreach ($sacrifices as $sacrificeId) {
+            foreach ($targets as $targetId) {
+                if ($sim->valueOf($targetId) >= $sim->valueOf($sacrificeId)) {
+                    continue;
+                }
+
+                $after = clone $sim;
+                try {
+                    $this->simulationRegistry->for('vindictiveness')->afterPlaying($after, $cardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['discard_mood_id' => $sacrificeId, 'target_mood_id' => $targetId]));
+                } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+                    continue;
+                }
+
+                $afterLead = $this->roundLead($after, $botGamePlayerId);
+                $gain = $afterLead - $baseline;
+                $isSnowball = in_array($sim->catalogRow($sim->effectiveCardId($targetId))['effectKey'], self::SNOWBALL_EFFECT_KEYS, true);
+                $worthwhileSnowball = $isSnowball
+                    && $sim->valueOf($sacrificeId) <= self::VINDICTIVENESS_MAX_ENGINE_SACRIFICE_VALUE
+                    && !($baseline > 0 && $afterLead <= 0);
+                if ($gain < 1 && !$worthwhileSnowball) {
+                    continue;
+                }
+
+                $candidate = ['gain' => $gain, 'snowball' => $isSnowball, 'cost' => $sim->valueOf($sacrificeId), 'sacrifice' => $sacrificeId, 'target' => $targetId];
+                if ($best === null
+                    || [$candidate['gain'], $candidate['snowball'], -$candidate['cost']] > [$best['gain'], $best['snowball'], -$best['cost']]
+                ) {
+                    $best = $candidate;
+                }
+            }
+        }
+
+        return $best === null ? [] : ['discard_mood_id' => $best['sacrifice'], 'target_mood_id' => $best['target']];
+    }
+
     /**
      * Shame ("you may discard a card from your hand; if you do, suppress all other moods that share a color with the discarded card, for as long as you
      * have this mood"): the optional discard was never made. The suppression hits every other mood of that color -- the bot's own included -- so the bot
@@ -2662,7 +2734,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness',
     ];
 
     /**
@@ -2784,6 +2856,10 @@ final class BotPlayerService
             $targetMoodIds = $this->pureRemovalTargetMoodIds($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'vindictiveness') {
+            return $this->vindictivenessChoices($state, $cardId, $botGamePlayerId);
         }
 
         if ($effectKey === 'shame') {
