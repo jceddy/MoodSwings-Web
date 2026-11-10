@@ -503,10 +503,12 @@ final class BotPlayerService
      */
     public function chooseAction(BoardState $state, array $playableCardIds, int $botGamePlayerId, ?int $roundWinsNeededToWinGame = null, array $roundWinsNeededToWinGameByPlayerId = []): ?array
     {
-        usort(
-            $playableCardIds,
-            fn (int $a, int $b) => $this->sortPriorityValue($state, $b, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId) <=> $this->sortPriorityValue($state, $a, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId),
-        );
+        // Each card's priority is worked out once, not on every comparison: some (Fear's replay prediction) simulate whole plays.
+        $priorities = [];
+        foreach ($playableCardIds as $playableCardId) {
+            $priorities[$playableCardId] = $this->sortPriorityValue($state, $playableCardId, $botGamePlayerId, $playableCardIds, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
+        }
+        usort($playableCardIds, fn (int $a, int $b) => $priorities[$b] <=> $priorities[$a]);
 
         foreach ($playableCardIds as $cardId) {
             $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
@@ -2006,7 +2008,7 @@ final class BotPlayerService
         if ($effectKey === 'nostalgia' && $state->discardPile() === [] && !$this->nostalgiaUrgencyWouldDecideTheRound($state, $cardId, $botGamePlayerId, $playableCardIds)) {
             return false;
         }
-        if ($effectKey === 'fear' && !$this->fearHasAGoodReasonToPlayNow($state, $botGamePlayerId)) {
+        if ($effectKey === 'fear' && !$this->fearHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
             return false;
         }
         if ($effectKey === 'denial' && !$this->denialHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
@@ -2546,7 +2548,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear',
     ];
 
     /**
@@ -2668,6 +2670,12 @@ final class BotPlayerService
             $targetMoodIds = $this->pureRemovalTargetMoodIds($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'fear') {
+            $handMoodId = $this->fearReplayMoodId($state, $cardId, $botGamePlayerId);
+
+            return $handMoodId !== null ? ['hand_mood_id' => $handMoodId] : [];
         }
 
         if ($effectKey === 'levity') {
@@ -3511,7 +3519,7 @@ final class BotPlayerService
      * specifically with blue moods in play (BLUE_CARING_EFFECT_KEYS --
      * Fear itself is blue). Otherwise PHP_INT_MIN via sortPriorityValue().
      */
-    private function fearHasAGoodReasonToPlayNow(BoardState $state, int $botGamePlayerId): bool
+    private function fearHasAGoodReasonToPlayNow(BoardState $state, int $fearCardId, int $botGamePlayerId): bool
     {
         foreach ($state->hand($botGamePlayerId) as $handCardId) {
             $effectKey = $state->catalogRow($state->effectiveCardId($handCardId))['effectKey'];
@@ -3521,7 +3529,113 @@ final class BotPlayerService
             }
         }
 
-        return false;
+        return $this->fearIsTheCheapestSacrifice($state, $fearCardId, $botGamePlayerId)
+            || $this->fearReplayMoodId($state, $fearCardId, $botGamePlayerId) !== null;
+    }
+
+    /**
+     * Every effect key whose play needs (or wants) one of its owner's own moods to put into the discard pile: Envy and Self-Loathing as the cost of
+     * playing them, and Bravado, Angst (blue or red, which Fear is) and Vindictiveness as the price of their bonus. Fear is printed at 0 and arrives
+     * together with an extra play, so it is the cheapest thing to give up -- the extra play lets the sacrifice card follow it in the same turn.
+     */
+    private const SACRIFICE_NEEDING_EFFECT_KEYS = ['envy', 'self_loathing', 'bravado', 'angst', 'vindictiveness'];
+
+    /** The most an own mood can be worth and still count as a cheap sacrifice that makes Fear unnecessary for the job. */
+    private const CHEAP_SACRIFICE_MAX_VALUE = 1;
+
+    /**
+     * Whether a card in hand needs a mood to sacrifice (SACRIFICE_NEEDING_EFFECT_KEYS) and the bot has no mood of its own cheap enough to give up
+     * already -- in that case Fear (0 points, and it brings an extra play) is worth playing just to be that sacrifice.
+     */
+    private function fearIsTheCheapestSacrifice(BoardState $state, int $fearCardId, int $botGamePlayerId): bool
+    {
+        $needsSacrifice = false;
+        foreach ($state->hand($botGamePlayerId) as $handCardId) {
+            if ($handCardId !== $fearCardId && in_array($state->catalogRow($state->effectiveCardId($handCardId))['effectKey'], self::SACRIFICE_NEEDING_EFFECT_KEYS, true)) {
+                $needsSacrifice = true;
+                break;
+            }
+        }
+        if (!$needsSacrifice) {
+            return false;
+        }
+
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            if ($state->valueOf($mood->cardId) <= self::CHEAP_SACRIFICE_MAX_VALUE) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /** Set while fearReplayMoodId() is predicting plays, so a nested Fear doesn't start a prediction of its own. */
+    private bool $predictingFear = false;
+
+    /**
+     * Fear's "you may put another one of your moods into your hand" (the extra play comes either way) is the way to play a mood a second time: bounce
+     * a mood whose after-playing effect is worth having again, then play it with the extra play. The bot tries each of its own moods, plays Fear for
+     * real on a copy of the board (MoodPlayService, with that mood returned), lets its own chooseAction() make the follow-up play from the hand, and
+     * compares the round lead (roundLead()) with playing Fear bare and making the best follow-up play. It only bounces a mood when that comes out
+     * strictly ahead, so a mood isn't put in hand for a follow-up that turns out to be some other card. Moods with lasting value (PROTECTED_EFFECT_KEYS,
+     * Hope, Grace, Stubbornness, Melancholy) are left alone. Null (no bounce) whenever the plays can't be simulated, e.g. it isn't the bot's turn.
+     */
+    private function fearReplayMoodId(BoardState $state, int $fearCardId, int $botGamePlayerId): ?int
+    {
+        if ($this->predictingFear) {
+            return null;
+        }
+
+        $untouchable = [...self::PROTECTED_EFFECT_KEYS, 'hope', 'grace', 'stubbornness', 'melancholy'];
+        $candidates = [];
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            if ($mood->cardId !== $fearCardId && !in_array($effectKey, $untouchable, true)) {
+                $candidates[] = $mood->cardId;
+            }
+        }
+        if ($candidates === []) {
+            return null;
+        }
+
+        $this->predictingFear = true;
+        try {
+            $best = $this->fearOutcomeLead($state, $fearCardId, $botGamePlayerId, null);
+            if ($best === null) {
+                return null;
+            }
+
+            $bestMoodId = null;
+            foreach ($candidates as $moodId) {
+                $lead = $this->fearOutcomeLead($state, $fearCardId, $botGamePlayerId, $moodId);
+                if ($lead !== null && $lead > $best) {
+                    $bestMoodId = $moodId;
+                    $best = $lead;
+                }
+            }
+
+            return $bestMoodId;
+        } finally {
+            $this->predictingFear = false;
+        }
+    }
+
+    /** The bot's round lead after playing Fear (returning $handMoodId, if any) and then the follow-up play it would make, or null if that can't be played out. */
+    private function fearOutcomeLead(BoardState $state, int $fearCardId, int $botGamePlayerId, ?int $handMoodId): ?int
+    {
+        $sim = clone $state;
+        $plays = new \MoodSwings\Rules\MoodPlayService($this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build());
+        try {
+            $plays->playMood($sim, $botGamePlayerId, $fearCardId, new \MoodSwings\Rules\PlayerChoices($handMoodId !== null ? ['hand_mood_id' => $handMoodId] : []));
+            $next = $this->chooseAction($sim, $sim->hand($botGamePlayerId), $botGamePlayerId);
+            if ($next !== null) {
+                $plays->playMood($sim, $botGamePlayerId, $next['card_id'], new \MoodSwings\Rules\PlayerChoices($next['choices']));
+            }
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return $this->roundLead($sim, $botGamePlayerId);
     }
 
     /**

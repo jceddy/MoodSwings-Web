@@ -9287,6 +9287,13 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Fear to replay a mood and as a sacrifice.** Fear's optional "put another of your moods into your hand" was never chosen, and Fear was only
+  played when a mood-counting or blue-caring card sat in hand. `BotPlayerService::fearReplayMoodId()` now plays Fear for real on a copy of the board (via
+  `MoodPlayService`) with each of the bot's moods returned in turn, lets the bot make its own follow-up play, and compares `roundLead()` with Fear played
+  bare: a mood is bounced only when replaying it (a removal or steal effect, say) comes out strictly ahead, which also makes Fear worth playing. Fear is
+  also worth playing as the cheapest sacrifice (`fearIsTheCheapestSacrifice()`): a card in hand needs a mood to put in the discard pile (Envy,
+  Self-Loathing, Bravado, Angst, Vindictiveness) and the bot has no mood of its own worth 1 or less to give up. `chooseAction()` now works out each card's
+  priority once instead of on every comparison, since some predictions simulate whole plays.
 - **Bots use Levity's bottom-deck.** The extra play comes either way; the optional "put this mood on the bottom of the deck and draw a card" was never
   chosen, so Levity (printed at 0) stayed on the board for nothing. `BotPlayerService::levityBottomsItself()` runs the card's rule code both ways on a copy of
   the board and bottoms it unless staying would leave the round lead (`roundLead()`) higher (a mood-count bonus, an opponent's Envy, ...). It never does so with

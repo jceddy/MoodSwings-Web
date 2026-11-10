@@ -5773,4 +5773,43 @@ final class BotPlayerServiceTest extends TestCase
         self::assertCount(2, $state->hand(1), 'Apathy plus the drawn card');
         self::assertContains(3, $state->hand(1));
     }
+
+    public function testFearReturnsAMoodWhoseEffectIsWorthPlayingAgain(): void
+    {
+        // Courage is on the board and an opponent's Betrayal (6) has since shown up: bounce Courage and play it again to discard Betrayal.
+        $state = $this->removalState(38, [1 => [7], 2 => [56]]);
+        $state->startTurn(1);
+        self::assertSame(['hand_mood_id' => 7], $this->bot->buildChoicesForCard($state, 38, 1));
+        self::assertTrue($this->bot->hasGoodReasonToPlayNow($state, 38, 1, [38]));
+
+        // Nothing for Courage to hit this time (Apathy is only 4), so the replay gains nothing.
+        $state = $this->removalState(38, [1 => [7], 2 => [55]]);
+        $state->startTurn(1);
+        self::assertSame([], $this->bot->buildChoicesForCard($state, 38, 1));
+        self::assertFalse($this->bot->hasGoodReasonToPlayNow($state, 38, 1, [38]));
+    }
+
+    public function testFearDoesNotBounceAMoodWhenABetterCardIsWaitingInHand(): void
+    {
+        // Betrayal in hand is worth more with the extra play than a second Courage, and the bounced Courage would just sit in hand.
+        $state = $this->removalState(38, [1 => [7], 2 => [30]], [], [56]);
+        $state->startTurn(1);
+
+        self::assertSame([], $this->bot->buildChoicesForCard($state, 38, 1));
+    }
+
+    public function testFearIsWorthPlayingAsTheSacrificeForACardThatNeedsOne(): void
+    {
+        // Bravado in hand and only a valuable mood on the board: Fear (0 points, plus an extra play) is the thing to give up.
+        $state = $this->removalState(38, [1 => [56]], [], [84]);
+        self::assertTrue($this->bot->hasGoodReasonToPlayNow($state, 38, 1, [38, 84]));
+
+        // No mood on the board at all, and Envy (which has to discard one to be played).
+        $state = $this->removalState(38, [], [], [64]);
+        self::assertTrue($this->bot->hasGoodReasonToPlayNow($state, 38, 1, [38]));
+
+        // A near-worthless mood is already there to be sacrificed (Courage, 1): Fear isn't needed for it.
+        $state = $this->removalState(38, [1 => [7]], [], [84]);
+        self::assertFalse($this->bot->hasGoodReasonToPlayNow($state, 38, 1, [38, 84]));
+    }
 }
