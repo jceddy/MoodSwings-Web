@@ -1582,6 +1582,53 @@ final class BotPlayerService
     }
 
     /**
+     * Shame ("you may discard a card from your hand; if you do, suppress all other moods that share a color with the discarded card, for as long as you
+     * have this mood"): the optional discard was never made. The suppression hits every other mood of that color -- the bot's own included -- so the bot
+     * works out each color it could name on a copy of the board, with the card's own rule code: for each color in hand it discards the card it would miss
+     * least (the lowest draftPriorityRank()), and scores the result by round lead (roundLead()). It takes the color with the biggest net gain (lead gain
+     * minus the discarded card's printed value), and only if that is at least 1. A colorless card suppresses nothing. It holds back when the discard
+     * would feed an opponent (discardingFromHandHelpsAnOpponent()).
+     */
+    private function shameDiscardCardId(BoardState $state, int $shameCardId, int $botGamePlayerId): ?int
+    {
+        $sim = $this->withCardInPlay($state, $shameCardId, $botGamePlayerId);
+        if ($this->discardingFromHandHelpsAnOpponent($sim, $botGamePlayerId)) {
+            return null;
+        }
+
+        $cheapestByColor = [];
+        foreach ($sim->hand($botGamePlayerId) as $handCardId) {
+            $color = $sim->colorOf($handCardId);
+            if ($color === 'colorless') {
+                continue;
+            }
+            if (!isset($cheapestByColor[$color]) || $this->draftPriorityRank($sim, $handCardId) < $this->draftPriorityRank($sim, $cheapestByColor[$color])) {
+                $cheapestByColor[$color] = $handCardId;
+            }
+        }
+
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+        $best = null;
+        $bestNet = 0;
+        foreach ($cheapestByColor as $discardCardId) {
+            $after = clone $sim;
+            try {
+                $this->simulationRegistry->for('shame')->afterPlaying($after, $shameCardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['discard_card_id' => $discardCardId]));
+            } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+                continue;
+            }
+            $net = $this->roundLead($after, $botGamePlayerId) - $baseline - $this->baseValue($sim, $discardCardId);
+            if ($net > $bestNet) {
+                $bestNet = $net;
+                $best = $discardCardId;
+            }
+        }
+
+        return $best;
+    }
+
+    /**
      * Faith ("you may discard a green or blue card from your hand; if you do, suppress any mood, for as long as you have this mood"): the optional
      * discard and target were never named. The bot pays with the green/blue card it would miss least (the lowest draftPriorityRank()) and tries each
      * opponent mood it could suppress (never Hope/Grace, which can't be hurt by it, or one already worth nothing) on a copy of the board, running the
@@ -2615,7 +2662,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame',
     ];
 
     /**
@@ -2737,6 +2784,12 @@ final class BotPlayerService
             $targetMoodIds = $this->pureRemovalTargetMoodIds($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'shame') {
+            $discardCardId = $this->shameDiscardCardId($state, $cardId, $botGamePlayerId);
+
+            return $discardCardId !== null ? ['discard_card_id' => $discardCardId] : [];
         }
 
         if ($effectKey === 'faith') {

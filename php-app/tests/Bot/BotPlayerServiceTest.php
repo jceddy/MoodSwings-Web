@@ -5957,4 +5957,33 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(0, $state->valueOf(56));
         self::assertContains(1016, $state->discardPile());
     }
+
+    public function testShameDiscardsTheCardWhoseColorSuppressesTheMostOfTheOpponentsBoard(): void
+    {
+        // Bashfulness (blue, 6) is the opponent's; the blue 0-point card pays for suppressing it. The white 0-point card would suppress nothing.
+        $state = $this->removalState(25, [2 => [30]], [], [1014, 1016]);
+        self::assertSame(['discard_card_id' => 1016], $this->bot->buildChoicesForCard($state, 25, 1));
+    }
+
+    public function testShameStaysBareWhenItWouldHurtTheBotMoreOrFeedAnOpponent(): void
+    {
+        // The bot's own blue Bashfulness (6) would be suppressed along with the opponent's Avoidance (3).
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(25, [1 => [30], 2 => [29]], [], [1016]), 25, 1));
+        // An opponent's Opportunism would take the discarded card.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(25, [2 => [30, 1017]], [], [1016]), 25, 1));
+        // Nothing in hand.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(25, [2 => [30]]), 25, 1));
+    }
+
+    public function testShamesSuppressionResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(25, [2 => [30]], [], [1016]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 25, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 25, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertSame(0, $state->valueOf(30));
+        self::assertContains(1016, $state->discardPile());
+    }
 }
