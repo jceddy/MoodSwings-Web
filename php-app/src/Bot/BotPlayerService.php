@@ -825,6 +825,22 @@ final class BotPlayerService
             }
         }
 
+        // Rapport's second loot (offered once the first has resolved, with two or more white/black moods in play): the same cycle as the first, so the
+        // bot does it when the worst card now in its hand -- the one just drawn included -- is weak enough to be worth swapping for a random one
+        // (ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD), and puts that card on the bottom of the deck.
+        if ($decisionType === 'rapport_second_loot') {
+            $worst = null;
+            foreach ($state->hand($botGamePlayerId) as $handCardId) {
+                if ($worst === null || $this->draftPriorityRank($state, $handCardId) < $this->draftPriorityRank($state, $worst)) {
+                    $worst = $handCardId;
+                }
+            }
+
+            return $worst !== null && $state->catalogRow($state->effectiveCardId($worst))['draftPriorityScore'] <= self::ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD
+                ? [$field['key'] => $worst]
+                : [];
+        }
+
         // Prudence's look at the top of the deck: the bot leaves both cards where they are and takes either order (its multi field
         // takes a list, which the generic revealed-card pick below would not give).
         if ($decisionType === 'prudence_bottom') {
@@ -4042,7 +4058,8 @@ final class BotPlayerService
      */
     private function shouldAttemptZealCycle(BoardState $state, string $effectKey, string $fieldKey, int $cardId, int $botGamePlayerId): bool
     {
-        if ($effectKey !== 'zeal' || $fieldKey !== 'hand_card_id') {
+        // Rapport's first loot ("put a card from your hand on the bottom of the deck; if you do, draw a card") is Zeal's cycle, so it follows the same policy.
+        if (!in_array($effectKey, ['zeal', 'rapport'], true) || $fieldKey !== 'hand_card_id') {
             return false;
         }
 

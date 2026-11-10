@@ -5535,6 +5535,7 @@ final class BotPlayerServiceTest extends TestCase
             1020 => $this->row('green', 'rare', 3, null, 'shrewdness', false, false, true),
             1021 => $this->row('blue', 'rare', 2, null, 'optimism', false, false, true),
             1022 => $this->row('blue', 'rare', 1, null, 'admiration', false, false, true),
+            1023 => $this->row('white', 'rare', 2, null, 'rapport', false, false, true),
         ];
         $hands = [1 => [$cardId, ...$handIds]] + $otherHands;
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -6309,5 +6310,48 @@ final class BotPlayerServiceTest extends TestCase
         $plays->resolvePendingDecisions($state, 1022, 1, new \MoodSwings\Rules\PlayerChoices($choices), $result->invocationChoices, $result->invocationSeq, ['delegate_choices' => new \MoodSwings\Rules\PlayerChoices($answer)], $result->duplicityEligibleSources);
         self::assertFalse($state->isInPlay(56));
         self::assertContains(7, $state->discardPile(), 'the replayed mood stays in the pile');
+    }
+
+    public function testRapportCyclesTheWorstCardOnlyWhenThatCardIsWeak(): void
+    {
+        // Apathy (draft tier 1) is the weak card to put on the bottom; Compulsion (10) stays.
+        $state = $this->removalState(1023, [2 => [56]], [], [55, 86]);
+        self::assertSame(['hand_card_id' => 55], $this->bot->buildChoicesForCard($state, 1023, 1));
+
+        // Nothing weak enough to be worth swapping for a random card: Compulsion (10) and Intimidation (40).
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1023, [2 => [56]], [], [86, 67]), 1023, 1));
+        // Nothing else in hand to cycle.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1023, [2 => [56]]), 1023, 1));
+    }
+
+    public function testRapportsSecondLootIsTakenForAWeakCardAndDeclinedOtherwise(): void
+    {
+        $field = ['key' => 'second_hand_card_id', 'type' => 'hand_card', 'required' => false];
+        // By the time the second loot is asked, Rapport itself is already in play.
+        $weak = $this->removalState(1023, [2 => [56]], [], [55, 86]);
+        $weak->moveHandToInPlay(1, 1023);
+        self::assertSame(['second_hand_card_id' => 55], $this->bot->chooseDecisionAnswer($weak, $field, 1, 'rapport_second_loot', 1023));
+
+        $strong = $this->removalState(1023, [2 => [56]], [], [86, 67]);
+        $strong->moveHandToInPlay(1, 1023);
+        self::assertSame([], $this->bot->chooseDecisionAnswer($strong, $field, 1, 'rapport_second_loot', 1023));
+    }
+
+    public function testRapportsTwoLootsResolveInTheRealGame(): void
+    {
+        // Rapport is white and Betrayal black: two white/black moods, so the second loot is offered.
+        $state = $this->removalState(1023, [2 => [56]], [], [55, 86], [3, 5]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1023, 1);
+        $plays = new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build());
+        $result = $plays->playMood($state, 1, 1023, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        $request = $result->pendingDecisions[0];
+        self::assertSame('rapport_second_loot', $request->decisionType);
+        $answer = $this->bot->chooseDecisionAnswer($state, $request->field, 1, $request->decisionType, 1023);
+        self::assertNotSame([], $answer, 'the card just drawn (Charity, draft tier 1) is weak enough to cycle too');
+
+        $plays->resolvePendingDecisions($state, 1023, 1, new \MoodSwings\Rules\PlayerChoices($choices), $result->invocationChoices, $result->invocationSeq, ['second_hand_card_id' => new \MoodSwings\Rules\PlayerChoices($answer)], $result->duplicityEligibleSources);
+        self::assertCount(2, $state->hand(1), 'two cards put on the bottom, two drawn: the hand is the size it was');
     }
 }

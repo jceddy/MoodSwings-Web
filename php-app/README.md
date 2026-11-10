@@ -9287,6 +9287,10 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Rapport's loots.** Rapport ("put a card from your hand on the bottom of the deck, then draw a card; with two or more white and/or black moods, do it
+  a second time") is Zeal's cycle, so its first loot now follows Zeal's policy (`shouldAttemptZealCycle()`): the bot cycles its worst card (by draft priority) when
+  that card is weak enough -- draft tier 2 or lower -- to be worth swapping for a random one, and leaves it when it has nothing else in hand or only strong cards.
+  The second loot, a follow-up decision (`rapport_second_loot`), is answered the same way against the hand as it then stands, the card just drawn included.
 - **Bots use Optimism and Admiration, and answer the repeated effect's choices.** Optimism's optional "choose one of your other moods; its after-playing effect
   happens an additional time" and Admiration's "choose a mood in the discard pile; its after-playing effect happens as though you had just played it" were never
   chosen -- and when the repeat's own choices were asked ('delegated_effect_choices'), the bot left them empty too, so a repeat would have run bare.
