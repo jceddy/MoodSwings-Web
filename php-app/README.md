@@ -9287,6 +9287,84 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Encouragement's dice boost.** The optional "choose a mood with dice in its lower left corner; it uses the dice total or its top right number, whichever is
+  higher" was never chosen. `BotPlayerService::encouragementChoices()` only considers the bot's own and a teammate's moods (an opponent's would be a gift), runs the
+  card's own rule code for each one with a printed dice value on a copy of the board, and names the one that gains the most `roundLead()`, if at least 1.
+- **Bots use Yearning's trade.** The optional "discard a card from your hand; if you do, put a card from the discard pile into your hand" (with two or more
+  blue/red moods in play) was never made. `BotPlayerService::yearningChoices()`, with the condition checked with Yearning itself in play, trades the worst hand card
+  (lowest `draftPriorityRank()`) for the best card already in the pile -- never the card it is discarding -- but only when the pile card is strictly better, and
+  holds back when the discard would feed an opponent (`discardingFromHandHelpsAnOpponent()`) or the pile or hand is empty.
+- **Bots use Doubt's reveal.** Doubt ("reveal any number of cards from your hand, put them on the bottom of the deck and draw that many; next round nobody can play
+  a mood sharing a color with a revealed card") is Zeal's cycle for several cards at once, with the cost that every revealed color is banned for everyone -- the
+  bot's own hand included. `BotPlayerService::doubtChoices()` reveals only weak cards (draft tier 2 or lower, the bar Zeal and Rapport use), never one whose color a
+  card it is keeping shares, and only from the two colors it has the most weak cards in (then the weakest). With nothing weak to cycle it leaves Doubt bare.
+- **Bots use Rapport's loots.** Rapport ("put a card from your hand on the bottom of the deck, then draw a card; with two or more white and/or black moods, do it
+  a second time") is Zeal's cycle, so its first loot now follows Zeal's policy (`shouldAttemptZealCycle()`): the bot cycles its worst card (by draft priority) when
+  that card is weak enough -- draft tier 2 or lower -- to be worth swapping for a random one, and leaves it when it has nothing else in hand or only strong cards.
+  The second loot, a follow-up decision (`rapport_second_loot`), is answered the same way against the hand as it then stands, the card just drawn included.
+- **Bots use Optimism and Admiration, and answer the repeated effect's choices.** Optimism's optional "choose one of your other moods; its after-playing effect
+  happens an additional time" and Admiration's "choose a mood in the discard pile; its after-playing effect happens as though you had just played it" were never
+  chosen -- and when the repeat's own choices were asked ('delegated_effect_choices'), the bot left them empty too, so a repeat would have run bare.
+  `BotPlayerService::repeatedEffectScore()` scores a candidate effect: it works out what the bot would choose playing it fresh (an effect with fields and nothing
+  worth choosing is skipped), runs it with those choices on a copy of the board where it can (scored by `roundLead()`), and otherwise values a repeat that hits
+  the opponents' hands (Compulsion, Intimidation, Suspicion, Paranoia) at 2 and an extra-play grant at 1 when there's a card to use it on.
+  `optimismChoices()` names the best of the bot's own other moods and `admirationChoices()` the best mood in the pile (run as the Admiration itself), if the
+  score is at least 1. `chooseDecisionAnswer()` takes the paused play's stored choices, which carry the effect being run and the card it runs as, and answers
+  the repeat the way it would a fresh play (`GameService` passes them in).
+- **Bots use Corruption, and now see its double win.** Neither option ("cycle up to two pile cards to the bottom of the deck and draw that many", or "the round's
+  winner wins two rounds") was ever chosen. `BotPlayerService::corruptionChoices()` takes the double win when its group leads the round and the double would decide
+  the game (it needs exactly two more round wins; a lead of 3 is required if a rival is also within two wins), or when the lead is at least 5 and no rival is that
+  close. Otherwise it cycles the two best pile cards (the loot cards' free draw), unless the pile is empty or a mood depends on its size. Separately, the bot's
+  "how many round wins does this round award" prediction (used by Shock, Rationalization, the Validation-removal check and others) only looked for a per-mood
+  `awardsExtraWin` tag, which only Chaos's variant sets -- real Corruption sets the board's own marker -- so it never noticed a Corruption in force. It now
+  goes through `predictedRoundWinsAwarded()`, which checks both.
+- **Bots use Arrogance's steal.** The optional "choose an opponent; they choose one of their white or blue moods and it becomes yours" was never named, though it
+  costs the bot nothing. The opponent decides which mood they give up, so `BotPlayerService::arroganceTargetPlayerId()` judges each opponent by their best
+  answer: it moves each of their white/blue moods to the bot on a copy of the board and scores it with `roundLead()`, taking the worst of those. It names the
+  opponent with the best worst case, if that beats not using Arrogance by at least 1; teammates and opponents with no white/blue mood are skipped.
+- **Bots use Shrewdness's swap.** The optional pair ("one of your other moods and an opponent's mood worth no more; swap them") was never named. Because the
+  mood it takes can't be worth more than the one it gives, a swap can't win points outright -- each point of difference costs the round lead two (one lost,
+  one handed over) -- unless values depend on who owns a mood. `BotPlayerService::shrewdnessChoices()` tries every pair on a copy of the board with the card's
+  own rule code and uses one when `roundLead()` rises by at least 1, or when the mood it takes is an opponent's snowballing Validation/Hope/Grace and the mood
+  it gives is worth no more than 2 more -- unless that would turn a lead the bot has into none. It never gives away its own lasting-value moods.
+- **Bots use Instability's swap.** The optional pair ("choose two moods from the same opponent; they give you one, then you give them one of yours") was never
+  named. The opponent decides which of the two they part with, so `BotPlayerService::instabilityCandidateMoodIds()` judges each pair of one opponent's moods
+  by its worse outcome: it moves each of the two to the bot on a copy of the board, has the bot give back whatever its own `instabilityMoodToGive()` would
+  (the same pick it makes when it answers this decision for real), and scores the board with `roundLead()`. It names the pair with the best worst case, if
+  that beats not using Instability by at least 1. Teammates are never asked, and an opponent needs two moods.
+- **Bots use Pettiness to protect a narrow lead.** The optional "discard a card; if you do, choose a player who can't play moods during their next turn" was
+  never used. The bot can't see what a rival holds, so `BotPlayerService::pettinessChoices()` applies a conservative rule: when its group leads the round by
+  1 to 4 (`roundLead()`, Pettiness in play), it names the rival with the most points this round who still has cards in hand, and pays with the card it would
+  miss least -- only if that card is printed at 0 or 1 and the discard wouldn't feed an opponent (`discardingFromHandHelpsAnOpponent()`). A bigger lead, being
+  behind, a rival with no cards, or nothing cheap to discard leaves it blank.
+- **Bots use Hostility and Worry.** Both parts of Hostility ("put one of your black or green moods into the discard pile; if you do, put up to two moods
+  valued 3 or less into the discard pile") and Worry (the same with a white or black mood returned to hand, and the two moods sent back to their players'
+  hands) were left blank. `BotPlayerService::sacrificeAndSweepChoices()` takes each sparable mood of its own of the right colors, works out the two best
+  opponent moods worth 3 or less once that mood has gone (a snowballing Validation/Hope/Grace first, then by value), and runs the card's own rule code on a
+  copy of the board. It uses the sacrifice with the biggest `roundLead()` gain -- at least 1 for Hostility, at least 2 for Worry (a returned mood can be
+  played again) -- and only ever removes opponents' moods.
+- **Bots use Vindictiveness.** "Put one of your other moods into the discard pile; if you do, put a mood with a lower value than that mood's into the discard
+  pile" can never gain points (the target is worth less than the sacrifice), so what it buys is removing a mood worth more than its printed value.
+  `BotPlayerService::vindictivenessChoices()` tries every pair of one of its own moods and one opponent mood on a copy of the board with the card's own rule
+  code, and uses a pair when the round lead (`roundLead()`) rises by 1+ anyway, or the target is an opponent's snowballing mood (Validation, Hope, Grace) and
+  the sacrifice is worth 3 or less -- unless that would turn a round lead the bot has into none. It prefers the biggest gain, then a snowball target, then the
+  cheapest sacrifice; the bot's own lasting-value moods are never sacrificed.
+- **Bots use Shame's discard.** The optional "discard a card from your hand; if you do, suppress all other moods that share a color with it" was never made.
+  Since the suppression hits the bot's own moods of that color too, `BotPlayerService::shameDiscardCardId()` works out each color it could name on a copy of
+  the board with the card's own rule code -- discarding the card it would miss least of that color -- and scores it with `roundLead()`. It takes the color with
+  the biggest net gain (lead gain minus the discarded card's printed value) if that is at least 1, and holds back when the discard would feed an opponent
+  (`discardingFromHandHelpsAnOpponent()`, shared with Faith and Longing).
+- **Bots use Faith's suppression.** The optional "discard a green or blue card from your hand; if you do, suppress any mood, for as long as you have this
+  mood" was never used. `BotPlayerService::faithChoices()` pays with the green/blue card it would miss least and tries each opponent mood on a copy of the
+  board (never Hope/Grace or a mood already worth nothing), running the card's own rule code; it takes the target that raises `roundLead()` the most, if that
+  gain beats the discarded card's printed value by at least 1. It holds back when the discard would feed an opponent (an opponent's Opportunism, or an
+  unaware Schadenfreude) -- the check Longing already used, now shared as `discardingFromHandHelpsAnOpponent()`.
+- **Bots use the give-a-card-for-value gifts.** Condescension ("give a card from your hand to another player; if you do, this mood's value becomes 6") and
+  Fascination (a blue or black card, revealed and given; 7) left the optional gift blank. `BotPlayerService::cardGiftForValueChoices()` gives away the card it
+  would miss least (lowest `draftPriorityRank()`, among blue/black for Fascination) to `cardGiftRecipient()`'s pick (a teammate if there is one, otherwise the
+  opponent furthest behind -- also what Wariness uses), with the boosted value worked out by the card's own rule code. A teammate gift only has to raise
+  `roundLead()` by 1; an opponent gift has to beat twice the card's printed value (it costs the bot those points and gives the opponent them), which in
+  practice means a 0- or 1-point card. Blank when no card qualifies.
 - **Bots use Infatuation's sacrifice.** The optional "put two of your other moods into the discard pile; if you do, this mood's value becomes 9" was never
   named. `BotPlayerService::infatuationDiscardMoodIds()` tries every pair of the bot's own other moods on a copy of the board, running the card's own rule code
   (which also applies the 9), and uses the pair that raises `roundLead()` the most -- at least 1 over playing Infatuation as it is. Moods with lasting value

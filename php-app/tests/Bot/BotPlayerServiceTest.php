@@ -1279,6 +1279,20 @@ final class BotPlayerServiceTest extends TestCase
         self::assertTrue($this->bot->hasGoodReasonToPlayNow($state, 101, 1, [101], roundWinsNeededToWinGame: 2));
     }
 
+    /**
+     * The same game-deciding check, with the double win in force the way Corruption really sets it (the board's own marker, not a per-mood tag): without
+     * it the bot would think winning the round is worth one win and judge a 2-wins-needed game as not decided by it.
+     */
+    public function testChooseActionPlaysShockForPointsWithTheBoardsDoubleWinMarker(): void
+    {
+        $state = $this->boardState(hands: [1 => [101, 60], 2 => [31]]);
+        $state->moveHandToInPlay(2, 31);
+        $state->moveHandToInPlay(1, 60);
+        $state->markAwardsExtraWinThisRound(60, 1);
+
+        self::assertTrue($this->bot->hasGoodReasonToPlayNow($state, 101, 1, [101], roundWinsNeededToWinGame: 2));
+    }
+
     // -- Exhilaration (reported live: don't sacrifice Bliss to it) ---------
 
     public function testChooseActionAvoidsSacrificingBlissWhenAnotherMoodIsAvailable(): void
@@ -5496,7 +5510,7 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([26, 76], $action['choices']['target_mood_ids']);
     }
     /** @param array<int, int[]> $moodsByPlayer */
-    private function removalState(int $cardId, array $moodsByPlayer, array $pileIds = [], array $handIds = [], array $deckIds = []): BoardState
+    private function removalState(int $cardId, array $moodsByPlayer, array $pileIds = [], array $handIds = [], array $deckIds = [], array $otherHands = []): BoardState
     {
         $catalog = $this->sampleCatalog() + [
             1001 => $this->row('black', 'mythic', 2, null, 'malevolence', false, false, true),
@@ -5511,8 +5525,22 @@ final class BotPlayerServiceTest extends TestCase
             1010 => $this->row('white', 'common', 0, null, 'levity', false, false, true),
             1011 => $this->row('green', 'common', 4, null, 'wariness', false, false, true),
             1012 => $this->row('red', 'rare', 3, 6, 'infatuation', false, false, true),
+            1013 => $this->row('black', 'common', 3, 6, 'condescension', false, false, true),
+            1014 => $this->row('white', 'common', 0, null, 'apathy', false, false, false),
+            1015 => $this->row('green', 'uncommon', 3, 7, 'fascination', false, false, true),
+            1016 => $this->row('blue', 'common', 0, null, 'apathy', false, false, false),
+            1017 => $this->row('black', 'rare', 0, null, 'opportunism', false, false, true),
+            1018 => $this->row('red', 'common', 2, null, 'vindictiveness', false, false, true),
+            1019 => $this->row('black', 'uncommon', 2, null, 'pettiness', false, false, true),
+            1020 => $this->row('green', 'rare', 3, null, 'shrewdness', false, false, true),
+            1021 => $this->row('blue', 'rare', 2, null, 'optimism', false, false, true),
+            1022 => $this->row('blue', 'rare', 1, null, 'admiration', false, false, true),
+            1023 => $this->row('white', 'rare', 2, null, 'rapport', false, false, true),
+            1024 => $this->row('blue', 'uncommon', 1, null, 'doubt', false, false, true),
+            1025 => $this->row('blue', 'uncommon', 2, null, 'yearning', false, false, true),
+            1026 => $this->row('white', 'uncommon', 3, null, 'encouragement', false, true, true),
         ];
-        $hands = [1 => [$cardId, ...$handIds]];
+        $hands = [1 => [$cardId, ...$handIds]] + $otherHands;
         foreach ($moodsByPlayer as $playerId => $ids) {
             $hands[$playerId] = [...($hands[$playerId] ?? []), ...$ids];
         }
@@ -5868,5 +5896,553 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(9, $state->valueOf(1012));
         self::assertFalse($state->isInPlay(7));
         self::assertFalse($state->isInPlay(3));
+    }
+
+    public function testCondescensionGivesAWorthlessCardToTheOpponentFurthestBehind(): void
+    {
+        // A 0-point card (id 1014) for three more points on Condescension; player 3 has nothing on the board, player 2 has Apathy.
+        $state = $this->removalState(1013, [2 => [55]], [], [1014]);
+        self::assertSame(['give_card_id' => 1014, 'recipient_player_id' => 3], $this->bot->buildChoicesForCard($state, 1013, 1));
+
+        // Courage (1) costs the bot a point and gives the opponent one; three points still beats that (2 * 1 + 1).
+        $state = $this->removalState(1013, [2 => [55]], [], [7]);
+        self::assertSame(['give_card_id' => 7, 'recipient_player_id' => 3], $this->bot->buildChoicesForCard($state, 1013, 1));
+    }
+
+    public function testCondescensionKeepsAValuableCardAndStaysBareWithAnEmptyHand(): void
+    {
+        // Apathy (4) is worth more to the opponent and to the bot than the three points are.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1013, [2 => [55]], [], [55]), 1013, 1));
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1013, [2 => [55]]), 1013, 1));
+    }
+
+    public function testCondescensionsGiftResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1013, [2 => [55]], [], [7]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1013, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1013, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertSame(6, $state->valueOf(1013));
+        self::assertContains(7, $state->hand(3));
+    }
+
+    public function testFascinationGivesAWorthlessBlueOrBlackCardAndNothingElse(): void
+    {
+        // A 0-point blue card is the gift; the white 0-point card is the wrong color, so it stays.
+        $state = $this->removalState(1015, [2 => [55]], [], [1014, 1016]);
+        self::assertSame(['give_card_id' => 1016, 'recipient_player_id' => 3], $this->bot->buildChoicesForCard($state, 1015, 1));
+
+        // Only a white card in hand: nothing legal to reveal.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1015, [2 => [55]], [], [1014]), 1015, 1));
+        // A valuable black card (Apathy, 4) isn't worth giving an opponent.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1015, [2 => [55]], [], [55]), 1015, 1));
+    }
+
+    public function testFascinationsGiftResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1015, [2 => [55]], [], [1016]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1015, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1015, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertSame(7, $state->valueOf(1015));
+        self::assertContains(1016, $state->hand(3));
+    }
+
+    public function testFaithDiscardsAWeakGreenOrBlueCardToSuppressTheStrongestOpponentMood(): void
+    {
+        // A worthless blue card (0) pays for suppressing Betrayal (6) over Apathy (4).
+        $state = $this->removalState(12, [2 => [55, 56]], [], [1016]);
+        self::assertSame(['discard_card_id' => 1016, 'target_mood_id' => 56], $this->bot->buildChoicesForCard($state, 12, 1));
+    }
+
+    public function testFaithStaysBareWhenTheCostBeatsTheGainOrFeedsAnOpponent(): void
+    {
+        // No green or blue card to discard.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(12, [2 => [56]], [], [1014]), 12, 1));
+        // Avoidance (blue, 3) is the only card to discard and Dignity (3) the only target: 3 doesn't beat 3 + 1.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(12, [2 => [8]], [], [29]), 12, 1));
+        // An opponent's Opportunism would take the discarded card.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(12, [2 => [56, 1017]], [], [1016]), 12, 1));
+    }
+
+    public function testFaithsSuppressionResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(12, [2 => [55, 56]], [], [1016]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 12, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 12, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertSame(0, $state->valueOf(56));
+        self::assertContains(1016, $state->discardPile());
+    }
+
+    public function testShameDiscardsTheCardWhoseColorSuppressesTheMostOfTheOpponentsBoard(): void
+    {
+        // Bashfulness (blue, 6) is the opponent's; the blue 0-point card pays for suppressing it. The white 0-point card would suppress nothing.
+        $state = $this->removalState(25, [2 => [30]], [], [1014, 1016]);
+        self::assertSame(['discard_card_id' => 1016], $this->bot->buildChoicesForCard($state, 25, 1));
+    }
+
+    public function testShameStaysBareWhenItWouldHurtTheBotMoreOrFeedAnOpponent(): void
+    {
+        // The bot's own blue Bashfulness (6) would be suppressed along with the opponent's Avoidance (3).
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(25, [1 => [30], 2 => [29]], [], [1016]), 25, 1));
+        // An opponent's Opportunism would take the discarded card.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(25, [2 => [30, 1017]], [], [1016]), 25, 1));
+        // Nothing in hand.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(25, [2 => [30]]), 25, 1));
+    }
+
+    public function testShamesSuppressionResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(25, [2 => [30]], [], [1016]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 25, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 25, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertSame(0, $state->valueOf(30));
+        self::assertContains(1016, $state->discardPile());
+    }
+
+    public function testVindictivenessTradesACheapMoodForAnOpponentsValidation(): void
+    {
+        // Dignity (3) goes so that Validation (1), which keeps handing its owner extra plays, can follow it.
+        $state = $this->removalState(1018, [1 => [8], 2 => [26]]);
+        self::assertSame(['discard_mood_id' => 8, 'target_mood_id' => 26], $this->bot->buildChoicesForCard($state, 1018, 1));
+    }
+
+    public function testVindictivenessStaysBareWithoutASnowballTargetOrWhenItWouldCostTheLead(): void
+    {
+        // Nothing but plain moods: in points the trade can only lose.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1018, [1 => [8], 2 => [7]]), 1018, 1));
+        // The bot leads by 2 (Vindictiveness 2 + Dignity 3 + Apathy 4 against Validation 1 + Betrayal 6); either sacrifice would end that lead.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1018, [1 => [8, 55], 2 => [26, 56]]), 1018, 1));
+        // The only own mood is worth more than the sacrifice cap.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1018, [1 => [56], 2 => [26]]), 1018, 1));
+    }
+
+    public function testVindictivenessResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1018, [1 => [8], 2 => [26]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1018, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1018, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertFalse($state->isInPlay(26));
+        self::assertFalse($state->isInPlay(8));
+    }
+
+    public function testHostilitySacrificesACheapBlackMoodToClearTwoSmallOpposingMoods(): void
+    {
+        // Ambition (black, 2) pays for Dignity (3) and Kindness (2) going to the pile.
+        $state = $this->removalState(94, [1 => [53], 2 => [8], 3 => [17]]);
+        $choices = $this->bot->buildChoicesForCard($state, 94, 1);
+        self::assertSame(53, $choices['discard_mood_id']);
+        self::assertEqualsCanonicalizing([8, 17], $choices['target_mood_ids']);
+    }
+
+    public function testHostilityStaysBareWithoutAnAffordableSacrificeOrWorthwhileTargets(): void
+    {
+        // No black or green mood of its own to give up.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(94, [1 => [8], 2 => [17]]), 94, 1));
+        // Apathy (black, 4) would cost more than the lone 1-point mood it clears.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(94, [1 => [55], 2 => [7]]), 94, 1));
+        // Only moods above 3 to aim at.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(94, [1 => [53], 2 => [56]]), 94, 1));
+    }
+
+    public function testHostilityResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(94, [1 => [53], 2 => [8], 3 => [17]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 94, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 94, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        foreach ([53, 8, 17] as $gone) {
+            self::assertFalse($state->isInPlay($gone));
+        }
+    }
+
+    public function testWorryReturnsACheapMoodToHandToSendSmallOpposingMoodsHome(): void
+    {
+        // Charity (white, 1) goes back to hand with Dignity (3) and Kindness (2): the lead rises by 2, the bounce threshold.
+        $state = $this->removalState(52, [1 => [3], 2 => [8], 3 => [17]]);
+        $choices = $this->bot->buildChoicesForCard($state, 52, 1);
+        self::assertSame(3, $choices['hand_mood_id']);
+        self::assertEqualsCanonicalizing([8, 17], $choices['target_mood_ids']);
+    }
+
+    public function testWorryStaysBareWithoutAWhiteOrBlackMoodOrASufficientGain(): void
+    {
+        // No white or black mood of its own to return.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(52, [1 => [30], 2 => [8]]), 52, 1));
+        // Apathy (black, 4) coming home costs more than the lone Dignity (3) leaving the opponent.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(52, [1 => [55], 2 => [8]]), 52, 1));
+        // The opponent's mood is above 3.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(52, [1 => [3], 2 => [56]]), 52, 1));
+    }
+
+    public function testWorryResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(52, [1 => [3], 2 => [8], 3 => [17]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 52, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 52, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertContains(3, $state->hand(1));
+        self::assertContains(8, $state->hand(2));
+        self::assertContains(17, $state->hand(3));
+    }
+
+    public function testPettinessTakesTheClosestRivalsTurnToProtectANarrowLead(): void
+    {
+        // The bot leads 8 to 4 (a lead of 4); player 2 has a card to play, player 3 has none. A junk white card pays.
+        $state = $this->removalState(1019, [1 => [56], 2 => [55]], [], [1014], [], [2 => [3]]);
+        self::assertSame(['hand_card_id' => 1014, 'target_player_id' => 2], $this->bot->buildChoicesForCard($state, 1019, 1));
+    }
+
+    public function testPettinessStaysBareWhenTheLeadIsSafeLostOrThereIsNothingToStopOrNothingCheapToPay(): void
+    {
+        // A lead of 10 doesn't need protecting.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1019, [1 => [56, 30], 2 => [55]], [], [1014], [], [2 => [3]]), 1019, 1));
+        // The bot is behind.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1019, [1 => [53], 2 => [56]], [], [1014], [], [2 => [3]]), 1019, 1));
+        // The rival has no cards in hand, so there is no turn to take.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1019, [1 => [56], 2 => [55]], [], [1014]), 1019, 1));
+        // The only card to discard is Apathy (4).
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1019, [1 => [56], 2 => [55]], [], [55], [], [2 => [3]]), 1019, 1));
+    }
+
+    public function testPettinessResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1019, [1 => [56], 2 => [55]], [], [1014], [], [2 => [3]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1019, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1019, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertContains(1014, $state->discardPile());
+    }
+
+    public function testInstabilityNamesTheOpponentsTwoBestMoodsWhenTheSwapIsAGuaranteedGain(): void
+    {
+        // Whichever of Betrayal and Bashfulness (both 6) the opponent gives up, the bot hands back its 1-point Courage and comes out ahead.
+        $state = $this->removalState(96, [1 => [7], 2 => [56, 30]]);
+        $choices = $this->bot->buildChoicesForCard($state, 96, 1);
+        self::assertEqualsCanonicalizing([56, 30], $choices['candidate_mood_ids']);
+    }
+
+    public function testInstabilityStaysBareWhenTheWorstCaseIsNoBetter(): void
+    {
+        // The opponent would give up a 1-point mood for the bot's 3-point Dignity.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(96, [1 => [8], 2 => [7, 3]]), 96, 1));
+        // An opponent needs two moods to choose between.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(96, [1 => [7], 2 => [56]]), 96, 1));
+    }
+
+    public function testInstabilitysChoiceIsAcceptedByTheRealGame(): void
+    {
+        $state = $this->removalState(96, [1 => [7], 2 => [56, 30]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 96, 1);
+
+        $result = (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 96, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertNotEmpty($result->pendingDecisions, 'the opponent is asked which of the two moods to give up');
+    }
+
+    public function testShrewdnessSwapsACheapMoodForAnOpponentsValidation(): void
+    {
+        // Courage (1) for Validation (1) costs nothing in points, and Validation keeps handing its owner extra plays.
+        $state = $this->removalState(1020, [1 => [7, 8], 2 => [26]]);
+        self::assertSame(['own_mood_id' => 7, 'opponent_mood_id' => 26], $this->bot->buildChoicesForCard($state, 1020, 1));
+    }
+
+    public function testShrewdnessStaysBareWithoutASnowballTargetOrWhenTheSwapCostsTooMuch(): void
+    {
+        // A plain 4-point mood for the bot's 6: the bot only loses.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1020, [1 => [56], 2 => [55]]), 1020, 1));
+        // Giving up Betrayal (6) for a 1-point Validation is too steep.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1020, [1 => [56], 2 => [26]]), 1020, 1));
+    }
+
+    public function testShrewdnessSwapResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1020, [1 => [7, 8], 2 => [26]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1020, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1020, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertSame(1, $state->ownerOf(26));
+        self::assertSame(2, $state->ownerOf(7));
+    }
+
+    public function testArroganceTargetsTheOpponentWhoseWorstGiveUpStillHelps(): void
+    {
+        // Player 2 has a white Courage (1) and a blue Bashfulness (6): they'd give up Courage, and even that is a gain. Player 3 has only a black mood.
+        $state = $this->removalState(82, [2 => [7, 30], 3 => [56]]);
+        self::assertSame(['opponent_player_id' => 2], $this->bot->buildChoicesForCard($state, 82, 1));
+    }
+
+    public function testArroganceStaysBareWithoutAWhiteOrBlueMoodWorthTaking(): void
+    {
+        // Only black moods.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(82, [2 => [56]]), 82, 1));
+        // The only white mood is worth nothing.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(82, [2 => [1014]]), 82, 1));
+    }
+
+    public function testArrogancesChoiceIsAcceptedByTheRealGame(): void
+    {
+        $state = $this->removalState(82, [2 => [7, 30]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 82, 1);
+
+        $result = (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 82, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertNotEmpty($result->pendingDecisions, 'the opponent is asked which of their moods to give up');
+    }
+
+    public function testCorruptionCyclesTheTwoBestPileCardsWhenDoublingIsNotWorthTheRisk(): void
+    {
+        $state = $this->removalState(60, [1 => [7], 2 => [55]], [3, 56, 55]);
+        self::assertSame(['mode' => 'cycle', 'discard_card_ids' => [56, 55]], $this->bot->buildChoicesForCard($state, 60, 1));
+
+        // Nothing in the pile, nothing to cycle.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(60, [1 => [7], 2 => [55]]), 60, 1));
+        // A mood that grows with the pile (Sadness) keeps the pile as it is.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(60, [1 => [74], 2 => [55]], [56]), 60, 1));
+    }
+
+    public function testCorruptionDoublesTheWinOnlyWhenTheBotIsClearlyWinningOrItDecidesTheGame(): void
+    {
+        // A lead of 14 with no rival near the game.
+        $state = $this->removalState(60, [1 => [56, 30], 2 => [55]], [3]);
+        self::assertSame(['mode' => 'double_win'], $this->bot->buildChoicesForCard($state, 60, 1));
+
+        // Two round wins from the game and ahead by 4: the double decides it.
+        $state = $this->removalState(60, [1 => [56], 2 => [55]], [3]);
+        self::assertSame(['mode' => 'double_win'], $this->bot->buildChoicesForCard($state, 60, 1, 2, [2 => 3]));
+
+        // Same, but player 2 is also two wins from the game and the lead is only 2: too risky, so it cycles.
+        $state = $this->removalState(60, [1 => [55], 2 => [5]], [3]);
+        self::assertSame(['mode' => 'cycle', 'discard_card_ids' => [3]], $this->bot->buildChoicesForCard($state, 60, 1, 2, [2 => 2]));
+    }
+
+    public function testCorruptionsChoicesResolveInTheRealGame(): void
+    {
+        $registry = DefaultEffectRegistry::build();
+        $state = $this->removalState(60, [1 => [7], 2 => [55]], [56, 55], [], [3, 5]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 60, 1);
+        (new \MoodSwings\Rules\MoodPlayService($registry))->playMood($state, 1, 60, new \MoodSwings\Rules\PlayerChoices($choices));
+        self::assertCount(2, $state->hand(1), 'two cards are drawn for the two cycled');
+
+        $state = $this->removalState(60, [1 => [56, 30], 2 => [55]], [3]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 60, 1);
+        (new \MoodSwings\Rules\MoodPlayService($registry))->playMood($state, 1, 60, new \MoodSwings\Rules\PlayerChoices($choices));
+        self::assertTrue($state->awardsExtraWinThisRound());
+    }
+
+    public function testOptimismRepeatsTheMoodWhoseEffectWillDoTheMost(): void
+    {
+        // Courage's repeat would discard the opponent's Betrayal (6); Apathy has no after-playing effect.
+        $state = $this->removalState(1021, [1 => [7, 55], 2 => [56]]);
+        self::assertSame(['target_mood_id' => 7], $this->bot->buildChoicesForCard($state, 1021, 1));
+    }
+
+    public function testOptimismStaysBareWhenNoRepeatWouldDoAnything(): void
+    {
+        // Nothing of the bot's own has an after-playing effect.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1021, [1 => [55], 2 => [56]]), 1021, 1));
+        // Courage has nothing to hit (Apathy is only 4).
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1021, [1 => [7], 2 => [55]]), 1021, 1));
+    }
+
+    public function testTheBotAnswersTheRepeatedEffectsOwnChoicesInTheRealGame(): void
+    {
+        $state = $this->removalState(1021, [1 => [7], 2 => [56]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1021, 1);
+        $plays = new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build());
+        $result = $plays->playMood($state, 1, 1021, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        $request = $result->pendingDecisions[0];
+        self::assertSame('delegated_effect_choices', $request->decisionType);
+        $answer = $this->bot->chooseDecisionAnswer($state, $request->field, 1, $request->decisionType, 1021, [], $result->invocationChoices->toArray());
+        self::assertSame(['delegate_choices' => ['target_mood_ids' => [56]]], $answer);
+
+        $plays->resolvePendingDecisions($state, 1021, 1, new \MoodSwings\Rules\PlayerChoices($choices), $result->invocationChoices, $result->invocationSeq, ['delegate_choices' => new \MoodSwings\Rules\PlayerChoices($answer)], $result->duplicityEligibleSources);
+        self::assertFalse($state->isInPlay(56), 'the repeated Courage discarded the opponent\'s Betrayal');
+    }
+
+    public function testAdmirationReplaysTheDiscardPileMoodWhoseEffectWillDoTheMost(): void
+    {
+        // Courage in the pile would discard the opponent's Betrayal (6); Apathy has no after-playing effect.
+        $state = $this->removalState(1022, [2 => [56]], [55, 7]);
+        self::assertSame(['target_discard_card_id' => 7], $this->bot->buildChoicesForCard($state, 1022, 1));
+
+        // Nothing worth replaying: only Apathy in the pile, or Courage with nothing to hit.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1022, [2 => [56]], [55]), 1022, 1));
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1022, [2 => [55]], [7]), 1022, 1));
+    }
+
+    public function testTheBotAnswersAdmirationsReplayedEffectAsTheAdmirationItself(): void
+    {
+        $state = $this->removalState(1022, [2 => [56]], [7]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1022, 1);
+        $plays = new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build());
+        $result = $plays->playMood($state, 1, 1022, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        $request = $result->pendingDecisions[0];
+        $answer = $this->bot->chooseDecisionAnswer($state, $request->field, 1, $request->decisionType, 1022, [], $result->invocationChoices->toArray());
+        self::assertSame(['delegate_choices' => ['target_mood_ids' => [56]]], $answer);
+
+        $plays->resolvePendingDecisions($state, 1022, 1, new \MoodSwings\Rules\PlayerChoices($choices), $result->invocationChoices, $result->invocationSeq, ['delegate_choices' => new \MoodSwings\Rules\PlayerChoices($answer)], $result->duplicityEligibleSources);
+        self::assertFalse($state->isInPlay(56));
+        self::assertContains(7, $state->discardPile(), 'the replayed mood stays in the pile');
+    }
+
+    public function testRapportCyclesTheWorstCardOnlyWhenThatCardIsWeak(): void
+    {
+        // Apathy (draft tier 1) is the weak card to put on the bottom; Compulsion (10) stays.
+        $state = $this->removalState(1023, [2 => [56]], [], [55, 86]);
+        self::assertSame(['hand_card_id' => 55], $this->bot->buildChoicesForCard($state, 1023, 1));
+
+        // Nothing weak enough to be worth swapping for a random card: Compulsion (10) and Intimidation (40).
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1023, [2 => [56]], [], [86, 67]), 1023, 1));
+        // Nothing else in hand to cycle.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1023, [2 => [56]]), 1023, 1));
+    }
+
+    public function testRapportsSecondLootIsTakenForAWeakCardAndDeclinedOtherwise(): void
+    {
+        $field = ['key' => 'second_hand_card_id', 'type' => 'hand_card', 'required' => false];
+        // By the time the second loot is asked, Rapport itself is already in play.
+        $weak = $this->removalState(1023, [2 => [56]], [], [55, 86]);
+        $weak->moveHandToInPlay(1, 1023);
+        self::assertSame(['second_hand_card_id' => 55], $this->bot->chooseDecisionAnswer($weak, $field, 1, 'rapport_second_loot', 1023));
+
+        $strong = $this->removalState(1023, [2 => [56]], [], [86, 67]);
+        $strong->moveHandToInPlay(1, 1023);
+        self::assertSame([], $this->bot->chooseDecisionAnswer($strong, $field, 1, 'rapport_second_loot', 1023));
+    }
+
+    public function testRapportsTwoLootsResolveInTheRealGame(): void
+    {
+        // Rapport is white and Betrayal black: two white/black moods, so the second loot is offered.
+        $state = $this->removalState(1023, [2 => [56]], [], [55, 86], [3, 5]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1023, 1);
+        $plays = new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build());
+        $result = $plays->playMood($state, 1, 1023, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        $request = $result->pendingDecisions[0];
+        self::assertSame('rapport_second_loot', $request->decisionType);
+        $answer = $this->bot->chooseDecisionAnswer($state, $request->field, 1, $request->decisionType, 1023);
+        self::assertNotSame([], $answer, 'the card just drawn (Charity, draft tier 1) is weak enough to cycle too');
+
+        $plays->resolvePendingDecisions($state, 1023, 1, new \MoodSwings\Rules\PlayerChoices($choices), $result->invocationChoices, $result->invocationSeq, ['second_hand_card_id' => new \MoodSwings\Rules\PlayerChoices($answer)], $result->duplicityEligibleSources);
+        self::assertCount(2, $state->hand(1), 'two cards put on the bottom, two drawn: the hand is the size it was');
+    }
+
+    public function testDoubtRevealsWeakCardsWhoseColorNoKeptCardShares(): void
+    {
+        // Apathy (black, weak) shares its color with the kept Intimidation, so it stays; Complacency (white, weak) goes. Compulsion (red) stays too.
+        $state = $this->removalState(1024, [2 => [56]], [], [55, 5, 86, 67]);
+        self::assertSame(['reveal_card_ids' => [5]], $this->bot->buildChoicesForCard($state, 1024, 1));
+    }
+
+    public function testDoubtBansAtMostTwoColorsAndLeavesStrongHandsAlone(): void
+    {
+        // Three weak colors, nothing kept: the two white cards (Chivalry, Dignity) and the weakest of the others (Avoidance, blue).
+        $state = $this->removalState(1024, [2 => [56]], [], [55, 4, 8, 29]);
+        $choices = $this->bot->buildChoicesForCard($state, 1024, 1);
+        self::assertEqualsCanonicalizing([4, 8, 29], $choices['reveal_card_ids']);
+
+        // Only strong cards in hand.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1024, [2 => [56]], [], [86, 67]), 1024, 1));
+    }
+
+    public function testDoubtsRevealResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1024, [2 => [56]], [], [55, 5, 86, 67], [3, 7]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1024, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1024, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertNotContains(5, $state->hand(1));
+        self::assertSame(['white'], $state->effectState(1024, 'bannedColors'));
+        self::assertCount(4, $state->hand(1), 'one card went to the bottom and one was drawn');
+    }
+
+    public function testYearningTradesTheWorstHandCardForABetterPileCard(): void
+    {
+        // Yearning (blue) and the opponent's Fury (red) make the two blue/red moods. Courage goes; Intimidation (tier 40) comes back.
+        $state = $this->removalState(1025, [2 => [91]], [67, 55], [7]);
+        self::assertSame(['hand_card_id' => 7, 'discard_card_id' => 67], $this->bot->buildChoicesForCard($state, 1025, 1));
+    }
+
+    public function testYearningStaysBareWithoutTheConditionAnImprovementOrAnEmptyPile(): void
+    {
+        // Only Yearning itself is blue or red.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1025, [2 => [56]], [67], [7]), 1025, 1));
+        // The best pile card (Apathy) is no better than the worst hand card (Compulsion).
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1025, [2 => [91]], [55], [86]), 1025, 1));
+        // Empty pile.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1025, [2 => [91]], [], [7]), 1025, 1));
+        // An opponent's Opportunism would take the discarded card.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1025, [2 => [91, 1017]], [67], [7]), 1025, 1));
+    }
+
+    public function testYearningsTradeResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1025, [2 => [91]], [67, 55], [7]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1025, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1025, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertSame([67], $state->hand(1));
+        self::assertContains(7, $state->discardPile());
+    }
+
+    public function testEncouragementBoostsTheBotsOwnMoodWithTheBiggestDiceGain(): void
+    {
+        // Curiosity (3, dice 6) gains 3 and Dignity (3, dice 5) gains 2; the opponent's Chivalry (3, dice 5) is never a candidate.
+        $state = $this->removalState(1026, [1 => [8, 33], 2 => [4]]);
+        self::assertSame(['target_mood_id' => 33], $this->bot->buildChoicesForCard($state, 1026, 1));
+    }
+
+    public function testEncouragementStaysBareWithoutAnOwnMoodThatGainsFromDice(): void
+    {
+        // Apathy has no dice value; Patience (5, dice 1) wouldn't change; the only dice mood out there is the opponent's.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1026, [1 => [55, 21], 2 => [4]]), 1026, 1));
+    }
+
+    public function testEncouragementsBoostResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1026, [1 => [33]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1026, 1);
+        $before = $state->valueOf(33);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1026, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertSame(6, $state->valueOf(33));
+        self::assertLessThan(6, $before);
     }
 }

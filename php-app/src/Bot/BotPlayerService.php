@@ -745,10 +745,25 @@ final class BotPlayerService
      *     all.
      * @param array<int, int> $roundWinsNeededToWinGameByPlayerId game_player_id => round wins still needed (empty = unknown); only Instability's
      *     two decisions use it, to tell when the usual choice would lose the game
+     * @param array<string, mixed> $invocationChoices the paused play's stored choices; only the 'delegated_effect_choices' decision reads them (to learn
+     *     which mood Optimism/Admiration is repeating)
      * @return array<string, mixed>
      */
-    public function chooseDecisionAnswer(BoardState $state, array $field, int $botGamePlayerId, string $decisionType = '', ?int $sourceCardId = null, array $roundWinsNeededToWinGameByPlayerId = []): array
+    public function chooseDecisionAnswer(BoardState $state, array $field, int $botGamePlayerId, string $decisionType = '', ?int $sourceCardId = null, array $roundWinsNeededToWinGameByPlayerId = [], array $invocationChoices = []): array
     {
+        // Optimism/Admiration repeat another mood's after-playing effect and then ask for that effect's own choices ('delegated_effect_choices', a
+        // nested field the generic resolver never fills). The paused play's marked choices carry the effect being run ('__delegate_key') and the card
+        // it runs as ('__delegate_source': the repeated mood for Optimism, the Admiration itself for Admiration); the bot answers exactly as if that
+        // effect were being played fresh by that card, like duplicityRepeatChoices() does for Duplicity.
+        if ($decisionType === 'delegated_effect_choices' && isset($invocationChoices['__delegate_key'], $invocationChoices['__delegate_source'])) {
+            $repeatedCardId = (int) $invocationChoices['__delegate_source'];
+            if ($state->isInPlay($repeatedCardId)) {
+                $repeatChoices = $this->choicesForEffectKey((string) $invocationChoices['__delegate_key'], $state, $repeatedCardId, $botGamePlayerId, null, $roundWinsNeededToWinGameByPlayerId);
+
+                return $repeatChoices === null || $repeatChoices === [] ? [] : [$field['key'] => $repeatChoices];
+            }
+        }
+
         // chaos_010 (issue #405 follow-up) is Disillusionment's own chaos
         // analog -- identical printed text, identical field shape (an
         // optional 'mode' color pick) -- so it reuses the exact same
@@ -808,6 +823,22 @@ final class BotPlayerService
 
                 return $moodId === null ? [] : [$field['key'] => $moodId];
             }
+        }
+
+        // Rapport's second loot (offered once the first has resolved, with two or more white/black moods in play): the same cycle as the first, so the
+        // bot does it when the worst card now in its hand -- the one just drawn included -- is weak enough to be worth swapping for a random one
+        // (ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD), and puts that card on the bottom of the deck.
+        if ($decisionType === 'rapport_second_loot') {
+            $worst = null;
+            foreach ($state->hand($botGamePlayerId) as $handCardId) {
+                if ($worst === null || $this->draftPriorityRank($state, $handCardId) < $this->draftPriorityRank($state, $worst)) {
+                    $worst = $handCardId;
+                }
+            }
+
+            return $worst !== null && $state->catalogRow($state->effectiveCardId($worst))['draftPriorityScore'] <= self::ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD
+                ? [$field['key'] => $worst]
+                : [];
         }
 
         // Prudence's look at the top of the deck: the bot leaves both cards where they are and takes either order (its multi field
@@ -958,13 +989,7 @@ final class BotPlayerService
             return $candidateMoodIds[0];
         }
 
-        $predictedRoundWinsAwarded = 1;
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
-                $predictedRoundWinsAwarded = 2;
-                break;
-            }
-        }
+        $predictedRoundWinsAwarded = $this->predictedRoundWinsAwarded($state);
 
         $options = [];
         foreach ($candidateMoodIds as $moodId) {
@@ -1561,6 +1586,760 @@ final class BotPlayerService
     }
 
     /**
+     * Whether discarding a card from hand would feed an opponent: an opponent's Opportunism takes the discarded card, and an opponent's Schadenfreude turns
+     * on once any player has discarded from hand this round (so it only matters if the bot hasn't already).
+     */
+    private function discardingFromHandHelpsAnOpponent(BoardState $state, int $botGamePlayerId): bool
+    {
+        $alreadyDiscardedThisRound = in_array($botGamePlayerId, $state->playersWhoDiscardedFromHandThisRound(), true);
+        foreach ($state->activePlayerOrder() as $opponentId) {
+            if ($opponentId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $opponentId)) {
+                continue;
+            }
+            if ($state->playerHasMoodInPlay($opponentId, 'opportunism')
+                || (!$alreadyDiscardedThisRound && $state->playerHasMoodInPlay($opponentId, 'schadenfreude'))
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Instability ("you may choose two moods from the same opponent; they choose one and give it to you, then you give them one of your moods"): the
+     * optional pair was never named, so the swap never happened. The opponent decides which of the two moods they part with, so the bot judges a pair by
+     * its worse outcome: for each of the two it moves that mood to itself on a copy of the board, has the bot give back whatever its own
+     * instabilityMoodToGive() would (the same choice it makes when it answers this decision for real, Instability itself included), and scores the board by
+     * round lead (roundLead()); the pair is worth the smaller of the two scores. It names the pair of one opponent's moods with the best worst case, if
+     * that beats not using Instability by at least 1. Teammates are never asked, and an opponent needs at least two moods.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     * @return int[] the two mood ids, or [] to leave Instability alone
+     */
+    private function instabilityCandidateMoodIds(BoardState $state, int $instabilityCardId, int $botGamePlayerId, array $roundWinsNeededToWinGameByPlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $instabilityCardId, $botGamePlayerId);
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+        $best = [];
+        $bestGain = 0;
+        foreach ($sim->activePlayerOrder() as $opponentId) {
+            if ($opponentId === $botGamePlayerId || $sim->isTeammate($botGamePlayerId, $opponentId)) {
+                continue;
+            }
+
+            $moodIds = array_values(array_map(static fn ($mood) => $mood->cardId, $sim->moodsOwnedBy($opponentId)));
+            for ($i = 0; $i < count($moodIds); $i++) {
+                for ($j = $i + 1; $j < count($moodIds); $j++) {
+                    $worstLead = null;
+                    foreach ([$moodIds[$i], $moodIds[$j]] as $takenId) {
+                        $after = clone $sim;
+                        $after->giveInPlayToPlayer($takenId, $botGamePlayerId);
+                        $ownIds = array_map(static fn ($mood) => $mood->cardId, $after->moodsOwnedBy($botGamePlayerId));
+                        $givenId = $this->instabilityMoodToGive($after, $ownIds, $botGamePlayerId, $opponentId, $roundWinsNeededToWinGameByPlayerId);
+                        if ($givenId !== null) {
+                            $after->giveInPlayToPlayer($givenId, $opponentId);
+                        }
+                        $lead = $this->roundLead($after, $botGamePlayerId);
+                        $worstLead = $worstLead === null ? $lead : min($worstLead, $lead);
+                    }
+
+                    if ($worstLead !== null && $worstLead - $baseline > $bestGain) {
+                        $bestGain = $worstLead - $baseline;
+                        $best = [$moodIds[$i], $moodIds[$j]];
+                    }
+                }
+            }
+        }
+
+        return $best;
+    }
+
+    /**
+     * How many round wins the winner of the round in progress will be awarded: 2 when Corruption's double win is in force (the board's own marker, or the
+     * per-mood 'awardsExtraWin' tag the Chaos variant of it uses), otherwise 1.
+     */
+    private function predictedRoundWinsAwarded(BoardState $state): int
+    {
+        if ($state->awardsExtraWinThisRound()) {
+            return 2;
+        }
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
+                return 2;
+            }
+        }
+
+        return 1;
+    }
+
+    /**
+     * Yearning ("if there are two or more blue and/or red moods, you may discard a card from your hand; if you do, put a card from the discard pile into your
+     * hand"): the optional discard and pick-up were never made. With the condition met (checked with Yearning itself in play), the bot trades its worst
+     * hand card (the lowest draftPriorityRank()) for the best card already in the pile -- the discarded card isn't a candidate, taking it back would do
+     * nothing -- but only when the pile card is strictly better, so the hand improves and the best pile card is also kept from an opponent's recursion. It
+     * holds back when the discard would feed an opponent (discardingFromHandHelpsAnOpponent()), and with an empty pile or an empty hand.
+     *
+     * @return array{hand_card_id?: int, discard_card_id?: int}
+     */
+    private function yearningChoices(BoardState $state, int $yearningCardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $yearningCardId, $botGamePlayerId);
+        if (\MoodSwings\Rules\Effects\Custom\CustomEffectSupport::countMoodsOfColors($sim, ['blue', 'red']) < 2
+            || $this->discardingFromHandHelpsAnOpponent($sim, $botGamePlayerId)
+        ) {
+            return [];
+        }
+
+        $worstHandCardId = null;
+        foreach ($sim->hand($botGamePlayerId) as $handCardId) {
+            if ($worstHandCardId === null || $this->draftPriorityRank($sim, $handCardId) < $this->draftPriorityRank($sim, $worstHandCardId)) {
+                $worstHandCardId = $handCardId;
+            }
+        }
+        $bestPileCardId = null;
+        foreach ($sim->discardPile() as $pileCardId) {
+            if ($bestPileCardId === null || $this->draftPriorityRank($sim, $pileCardId) > $this->draftPriorityRank($sim, $bestPileCardId)) {
+                $bestPileCardId = $pileCardId;
+            }
+        }
+        if ($worstHandCardId === null || $bestPileCardId === null || $this->draftPriorityRank($sim, $bestPileCardId) <= $this->draftPriorityRank($sim, $worstHandCardId)) {
+            return [];
+        }
+
+        return ['hand_card_id' => $worstHandCardId, 'discard_card_id' => $bestPileCardId];
+    }
+
+    /**
+     * Encouragement ("you may choose a mood with dice in its lower left corner; while in play, the chosen mood uses the dice total or its top right
+     * number, whichever is higher, to determine its value"): the optional choice was never made. It can name anyone's mood, so the bot only considers its
+     * own and a teammate's -- never an opponent's, which would be a gift. For each such mood with a printed dice value it runs the card's own rule code on a
+     * copy of the board and scores by round lead (roundLead()); it names the mood that gains the most, if that is at least 1.
+     *
+     * @return array{target_mood_id?: int}
+     */
+    private function encouragementChoices(BoardState $state, int $encouragementCardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $encouragementCardId, $botGamePlayerId);
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+
+        $best = null;
+        $bestGain = 0;
+        foreach ($sim->moodsInPlay() as $mood) {
+            if ($mood->ownerId !== $botGamePlayerId && !$sim->isTeammate($botGamePlayerId, $mood->ownerId)) {
+                continue;
+            }
+            if ($sim->catalogRow($sim->effectiveCardId($mood->cardId))['altValue'] === null) {
+                continue;
+            }
+
+            $after = clone $sim;
+            try {
+                $this->simulationRegistry->for('encouragement')->afterPlaying($after, $encouragementCardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['target_mood_id' => $mood->cardId]));
+            } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+                continue;
+            }
+            $gain = $this->roundLead($after, $botGamePlayerId) - $baseline;
+            if ($gain > $bestGain) {
+                $bestGain = $gain;
+                $best = $mood->cardId;
+            }
+        }
+
+        return $best !== null ? ['target_mood_id' => $best] : [];
+    }
+
+    /** Doubt bans the colors it reveals for everyone: the bot reveals cards from at most this many colors, so its random draws and its own hand stay mostly playable. */
+    private const DOUBT_MAX_BANNED_COLORS = 2;
+
+    /**
+     * Doubt ("you may reveal any number of cards from your hand and put them on the bottom of the deck, then draw that many; during the next round, players
+     * can't play moods that share a color with any of the revealed cards"): the optional reveal was never made. It is Zeal's cycle for several cards at
+     * once, with the cost that every revealed color is banned for everyone next round -- the bot's own hand included. So the bot reveals only its weak
+     * cards (draft tier ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD or lower, the same bar Zeal and Rapport use), never one whose color a card it is keeping shares
+     * (that would ban a card it means to play), and only cards from the DOUBT_MAX_BANNED_COLORS colors it has the most weak cards in (then the weakest
+     * ones). With nothing weak to cycle it leaves Doubt bare.
+     *
+     * @return array{reveal_card_ids?: int[]}
+     */
+    private function doubtChoices(BoardState $state, int $doubtCardId, int $botGamePlayerId): array
+    {
+        $weakByColor = [];
+        $keptColors = [];
+        foreach ($state->hand($botGamePlayerId) as $handCardId) {
+            if ($handCardId === $doubtCardId) {
+                continue;
+            }
+            $color = $state->colorOf($handCardId);
+            if ($state->catalogRow($state->effectiveCardId($handCardId))['draftPriorityScore'] <= self::ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD) {
+                $weakByColor[$color][] = $handCardId;
+            } else {
+                $keptColors[$color] = true;
+            }
+        }
+        $weakByColor = array_diff_key($weakByColor, $keptColors);
+        if ($weakByColor === []) {
+            return [];
+        }
+
+        $rankOf = fn (array $cardIds): int => array_sum(array_map(fn (int $id): int => $this->draftPriorityRank($state, $id), $cardIds));
+        uasort($weakByColor, fn (array $a, array $b): int => [count($b), $rankOf($a)] <=> [count($a), $rankOf($b)]);
+
+        return ['reveal_card_ids' => array_merge(...array_values(array_slice($weakByColor, 0, self::DOUBT_MAX_BANNED_COLORS)))];
+    }
+
+    /** Effects whose repeat is worth having for the hand they take from or empty out, which the round lead can't show (Compulsion, Intimidation, Suspicion, Paranoia). */
+    private const HAND_PRESSURE_EFFECT_KEYS = ['compulsion', 'intimidation', 'suspicion', 'paranoia'];
+
+    /**
+     * How good running $effectKey's after-playing effect once more is for the bot, as card $sourceCardId, or null when it isn't worth considering: the bot
+     * works out what it would choose playing that effect fresh (choicesForEffectKey() -- an effect with fields and nothing worth choosing is skipped),
+     * then runs the effect with those choices on a copy of the board where it can (a plain effect: the round lead, roundLead(), against $baseline is the
+     * score) and otherwise values it by kind -- a repeat that hits the opponents' hands (HAND_PRESSURE_EFFECT_KEYS) counts 2, an extra-play grant counts 1
+     * when there is a card in hand to use it on, since those don't show in the lead. Used by Optimism and Admiration.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     */
+    private function repeatedEffectScore(string $effectKey, BoardState $sim, int $sourceCardId, int $botGamePlayerId, int $baseline, ?int $roundWinsNeededToWinGame, array $roundWinsNeededToWinGameByPlayerId): ?int
+    {
+        $repeatChoices = $this->choicesForEffectKey($effectKey, $sim, $sourceCardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
+        if ($repeatChoices === null || ($repeatChoices === [] && CardChoiceSchema::afterPlayingFields($effectKey) !== [])) {
+            return null;
+        }
+
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+        $score = 0;
+        $effect = $this->simulationRegistry->has($effectKey) ? $this->simulationRegistry->for($effectKey) : null;
+        if ($effect !== null && !($effect instanceof \MoodSwings\Rules\RequiresOpponentDecision) && !($effect instanceof \MoodSwings\Rules\DelegatesAfterPlaying)) {
+            $after = clone $sim;
+            try {
+                $effect->afterPlaying($after, $sourceCardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices($repeatChoices));
+                $score = $this->roundLead($after, $botGamePlayerId) - $baseline;
+            } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+                return null;
+            }
+        }
+        if (in_array($effectKey, self::HAND_PRESSURE_EFFECT_KEYS, true)) {
+            $score += 2;
+        }
+        if (in_array($effectKey, self::EXTRA_PLAY_GRANTING_EFFECT_KEYS, true) && $sim->hand($botGamePlayerId) !== []) {
+            $score += 1;
+        }
+
+        return $score;
+    }
+
+    /**
+     * Optimism ("you may choose one of your other moods; that mood's after-playing effect happens an additional time"): the optional choice was never made,
+     * and when the repeat's own choices came up the bot left them empty too. The bot scores each of its own other moods that has an after-playing effect
+     * with repeatedEffectScore() and names the best, if that is at least 1.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     * @return array{target_mood_id?: int}
+     */
+    private function optimismChoices(BoardState $state, int $optimismCardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame, array $roundWinsNeededToWinGameByPlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $optimismCardId, $botGamePlayerId);
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+
+        $best = null;
+        $bestScore = 0;
+        foreach ($sim->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $row = $sim->catalogRow($sim->effectiveCardId($mood->cardId));
+            if ($mood->cardId === $optimismCardId || !$row['hasAfterPlaying'] || $row['effectKey'] === 'optimism') {
+                continue;
+            }
+
+            $score = $this->repeatedEffectScore($row['effectKey'], $sim, $mood->cardId, $botGamePlayerId, $baseline, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
+            if ($score !== null && $score > $bestScore) {
+                $bestScore = $score;
+                $best = $mood->cardId;
+            }
+        }
+
+        return $best !== null ? ['target_mood_id' => $best] : [];
+    }
+
+    /**
+     * Admiration ("you may choose a mood in the discard pile; that mood's after-playing effect happens as though you had just played it"): the optional
+     * pile mood was never chosen. The bot scores each mood in the pile that has an after-playing effect (repeatedEffectScore(), run as the Admiration itself,
+     * which is how the effect resolves) and names the best, if that is at least 1.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     * @return array{target_discard_card_id?: int}
+     */
+    private function admirationChoices(BoardState $state, int $admirationCardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame, array $roundWinsNeededToWinGameByPlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $admirationCardId, $botGamePlayerId);
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+
+        $best = null;
+        $bestScore = 0;
+        foreach ($sim->discardPile() as $pileCardId) {
+            $row = $sim->catalogRow($pileCardId);
+            if (!$row['hasAfterPlaying'] || $row['effectKey'] === 'admiration') {
+                continue;
+            }
+
+            $score = $this->repeatedEffectScore($row['effectKey'], $sim, $admirationCardId, $botGamePlayerId, $baseline, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
+            if ($score !== null && $score > $bestScore) {
+                $bestScore = $score;
+                $best = $pileCardId;
+            }
+        }
+
+        return $best !== null ? ['target_discard_card_id' => $best] : [];
+    }
+
+    /** Corruption's double win is a gamble on winning the round; without a game-deciding reason the bot wants at least this lead before taking it. */
+    private const CORRUPTION_MIN_LEAD_FOR_DOUBLE_WIN = 5;
+
+    /** The lead the bot wants for a game-deciding double win when a rival is also within two round wins of the game, which makes losing the round costly. */
+    private const CORRUPTION_MIN_LEAD_WHEN_RIVAL_IS_CLOSE = 3;
+
+    /**
+     * Corruption ("you may choose one: put up to two cards from the discard pile on the bottom of the deck, then draw that many; or the winner of the
+     * current round wins two rounds instead of one"): neither option was ever chosen. Doubling is for a round the bot is winning: it takes it when its group
+     * is in the lead and the double would decide the game (it needs exactly two more round wins -- one more is already enough on its own), needing a lead
+     * of CORRUPTION_MIN_LEAD_WHEN_RIVAL_IS_CLOSE if a rival also needs two or fewer, or otherwise when the lead is at least
+     * CORRUPTION_MIN_LEAD_FOR_DOUBLE_WIN and no rival is that close to the game (a round the rival steals would be worth two to them). Round-win counts
+     * come from $roundWinsNeededToWinGame and $roundWinsNeededToWinGameByPlayerId (unknown means no game-deciding case and no rival danger). Everything
+     * else cycles: the bot puts the two best pile cards on the bottom of the deck (the same free draw as the loot cards, and it denies them to opponents),
+     * unless the pile is empty or a mood depends on its size (discardPileLootCardId()). Leaving it blank otherwise.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     * @return array{mode?: string, discard_card_ids?: int[]}
+     */
+    private function corruptionChoices(BoardState $state, int $corruptionCardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame, array $roundWinsNeededToWinGameByPlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $corruptionCardId, $botGamePlayerId);
+        $lead = $this->roundLead($sim, $botGamePlayerId);
+
+        $rivalIsClose = false;
+        [, $rivalTotals] = $this->projectedGroupTotals($sim, $botGamePlayerId);
+        foreach (array_keys($rivalTotals) as $groupKey) {
+            $needed = $roundWinsNeededToWinGameByPlayerId[$groupKey] ?? null;
+            if ($needed !== null && $needed <= 2) {
+                $rivalIsClose = true;
+            }
+        }
+
+        $decidesTheGame = $roundWinsNeededToWinGame === 2 && $lead >= ($rivalIsClose ? self::CORRUPTION_MIN_LEAD_WHEN_RIVAL_IS_CLOSE : 1);
+        if (!$state->awardsExtraWinThisRound() && ($decidesTheGame || (!$rivalIsClose && $lead >= self::CORRUPTION_MIN_LEAD_FOR_DOUBLE_WIN))) {
+            return ['mode' => 'double_win'];
+        }
+
+        $pile = $state->discardPile();
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            if (in_array($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'], self::DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS, true)) {
+                return [];
+            }
+        }
+        $pile = array_values(array_diff($pile, [$corruptionCardId]));
+        usort($pile, fn (int $a, int $b): int => $this->draftPriorityRank($state, $b) <=> $this->draftPriorityRank($state, $a));
+
+        return $pile === [] ? [] : ['mode' => 'cycle', 'discard_card_ids' => array_slice($pile, 0, 2)];
+    }
+
+    /**
+     * Arrogance ("you may choose an opponent; they choose one of their white or blue moods and it becomes yours, until this mood is no longer in play"):
+     * the optional opponent was never named, so the steal never happened -- and it costs the bot nothing. The opponent decides which mood they part with,
+     * so the bot judges each opponent by their best answer: it moves each of their white/blue moods to the bot on a copy of the board, scores the board by
+     * round lead (roundLead()), and takes the worst of those scores. It names the opponent with the best worst case, if that beats not using Arrogance by at
+     * least 1. Teammates are never asked, and an opponent with no white or blue mood is skipped (nothing would happen).
+     */
+    private function arroganceTargetPlayerId(BoardState $state, int $arroganceCardId, int $botGamePlayerId): ?int
+    {
+        $sim = $this->withCardInPlay($state, $arroganceCardId, $botGamePlayerId);
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+        $best = null;
+        $bestGain = 0;
+        foreach ($sim->activePlayerOrder() as $opponentId) {
+            if ($opponentId === $botGamePlayerId || $sim->isTeammate($botGamePlayerId, $opponentId)) {
+                continue;
+            }
+
+            $worstLead = null;
+            foreach ($sim->moodsOwnedBy($opponentId) as $mood) {
+                if (!in_array($sim->colorOf($mood->cardId), ['white', 'blue'], true)) {
+                    continue;
+                }
+                $after = clone $sim;
+                $after->giveInPlayToPlayer($mood->cardId, $botGamePlayerId);
+                $lead = $this->roundLead($after, $botGamePlayerId);
+                $worstLead = $worstLead === null ? $lead : min($worstLead, $lead);
+            }
+
+            if ($worstLead !== null && $worstLead - $baseline > $bestGain) {
+                $bestGain = $worstLead - $baseline;
+                $best = $opponentId;
+            }
+        }
+
+        return $best;
+    }
+
+    /** The most points per swap the bot gives up to take an opponent's snowballing mood with Shrewdness (the own mood's value minus the one it receives). */
+    private const SHREWDNESS_MAX_SNOWBALL_PREMIUM = 2;
+
+    /**
+     * Shrewdness ("you may choose one of your other moods and one of an opponent's moods with a value less than or equal to that mood's; if you do, you and
+     * that opponent swap them"): the optional pair was never named. Because the mood it takes can't be worth more than the one it gives, a swap can't win
+     * points outright (each point of difference costs the bot's round lead two: one lost, one handed over) -- unless values depend on who owns a mood. So the
+     * bot tries every pair of one of its own other moods and one opponent mood on a copy of the board, with the card's own rule code, and uses a pair when
+     * the round lead (roundLead()) rises by at least 1, or the mood it takes is a snowballing one (SNOWBALL_EFFECT_KEYS: Validation, Hope, Grace) and the
+     * mood it gives is worth no more than SHREWDNESS_MAX_SNOWBALL_PREMIUM more -- unless that would turn a round lead the bot has into none. It prefers the
+     * biggest gain, then a snowball target, then the cheapest swap. It never gives away one of its own lasting-value moods (PROTECTED_EFFECT_KEYS, Hope,
+     * Grace, Stubbornness, Melancholy), since the opponent would get to use it.
+     *
+     * @return array{own_mood_id?: int, opponent_mood_id?: int}
+     */
+    private function shrewdnessChoices(BoardState $state, int $cardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $cardId, $botGamePlayerId);
+        $untouchable = [...self::PROTECTED_EFFECT_KEYS, 'hope', 'grace', 'stubbornness', 'melancholy'];
+        $own = [];
+        foreach ($sim->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $effectKey = $sim->catalogRow($sim->effectiveCardId($mood->cardId))['effectKey'];
+            if ($mood->cardId !== $cardId && !in_array($effectKey, $untouchable, true)) {
+                $own[] = $mood->cardId;
+            }
+        }
+        $targets = $this->nonTeammateOpponentMoodIds($sim, $botGamePlayerId);
+        if ($own === [] || $targets === []) {
+            return [];
+        }
+
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+        $best = null;
+        foreach ($own as $ownId) {
+            foreach ($targets as $targetId) {
+                if ($sim->valueOf($targetId) > $sim->valueOf($ownId)) {
+                    continue;
+                }
+
+                $after = clone $sim;
+                try {
+                    $this->simulationRegistry->for('shrewdness')->afterPlaying($after, $cardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['own_mood_id' => $ownId, 'opponent_mood_id' => $targetId]));
+                } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+                    continue;
+                }
+
+                $afterLead = $this->roundLead($after, $botGamePlayerId);
+                $gain = $afterLead - $baseline;
+                $premium = $sim->valueOf($ownId) - $sim->valueOf($targetId);
+                $isSnowball = in_array($sim->catalogRow($sim->effectiveCardId($targetId))['effectKey'], self::SNOWBALL_EFFECT_KEYS, true);
+                $worthwhileSnowball = $isSnowball
+                    && $premium <= self::SHREWDNESS_MAX_SNOWBALL_PREMIUM
+                    && !($baseline > 0 && $afterLead <= 0);
+                if ($gain < 1 && !$worthwhileSnowball) {
+                    continue;
+                }
+
+                $candidate = ['gain' => $gain, 'snowball' => $isSnowball, 'cost' => $premium, 'own' => $ownId, 'target' => $targetId];
+                if ($best === null
+                    || [$candidate['gain'], $candidate['snowball'], -$candidate['cost']] > [$best['gain'], $best['snowball'], -$best['cost']]
+                ) {
+                    $best = $candidate;
+                }
+            }
+        }
+
+        return $best === null ? [] : ['own_mood_id' => $best['own'], 'opponent_mood_id' => $best['target']];
+    }
+
+    /** Pettiness is for protecting a lead a single play could close: the bot's lead has to be no more than this. */
+    private const PETTINESS_MAX_LEAD_TO_PROTECT = 4;
+
+    /** The most a card can be printed at for Pettiness to discard it -- a junk card, so the lost turn is the only real price. */
+    private const PETTINESS_MAX_DISCARD_VALUE = 1;
+
+    /**
+     * Pettiness ("you may discard a card from your hand; if you do, choose a player; that player can't play moods during their next turn"): the optional
+     * discard and player were never chosen. Taking a rival's turn only matters when that turn could change the round, and the bot has no way to see what a
+     * rival holds, so it applies a conservative rule: it uses Pettiness to protect a narrow lead. When the bot's group leads the round by at least 1 and
+     * no more than PETTINESS_MAX_LEAD_TO_PROTECT (roundLead(), Pettiness itself in play), it names the rival with the most points this round who still has
+     * cards in hand (an empty hand can't play anyway) and pays with the card it would miss least -- only if that is printed at no more than
+     * PETTINESS_MAX_DISCARD_VALUE and the discard doesn't feed an opponent (discardingFromHandHelpsAnOpponent()). Otherwise it stays blank.
+     *
+     * @return array{hand_card_id?: int, target_player_id?: int}
+     */
+    private function pettinessChoices(BoardState $state, int $pettinessCardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $pettinessCardId, $botGamePlayerId);
+        $lead = $this->roundLead($sim, $botGamePlayerId);
+        if ($lead < 1 || $lead > self::PETTINESS_MAX_LEAD_TO_PROTECT || $this->discardingFromHandHelpsAnOpponent($sim, $botGamePlayerId)) {
+            return [];
+        }
+
+        $discardCardId = null;
+        foreach ($sim->hand($botGamePlayerId) as $handCardId) {
+            if ($discardCardId === null || $this->draftPriorityRank($sim, $handCardId) < $this->draftPriorityRank($sim, $discardCardId)) {
+                $discardCardId = $handCardId;
+            }
+        }
+        if ($discardCardId === null || $this->baseValue($sim, $discardCardId) > self::PETTINESS_MAX_DISCARD_VALUE) {
+            return [];
+        }
+
+        $scores = (new RoundScorer())->score($sim);
+        $targetId = null;
+        foreach ($sim->activePlayerOrder() as $playerId) {
+            if ($playerId === $botGamePlayerId || $sim->isTeammate($botGamePlayerId, $playerId) || $sim->hand($playerId) === []) {
+                continue;
+            }
+            if ($targetId === null || ($scores[$playerId] ?? 0) > ($scores[$targetId] ?? 0)) {
+                $targetId = $playerId;
+            }
+        }
+
+        return $targetId !== null ? ['hand_card_id' => $discardCardId, 'target_player_id' => $targetId] : [];
+    }
+
+    /**
+     * Hostility ("you may put one of your black or green moods into the discard pile; if you do, put up to two moods, each with a value of 3 or less,
+     * into the discard pile") and Worry (the same with a white or black mood returned to hand, and two moods valued 3 or less returned to their players'
+     * hands): both parts were left blank. See sacrificeAndSweepChoices() for how the bot decides; Hostility needs a round-lead gain of 1, Worry's bounce
+     * MASS_BOUNCE_MIN_LEAD_GAIN, since a returned mood can be played again.
+     *
+     * @return array<string, mixed>
+     */
+    private function hostilityChoices(BoardState $state, int $hostilityCardId, int $botGamePlayerId): array
+    {
+        return $this->sacrificeAndSweepChoices('hostility', ['black', 'green'], 'discard_mood_id', 1, $state, $hostilityCardId, $botGamePlayerId);
+    }
+
+    /**
+     * The shared shape of Hostility and Worry: one of the bot's own moods of $colors goes ($sacrificeField), and up to two moods worth 3 or less follow
+     * ('target_mood_ids'). For each own mood it can spare (never the lasting-value ones: PROTECTED_EFFECT_KEYS, Hope, Grace, Stubbornness, Melancholy)
+     * it works out the two best opponent moods worth 3 or less once that mood has left -- a snowballing one first (SNOWBALL_EFFECT_KEYS), then by value --
+     * and runs the card's own rule code on a copy of the board. It takes the sacrifice with the biggest round-lead gain (roundLead()), if that gain is at
+     * least $minGain. It only ever removes opponents' moods, never its own or a teammate's.
+     *
+     * @param string[] $colors the colors the sacrificed mood may have
+     * @return array<string, mixed>
+     */
+    private function sacrificeAndSweepChoices(string $effectKey, array $colors, string $sacrificeField, int $minGain, BoardState $state, int $cardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $cardId, $botGamePlayerId);
+        $untouchable = [...self::PROTECTED_EFFECT_KEYS, 'hope', 'grace', 'stubbornness', 'melancholy'];
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+        $best = [];
+        $bestGain = $minGain - 1;
+        foreach ($sim->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $moodEffectKey = $sim->catalogRow($sim->effectiveCardId($mood->cardId))['effectKey'];
+            if ($mood->cardId === $cardId && $effectKey === 'worry' || !in_array($sim->colorOf($mood->cardId), $colors, true) || in_array($moodEffectKey, $untouchable, true)) {
+                continue;
+            }
+
+            $withoutSacrifice = clone $sim;
+            $withoutSacrifice->moveInPlayToDiscard($mood->cardId);
+            $targetIds = array_values(array_filter(
+                $this->nonTeammateOpponentMoodIds($withoutSacrifice, $botGamePlayerId),
+                fn (int $moodId): bool => $withoutSacrifice->valueOf($moodId) <= 3,
+            ));
+            $isSnowball = fn (int $moodId): int => in_array($withoutSacrifice->catalogRow($withoutSacrifice->effectiveCardId($moodId))['effectKey'], self::SNOWBALL_EFFECT_KEYS, true) ? 1 : 0;
+            usort($targetIds, fn (int $a, int $b): int => [$isSnowball($b), $withoutSacrifice->valueOf($b)] <=> [$isSnowball($a), $withoutSacrifice->valueOf($a)]);
+            $targetIds = array_slice($targetIds, 0, 2);
+            if ($targetIds === []) {
+                continue;
+            }
+
+            $after = clone $sim;
+            try {
+                $this->simulationRegistry->for($effectKey)->afterPlaying($after, $cardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices([$sacrificeField => $mood->cardId, 'target_mood_ids' => $targetIds]));
+            } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+                continue;
+            }
+
+            $gain = $this->roundLead($after, $botGamePlayerId) - $baseline;
+            if ($gain > $bestGain) {
+                $bestGain = $gain;
+                $best = [$sacrificeField => $mood->cardId, 'target_mood_ids' => $targetIds];
+            }
+        }
+
+        return $best;
+    }
+
+    /** The most the bot will pay (an own mood's value) to remove an opponent's snowballing mood with Vindictiveness. */
+    private const VINDICTIVENESS_MAX_ENGINE_SACRIFICE_VALUE = 3;
+
+    /** Effect keys whose moods keep producing plays every turn, which is worth more than their own printed value (Validation, Hope, Grace). */
+    private const SNOWBALL_EFFECT_KEYS = ['validation', 'hope', 'grace'];
+
+    /**
+     * Vindictiveness ("you may put one of your other moods into the discard pile; if you do, you may put a mood with a lower value than that mood's into
+     * the discard pile"): the target has to be worth less than the sacrifice, so in plain points it can never come out ahead -- what it buys is removing a
+     * mood worth more than its printed value. The bot tries every pair of one of its own other moods and one opponent mood on a copy of the board, with the
+     * card's own rule code, and uses a pair when either the round lead (roundLead()) rises by at least 1 anyway (scoring can be uneven), or the target is an
+     * opponent's snowballing mood (SNOWBALL_EFFECT_KEYS: Validation, Hope, Grace -- extra plays every turn) and the sacrifice costs no more than
+     * VINDICTIVENESS_MAX_ENGINE_SACRIFICE_VALUE -- unless that would turn a round lead the bot has into none. Among usable pairs it prefers the biggest gain,
+     * then a snowball target, then the cheapest sacrifice. Moods with lasting value of the bot's own (PROTECTED_EFFECT_KEYS, Hope, Grace, Stubbornness,
+     * Melancholy) are never sacrificed.
+     *
+     * @return array{discard_mood_id?: int, target_mood_id?: int}
+     */
+    private function vindictivenessChoices(BoardState $state, int $cardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $cardId, $botGamePlayerId);
+        $untouchable = [...self::PROTECTED_EFFECT_KEYS, 'hope', 'grace', 'stubbornness', 'melancholy'];
+        $sacrifices = [];
+        foreach ($sim->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $effectKey = $sim->catalogRow($sim->effectiveCardId($mood->cardId))['effectKey'];
+            if ($mood->cardId !== $cardId && !in_array($effectKey, $untouchable, true)) {
+                $sacrifices[] = $mood->cardId;
+            }
+        }
+        $targets = $this->nonTeammateOpponentMoodIds($sim, $botGamePlayerId);
+        if ($sacrifices === [] || $targets === []) {
+            return [];
+        }
+
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+        $best = null;
+        foreach ($sacrifices as $sacrificeId) {
+            foreach ($targets as $targetId) {
+                if ($sim->valueOf($targetId) >= $sim->valueOf($sacrificeId)) {
+                    continue;
+                }
+
+                $after = clone $sim;
+                try {
+                    $this->simulationRegistry->for('vindictiveness')->afterPlaying($after, $cardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['discard_mood_id' => $sacrificeId, 'target_mood_id' => $targetId]));
+                } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+                    continue;
+                }
+
+                $afterLead = $this->roundLead($after, $botGamePlayerId);
+                $gain = $afterLead - $baseline;
+                $isSnowball = in_array($sim->catalogRow($sim->effectiveCardId($targetId))['effectKey'], self::SNOWBALL_EFFECT_KEYS, true);
+                $worthwhileSnowball = $isSnowball
+                    && $sim->valueOf($sacrificeId) <= self::VINDICTIVENESS_MAX_ENGINE_SACRIFICE_VALUE
+                    && !($baseline > 0 && $afterLead <= 0);
+                if ($gain < 1 && !$worthwhileSnowball) {
+                    continue;
+                }
+
+                $candidate = ['gain' => $gain, 'snowball' => $isSnowball, 'cost' => $sim->valueOf($sacrificeId), 'sacrifice' => $sacrificeId, 'target' => $targetId];
+                if ($best === null
+                    || [$candidate['gain'], $candidate['snowball'], -$candidate['cost']] > [$best['gain'], $best['snowball'], -$best['cost']]
+                ) {
+                    $best = $candidate;
+                }
+            }
+        }
+
+        return $best === null ? [] : ['discard_mood_id' => $best['sacrifice'], 'target_mood_id' => $best['target']];
+    }
+
+    /**
+     * Shame ("you may discard a card from your hand; if you do, suppress all other moods that share a color with the discarded card, for as long as you
+     * have this mood"): the optional discard was never made. The suppression hits every other mood of that color -- the bot's own included -- so the bot
+     * works out each color it could name on a copy of the board, with the card's own rule code: for each color in hand it discards the card it would miss
+     * least (the lowest draftPriorityRank()), and scores the result by round lead (roundLead()). It takes the color with the biggest net gain (lead gain
+     * minus the discarded card's printed value), and only if that is at least 1. A colorless card suppresses nothing. It holds back when the discard
+     * would feed an opponent (discardingFromHandHelpsAnOpponent()).
+     */
+    private function shameDiscardCardId(BoardState $state, int $shameCardId, int $botGamePlayerId): ?int
+    {
+        $sim = $this->withCardInPlay($state, $shameCardId, $botGamePlayerId);
+        if ($this->discardingFromHandHelpsAnOpponent($sim, $botGamePlayerId)) {
+            return null;
+        }
+
+        $cheapestByColor = [];
+        foreach ($sim->hand($botGamePlayerId) as $handCardId) {
+            $color = $sim->colorOf($handCardId);
+            if ($color === 'colorless') {
+                continue;
+            }
+            if (!isset($cheapestByColor[$color]) || $this->draftPriorityRank($sim, $handCardId) < $this->draftPriorityRank($sim, $cheapestByColor[$color])) {
+                $cheapestByColor[$color] = $handCardId;
+            }
+        }
+
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+        $best = null;
+        $bestNet = 0;
+        foreach ($cheapestByColor as $discardCardId) {
+            $after = clone $sim;
+            try {
+                $this->simulationRegistry->for('shame')->afterPlaying($after, $shameCardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['discard_card_id' => $discardCardId]));
+            } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+                continue;
+            }
+            $net = $this->roundLead($after, $botGamePlayerId) - $baseline - $this->baseValue($sim, $discardCardId);
+            if ($net > $bestNet) {
+                $bestNet = $net;
+                $best = $discardCardId;
+            }
+        }
+
+        return $best;
+    }
+
+    /**
+     * Faith ("you may discard a green or blue card from your hand; if you do, suppress any mood, for as long as you have this mood"): the optional
+     * discard and target were never named. The bot pays with the green/blue card it would miss least (the lowest draftPriorityRank()) and tries each
+     * opponent mood it could suppress (never Hope/Grace, which can't be hurt by it, or one already worth nothing) on a copy of the board, running the
+     * card's own rule code. It takes the target that raises the round lead (roundLead()) the most, and only if that gain beats the discarded card's
+     * printed value by at least 1. It holds back when the discard would feed an opponent (discardingFromHandHelpsAnOpponent()).
+     *
+     * @return array{discard_card_id?: int, target_mood_id?: int}
+     */
+    private function faithChoices(BoardState $state, int $faithCardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $faithCardId, $botGamePlayerId);
+        $hand = array_values(array_filter(
+            $sim->hand($botGamePlayerId),
+            fn (int $handCardId): bool => in_array($sim->colorOf($handCardId), ['green', 'blue'], true),
+        ));
+        if ($hand === [] || $this->discardingFromHandHelpsAnOpponent($sim, $botGamePlayerId)) {
+            return [];
+        }
+
+        $discardCardId = $hand[0];
+        foreach ($hand as $handCardId) {
+            if ($this->draftPriorityRank($sim, $handCardId) < $this->draftPriorityRank($sim, $discardCardId)) {
+                $discardCardId = $handCardId;
+            }
+        }
+
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+        $bestTargetId = null;
+        $bestGain = 0;
+        foreach ($this->nonTeammateOpponentMoodIds($sim, $botGamePlayerId) as $moodId) {
+            if ($sim->valueOf($moodId) <= 0 || $this->suppressionTargetPriority($sim, $moodId) === PHP_INT_MIN) {
+                continue;
+            }
+
+            $after = clone $sim;
+            try {
+                $this->simulationRegistry->for('faith')->afterPlaying($after, $faithCardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['discard_card_id' => $discardCardId, 'target_mood_id' => $moodId]));
+            } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+                continue;
+            }
+            $gain = $this->roundLead($after, $botGamePlayerId) - $baseline;
+            if ($gain > $bestGain) {
+                $bestGain = $gain;
+                $bestTargetId = $moodId;
+            }
+        }
+
+        return $bestTargetId !== null && $bestGain >= $this->baseValue($sim, $discardCardId) + 1
+            ? ['discard_card_id' => $discardCardId, 'target_mood_id' => $bestTargetId]
+            : [];
+    }
+
+    /**
      * Longing ("you may discard a card from your hand; if you do, put up to two cards from the discard pile into your hand"): the optional
      * discard-and-pick-up was never filled, so a bot played Longing as a bare mood. It nets a card -- one goes out, up to two come back, and the
      * discarded card is itself in the pile, so the bot is never worse off in cards -- and, as seen in a real game, the extra card matters for hand-size
@@ -1587,16 +2366,8 @@ final class BotPlayerService
                 return [];
             }
         }
-        $alreadyDiscardedThisRound = in_array($botGamePlayerId, $state->playersWhoDiscardedFromHandThisRound(), true);
-        foreach ($state->activePlayerOrder() as $opponentId) {
-            if ($opponentId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $opponentId)) {
-                continue;
-            }
-            if ($state->playerHasMoodInPlay($opponentId, 'opportunism')
-                || (!$alreadyDiscardedThisRound && $state->playerHasMoodInPlay($opponentId, 'schadenfreude'))
-            ) {
-                return [];
-            }
+        if ($this->discardingFromHandHelpsAnOpponent($state, $botGamePlayerId)) {
+            return [];
         }
 
         usort($otherHandCardIds, fn (int $a, int $b): int => $this->draftPriorityRank($state, $a) <=> $this->draftPriorityRank($state, $b));
@@ -2548,7 +3319,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness', 'instability', 'shrewdness', 'arrogance', 'corruption', 'optimism', 'admiration', 'doubt', 'yearning', 'encouragement',
     ];
 
     /**
@@ -2670,6 +3441,76 @@ final class BotPlayerService
             $targetMoodIds = $this->pureRemovalTargetMoodIds($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'instability') {
+            $pair = $this->instabilityCandidateMoodIds($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGameByPlayerId);
+
+            return $pair !== [] ? ['candidate_mood_ids' => $pair] : [];
+        }
+
+        if ($effectKey === 'encouragement') {
+            return $this->encouragementChoices($state, $cardId, $botGamePlayerId);
+        }
+
+        if ($effectKey === 'yearning') {
+            return $this->yearningChoices($state, $cardId, $botGamePlayerId);
+        }
+
+        if ($effectKey === 'doubt') {
+            return $this->doubtChoices($state, $cardId, $botGamePlayerId);
+        }
+
+        if ($effectKey === 'admiration') {
+            return $this->admirationChoices($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
+        }
+
+        if ($effectKey === 'optimism') {
+            return $this->optimismChoices($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
+        }
+
+        if ($effectKey === 'corruption') {
+            return $this->corruptionChoices($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
+        }
+
+        if ($effectKey === 'arrogance') {
+            $opponentId = $this->arroganceTargetPlayerId($state, $cardId, $botGamePlayerId);
+
+            return $opponentId !== null ? ['opponent_player_id' => $opponentId] : [];
+        }
+
+        if ($effectKey === 'shrewdness') {
+            return $this->shrewdnessChoices($state, $cardId, $botGamePlayerId);
+        }
+
+        if ($effectKey === 'pettiness') {
+            return $this->pettinessChoices($state, $cardId, $botGamePlayerId);
+        }
+
+        if ($effectKey === 'worry') {
+            return $this->sacrificeAndSweepChoices('worry', ['white', 'black'], 'hand_mood_id', self::MASS_BOUNCE_MIN_LEAD_GAIN, $state, $cardId, $botGamePlayerId);
+        }
+
+        if ($effectKey === 'hostility') {
+            return $this->hostilityChoices($state, $cardId, $botGamePlayerId);
+        }
+
+        if ($effectKey === 'vindictiveness') {
+            return $this->vindictivenessChoices($state, $cardId, $botGamePlayerId);
+        }
+
+        if ($effectKey === 'shame') {
+            $discardCardId = $this->shameDiscardCardId($state, $cardId, $botGamePlayerId);
+
+            return $discardCardId !== null ? ['discard_card_id' => $discardCardId] : [];
+        }
+
+        if ($effectKey === 'faith') {
+            return $this->faithChoices($state, $cardId, $botGamePlayerId);
+        }
+
+        if ($effectKey === 'condescension' || $effectKey === 'fascination') {
+            return $this->cardGiftForValueChoices($effectKey, $effectKey === 'fascination' ? ['blue', 'black'] : null, $state, $cardId, $botGamePlayerId);
         }
 
         if ($effectKey === 'infatuation') {
@@ -3160,13 +4001,7 @@ final class BotPlayerService
             return false;
         }
 
-        $predictedRoundWinsAwarded = 1;
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
-                $predictedRoundWinsAwarded = 2;
-                break;
-            }
-        }
+        $predictedRoundWinsAwarded = $this->predictedRoundWinsAwarded($state);
         if ($roundWinsNeededToWinGame > $predictedRoundWinsAwarded) {
             return false;
         }
@@ -3218,13 +4053,7 @@ final class BotPlayerService
             return false;
         }
 
-        $predictedRoundWinsAwarded = 1;
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
-                $predictedRoundWinsAwarded = 2;
-                break;
-            }
-        }
+        $predictedRoundWinsAwarded = $this->predictedRoundWinsAwarded($state);
 
         $scores = (new RoundScorer())->score($state);
         $activeIds = $state->activePlayerOrder();
@@ -3357,7 +4186,8 @@ final class BotPlayerService
      */
     private function shouldAttemptZealCycle(BoardState $state, string $effectKey, string $fieldKey, int $cardId, int $botGamePlayerId): bool
     {
-        if ($effectKey !== 'zeal' || $fieldKey !== 'hand_card_id') {
+        // Rapport's first loot ("put a card from your hand on the bottom of the deck; if you do, draw a card") is Zeal's cycle, so it follows the same policy.
+        if (!in_array($effectKey, ['zeal', 'rapport'], true) || $fieldKey !== 'hand_card_id') {
             return false;
         }
 
@@ -3622,6 +4452,75 @@ final class BotPlayerService
         return $best;
     }
 
+    /**
+     * Who the bot gives a card to when a card makes it (Wariness, Condescension): a teammate if it has one, which is a free card for the team, otherwise the
+     * opponent furthest behind this round. Null when nobody else is seated.
+     *
+     * @return array{0: ?int, 1: bool} the recipient and whether they're a teammate
+     */
+    private function cardGiftRecipient(BoardState $state, int $botGamePlayerId): array
+    {
+        $recipientId = null;
+        $scores = (new RoundScorer())->score($state);
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId === $botGamePlayerId) {
+                continue;
+            }
+            if ($state->isTeammate($botGamePlayerId, $playerId)) {
+                return [$playerId, true];
+            }
+            if ($recipientId === null || ($scores[$playerId] ?? 0) < ($scores[$recipientId] ?? 0)) {
+                $recipientId = $playerId;
+            }
+        }
+
+        return [$recipientId, false];
+    }
+
+    /**
+     * Condescension ("you may give a card from your hand to another player; if you do, this mood's value becomes 6") and Fascination (the same, with a
+     * blue or black card revealed and given, and a 7): the optional gift was never made, so both stayed at their printed 3. The bot gives away the card it
+     * would miss least (the lowest draftPriorityRank(), among the right colors for Fascination) to cardGiftRecipient()'s pick, with the boosted value
+     * worked out on a copy of the board by the card's own rule code. A gift to a teammate only has to raise the round lead (roundLead()) by at least 1. A
+     * gift to an opponent costs the bot that card's points and hands the opponent the same, so the lead gain has to beat twice the card's printed value --
+     * which in practice limits it to cards printed at 0 or 1. Left blank when no card qualifies, e.g. an empty hand.
+     *
+     * @param string[]|null $colors the colors the given card may have, or null for any
+     * @return array{give_card_id?: int, recipient_player_id?: int}
+     */
+    private function cardGiftForValueChoices(string $effectKey, ?array $colors, BoardState $state, int $cardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $cardId, $botGamePlayerId);
+        [$recipientId, $isTeammate] = $this->cardGiftRecipient($sim, $botGamePlayerId);
+        $hand = array_values(array_filter(
+            $sim->hand($botGamePlayerId),
+            fn (int $handCardId): bool => $colors === null || in_array($sim->colorOf($handCardId), $colors, true),
+        ));
+        if ($hand === [] || $recipientId === null) {
+            return [];
+        }
+
+        $giftCardId = $hand[0];
+        foreach ($hand as $handCardId) {
+            if ($this->draftPriorityRank($sim, $handCardId) < $this->draftPriorityRank($sim, $giftCardId)) {
+                $giftCardId = $handCardId;
+            }
+        }
+
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+        $after = clone $sim;
+        try {
+            $this->simulationRegistry->for($effectKey)->afterPlaying($after, $cardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['give_card_id' => $giftCardId, 'recipient_player_id' => $recipientId]));
+        } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+            return [];
+        }
+
+        $gain = $this->roundLead($after, $botGamePlayerId) - $this->roundLead($sim, $botGamePlayerId);
+        $required = $isTeammate ? 1 : 2 * $this->baseValue($sim, $giftCardId) + 1;
+
+        return $gain >= $required ? ['give_card_id' => $giftCardId, 'recipient_player_id' => $recipientId] : [];
+    }
+
     /** The most a card can be printed at for the bot to give it to an opponent as Wariness's price; a teammate may be given anything. */
     private const WARINESS_MAX_OPPONENT_GIFT_VALUE = 2;
 
@@ -3651,22 +4550,7 @@ final class BotPlayerService
             return [];
         }
 
-        $recipientId = null;
-        $isTeammate = false;
-        $scores = (new RoundScorer())->score($sim);
-        foreach ($sim->activePlayerOrder() as $playerId) {
-            if ($playerId === $botGamePlayerId) {
-                continue;
-            }
-            if ($sim->isTeammate($botGamePlayerId, $playerId)) {
-                $recipientId = $playerId;
-                $isTeammate = true;
-                break;
-            }
-            if ($recipientId === null || ($scores[$playerId] ?? 0) < ($scores[$recipientId] ?? 0)) {
-                $recipientId = $playerId;
-            }
-        }
+        [$recipientId, $isTeammate] = $this->cardGiftRecipient($sim, $botGamePlayerId);
         if ($recipientId === null) {
             return [];
         }
@@ -4259,13 +5143,7 @@ final class BotPlayerService
             return false;
         }
 
-        $predictedRoundWinsAwarded = 1;
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
-                $predictedRoundWinsAwarded = 2;
-                break;
-            }
-        }
+        $predictedRoundWinsAwarded = $this->predictedRoundWinsAwarded($state);
 
         [$myValidation, , $rivalTotalsValidation] = $this->panicProjectedTotals($state, $removalCardId, $botGamePlayerId, $validationFirstTargetIds);
         [$myValueBased, , $rivalTotalsValueBased] = $this->panicProjectedTotals($state, $removalCardId, $botGamePlayerId, $valueBasedTargetIds);
@@ -5059,13 +5937,7 @@ final class BotPlayerService
             return true;
         }
 
-        $predictedRoundWinsAwarded = 1;
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
-                $predictedRoundWinsAwarded = 2;
-                break;
-            }
-        }
+        $predictedRoundWinsAwarded = $this->predictedRoundWinsAwarded($state);
 
         [$myWithout, $rivalWithout, $rivalTotalsWithout] = $this->panicProjectedTotals($state, $panicCardId, $botGamePlayerId, []);
         [$myWith, $rivalWith, $rivalTotalsWith] = $this->panicProjectedTotals($state, $panicCardId, $botGamePlayerId, [$targetMoodId]);
@@ -5668,13 +6540,7 @@ final class BotPlayerService
             return false;
         }
 
-        $predictedRoundWinsAwarded = 1;
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
-                $predictedRoundWinsAwarded = 2;
-                break;
-            }
-        }
+        $predictedRoundWinsAwarded = $this->predictedRoundWinsAwarded($state);
         if ($roundWinsNeededToWinGame > $predictedRoundWinsAwarded) {
             return false;
         }
