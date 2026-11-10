@@ -5511,6 +5511,8 @@ final class BotPlayerServiceTest extends TestCase
             1010 => $this->row('white', 'common', 0, null, 'levity', false, false, true),
             1011 => $this->row('green', 'common', 4, null, 'wariness', false, false, true),
             1012 => $this->row('red', 'rare', 3, 6, 'infatuation', false, false, true),
+            1013 => $this->row('black', 'common', 3, 6, 'condescension', false, false, true),
+            1014 => $this->row('white', 'common', 0, null, 'apathy', false, false, false),
         ];
         $hands = [1 => [$cardId, ...$handIds]];
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -5868,5 +5870,35 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(9, $state->valueOf(1012));
         self::assertFalse($state->isInPlay(7));
         self::assertFalse($state->isInPlay(3));
+    }
+
+    public function testCondescensionGivesAWorthlessCardToTheOpponentFurthestBehind(): void
+    {
+        // A 0-point card (id 1014) for three more points on Condescension; player 3 has nothing on the board, player 2 has Apathy.
+        $state = $this->removalState(1013, [2 => [55]], [], [1014]);
+        self::assertSame(['give_card_id' => 1014, 'recipient_player_id' => 3], $this->bot->buildChoicesForCard($state, 1013, 1));
+
+        // Courage (1) costs the bot a point and gives the opponent one; three points still beats that (2 * 1 + 1).
+        $state = $this->removalState(1013, [2 => [55]], [], [7]);
+        self::assertSame(['give_card_id' => 7, 'recipient_player_id' => 3], $this->bot->buildChoicesForCard($state, 1013, 1));
+    }
+
+    public function testCondescensionKeepsAValuableCardAndStaysBareWithAnEmptyHand(): void
+    {
+        // Apathy (4) is worth more to the opponent and to the bot than the three points are.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1013, [2 => [55]], [], [55]), 1013, 1));
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1013, [2 => [55]]), 1013, 1));
+    }
+
+    public function testCondescensionsGiftResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1013, [2 => [55]], [], [7]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1013, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1013, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertSame(6, $state->valueOf(1013));
+        self::assertContains(7, $state->hand(3));
     }
 }

@@ -2548,7 +2548,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension',
     ];
 
     /**
@@ -2670,6 +2670,10 @@ final class BotPlayerService
             $targetMoodIds = $this->pureRemovalTargetMoodIds($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'condescension') {
+            return $this->condescensionChoices($state, $cardId, $botGamePlayerId);
         }
 
         if ($effectKey === 'infatuation') {
@@ -3622,6 +3626,70 @@ final class BotPlayerService
         return $best;
     }
 
+    /**
+     * Who the bot gives a card to when a card makes it (Wariness, Condescension): a teammate if it has one, which is a free card for the team, otherwise the
+     * opponent furthest behind this round. Null when nobody else is seated.
+     *
+     * @return array{0: ?int, 1: bool} the recipient and whether they're a teammate
+     */
+    private function cardGiftRecipient(BoardState $state, int $botGamePlayerId): array
+    {
+        $recipientId = null;
+        $scores = (new RoundScorer())->score($state);
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId === $botGamePlayerId) {
+                continue;
+            }
+            if ($state->isTeammate($botGamePlayerId, $playerId)) {
+                return [$playerId, true];
+            }
+            if ($recipientId === null || ($scores[$playerId] ?? 0) < ($scores[$recipientId] ?? 0)) {
+                $recipientId = $playerId;
+            }
+        }
+
+        return [$recipientId, false];
+    }
+
+    /**
+     * Condescension ("you may give a card from your hand to another player; if you do, this mood's value becomes 6"): the optional gift was never made, so
+     * it stayed at its printed 3. The bot gives away the card it would miss least (the lowest draftPriorityRank()) to cardGiftRecipient()'s pick, with the
+     * 6 worked out on a copy of the board by the card's own rule code. A gift to a teammate only has to raise the round lead (roundLead()) by at least 1. A
+     * gift to an opponent costs the bot that card's points and hands the opponent the same, so the lead gain has to beat twice the card's printed value --
+     * which in practice limits it to cards printed at 0 or 1. Left blank with an empty hand.
+     *
+     * @return array{give_card_id?: int, recipient_player_id?: int}
+     */
+    private function condescensionChoices(BoardState $state, int $cardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $cardId, $botGamePlayerId);
+        $hand = $sim->hand($botGamePlayerId);
+        [$recipientId, $isTeammate] = $this->cardGiftRecipient($sim, $botGamePlayerId);
+        if ($hand === [] || $recipientId === null) {
+            return [];
+        }
+
+        $giftCardId = $hand[0];
+        foreach ($hand as $handCardId) {
+            if ($this->draftPriorityRank($sim, $handCardId) < $this->draftPriorityRank($sim, $giftCardId)) {
+                $giftCardId = $handCardId;
+            }
+        }
+
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+        $after = clone $sim;
+        try {
+            $this->simulationRegistry->for('condescension')->afterPlaying($after, $cardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['give_card_id' => $giftCardId, 'recipient_player_id' => $recipientId]));
+        } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+            return [];
+        }
+
+        $gain = $this->roundLead($after, $botGamePlayerId) - $this->roundLead($sim, $botGamePlayerId);
+        $required = $isTeammate ? 1 : 2 * $this->baseValue($sim, $giftCardId) + 1;
+
+        return $gain >= $required ? ['give_card_id' => $giftCardId, 'recipient_player_id' => $recipientId] : [];
+    }
+
     /** The most a card can be printed at for the bot to give it to an opponent as Wariness's price; a teammate may be given anything. */
     private const WARINESS_MAX_OPPONENT_GIFT_VALUE = 2;
 
@@ -3651,22 +3719,7 @@ final class BotPlayerService
             return [];
         }
 
-        $recipientId = null;
-        $isTeammate = false;
-        $scores = (new RoundScorer())->score($sim);
-        foreach ($sim->activePlayerOrder() as $playerId) {
-            if ($playerId === $botGamePlayerId) {
-                continue;
-            }
-            if ($sim->isTeammate($botGamePlayerId, $playerId)) {
-                $recipientId = $playerId;
-                $isTeammate = true;
-                break;
-            }
-            if ($recipientId === null || ($scores[$playerId] ?? 0) < ($scores[$recipientId] ?? 0)) {
-                $recipientId = $playerId;
-            }
-        }
+        [$recipientId, $isTeammate] = $this->cardGiftRecipient($sim, $botGamePlayerId);
         if ($recipientId === null) {
             return [];
         }
