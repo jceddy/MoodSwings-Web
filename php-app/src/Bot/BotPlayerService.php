@@ -2548,7 +2548,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness',
     ];
 
     /**
@@ -2670,6 +2670,10 @@ final class BotPlayerService
             $targetMoodIds = $this->pureRemovalTargetMoodIds($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'wariness') {
+            return $this->warinessChoices($state, $cardId, $botGamePlayerId);
         }
 
         if ($effectKey === 'fear') {
@@ -3567,6 +3571,85 @@ final class BotPlayerService
         }
 
         return true;
+    }
+
+    /** The most a card can be printed at for the bot to give it to an opponent as Wariness's price; a teammate may be given anything. */
+    private const WARINESS_MAX_OPPONENT_GIFT_VALUE = 2;
+
+    /** Set while warinessChoices() is predicting the bot's follow-up play, so that play can't start another prediction of its own. */
+    private bool $predictingWariness = false;
+
+    /**
+     * Wariness ("if there are two or more blue and/or black moods, you may give a card from your hand to another player; if you do, you may play an
+     * additional mood this turn"): the optional gift was never made, so the extra play went unused. Giving a card away is a real cost, so the bot only does
+     * it when the extra play pays for it. With two or more blue/black moods in play (Wariness is green, so it doesn't count) and a hand of at least two
+     * other cards, it predicts the extra play with its own chooseAction(); the card to give is the one it would miss least (the lowest draftPriorityRank()
+     * of the rest), and the trade has to raise the round lead (roundLead()) by at least 1 with that card played. The recipient is a teammate if there is
+     * one (a free card for the team), otherwise the opponent furthest behind this round -- and then the gift can be printed at no more than
+     * WARINESS_MAX_OPPONENT_GIFT_VALUE, so a strong card never goes to a rival. Left blank in every other case.
+     *
+     * @return array{give_card_id?: int, recipient_player_id?: int}
+     */
+    private function warinessChoices(BoardState $state, int $warinessCardId, int $botGamePlayerId): array
+    {
+        if ($this->predictingWariness) {
+            return [];
+        }
+
+        $sim = $this->withCardInPlay($state, $warinessCardId, $botGamePlayerId);
+        $hand = $sim->hand($botGamePlayerId);
+        if (count($hand) < 2 || \MoodSwings\Rules\Effects\Custom\CustomEffectSupport::countMoodsOfColors($sim, ['blue', 'black']) < 2) {
+            return [];
+        }
+
+        $recipientId = null;
+        $isTeammate = false;
+        $scores = (new RoundScorer())->score($sim);
+        foreach ($sim->activePlayerOrder() as $playerId) {
+            if ($playerId === $botGamePlayerId) {
+                continue;
+            }
+            if ($sim->isTeammate($botGamePlayerId, $playerId)) {
+                $recipientId = $playerId;
+                $isTeammate = true;
+                break;
+            }
+            if ($recipientId === null || ($scores[$playerId] ?? 0) < ($scores[$recipientId] ?? 0)) {
+                $recipientId = $playerId;
+            }
+        }
+        if ($recipientId === null) {
+            return [];
+        }
+
+        $this->predictingWariness = true;
+        try {
+            $next = $this->chooseAction($sim, $hand, $botGamePlayerId);
+        } finally {
+            $this->predictingWariness = false;
+        }
+        if ($next === null) {
+            return [];
+        }
+
+        $giftCardId = null;
+        foreach ($hand as $handCardId) {
+            if ($handCardId !== $next['card_id'] && ($giftCardId === null || $this->draftPriorityRank($sim, $handCardId) < $this->draftPriorityRank($sim, $giftCardId))) {
+                $giftCardId = $handCardId;
+            }
+        }
+        if ($giftCardId === null || (!$isTeammate && $this->baseValue($sim, $giftCardId) > self::WARINESS_MAX_OPPONENT_GIFT_VALUE)) {
+            return [];
+        }
+
+        $after = clone $sim;
+        $after->giveHandCardToPlayer($botGamePlayerId, $recipientId, $giftCardId);
+        $after->moveHandToInPlay($botGamePlayerId, $next['card_id']);
+        if ($this->roundLead($after, $botGamePlayerId) - $this->roundLead($sim, $botGamePlayerId) < 1) {
+            return [];
+        }
+
+        return ['give_card_id' => $giftCardId, 'recipient_player_id' => $recipientId];
     }
 
     /** Set while fearReplayMoodId() is predicting plays, so a nested Fear doesn't start a prediction of its own. */

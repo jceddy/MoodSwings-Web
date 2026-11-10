@@ -9287,6 +9287,11 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Wariness's gift.** Wariness's optional "give a card from your hand to another player; if you do, play an additional mood" was never made.
+  `BotPlayerService::warinessChoices()` does it when two or more blue/black moods are in play (Wariness is green, so it doesn't count), the hand holds at
+  least two other cards, and the extra play pays for the card: it predicts that play with its own `chooseAction()`, gives the card it would miss least, and
+  requires the round lead (`roundLead()`) to rise by at least 1 with the extra card played. The recipient is a teammate if there is one, otherwise the opponent
+  furthest behind this round -- and an opponent only ever gets a card printed at 2 or less.
 - **Bots use Fear to replay a mood and as a sacrifice.** Fear's optional "put another of your moods into your hand" was never chosen, and Fear was only
   played when a mood-counting or blue-caring card sat in hand. `BotPlayerService::fearReplayMoodId()` now plays Fear for real on a copy of the board (via
   `MoodPlayService`) with each of the bot's moods returned in turn, lets the bot make its own follow-up play, and compares `roundLead()` with Fear played

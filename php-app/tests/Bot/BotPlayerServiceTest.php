@@ -5509,6 +5509,7 @@ final class BotPlayerServiceTest extends TestCase
             1008 => $this->row('blue', 'common', 1, null, 'chagrin', false, false, true),
             1009 => $this->row('black', 'common', 2, null, 'reckoning', false, false, true),
             1010 => $this->row('white', 'common', 0, null, 'levity', false, false, true),
+            1011 => $this->row('green', 'common', 4, null, 'wariness', false, false, true),
         ];
         $hands = [1 => [$cardId, ...$handIds]];
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -5811,5 +5812,34 @@ final class BotPlayerServiceTest extends TestCase
         // A near-worthless mood is already there to be sacrificed (Courage, 1): Fear isn't needed for it.
         $state = $this->removalState(38, [1 => [7]], [], [84]);
         self::assertFalse($this->bot->hasGoodReasonToPlayNow($state, 38, 1, [38, 84]));
+    }
+
+    public function testWarinessGivesAWeakCardToTheOpponentFurthestBehindWhenTheExtraPlayPaysForIt(): void
+    {
+        // Two blue/black moods are out (Bashfulness, Betrayal). Apathy (4) is the extra play; Courage (1) is the card the bot can spare, and player 3 has nothing.
+        $state = $this->removalState(1011, [2 => [30, 56]], [], [55, 7]);
+        self::assertSame(['give_card_id' => 7, 'recipient_player_id' => 3], $this->bot->buildChoicesForCard($state, 1011, 1));
+    }
+
+    public function testWarinessStaysBareWithoutTheConditionAnExtraPlayOrACheapGift(): void
+    {
+        // Only one blue/black mood.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1011, [2 => [30]], [], [55, 7]), 1011, 1));
+        // Nothing else in hand to play with the extra play.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1011, [2 => [30, 56]], [], [7]), 1011, 1));
+        // The card to give up (Apathy, 4) is too good to hand an opponent.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1011, [2 => [30, 56]], [], [55, 56]), 1011, 1));
+    }
+
+    public function testWarinessGiftResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1011, [2 => [30, 56]], [], [55, 7]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1011, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1011, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertContains(7, $state->hand(3));
+        self::assertNotContains(7, $state->hand(1));
     }
 }
