@@ -9287,6 +9287,11 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Pettiness to protect a narrow lead.** The optional "discard a card; if you do, choose a player who can't play moods during their next turn" was
+  never used. The bot can't see what a rival holds, so `BotPlayerService::pettinessChoices()` applies a conservative rule: when its group leads the round by
+  1 to 4 (`roundLead()`, Pettiness in play), it names the rival with the most points this round who still has cards in hand, and pays with the card it would
+  miss least -- only if that card is printed at 0 or 1 and the discard wouldn't feed an opponent (`discardingFromHandHelpsAnOpponent()`). A bigger lead, being
+  behind, a rival with no cards, or nothing cheap to discard leaves it blank.
 - **Bots use Hostility and Worry.** Both parts of Hostility ("put one of your black or green moods into the discard pile; if you do, put up to two moods
   valued 3 or less into the discard pile") and Worry (the same with a white or black mood returned to hand, and the two moods sent back to their players'
   hands) were left blank. `BotPlayerService::sacrificeAndSweepChoices()` takes each sparable mood of its own of the right colors, works out the two best

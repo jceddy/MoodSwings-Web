@@ -5496,7 +5496,7 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([26, 76], $action['choices']['target_mood_ids']);
     }
     /** @param array<int, int[]> $moodsByPlayer */
-    private function removalState(int $cardId, array $moodsByPlayer, array $pileIds = [], array $handIds = [], array $deckIds = []): BoardState
+    private function removalState(int $cardId, array $moodsByPlayer, array $pileIds = [], array $handIds = [], array $deckIds = [], array $otherHands = []): BoardState
     {
         $catalog = $this->sampleCatalog() + [
             1001 => $this->row('black', 'mythic', 2, null, 'malevolence', false, false, true),
@@ -5517,8 +5517,9 @@ final class BotPlayerServiceTest extends TestCase
             1016 => $this->row('blue', 'common', 0, null, 'apathy', false, false, false),
             1017 => $this->row('black', 'rare', 0, null, 'opportunism', false, false, true),
             1018 => $this->row('red', 'common', 2, null, 'vindictiveness', false, false, true),
+            1019 => $this->row('black', 'uncommon', 2, null, 'pettiness', false, false, true),
         ];
-        $hands = [1 => [$cardId, ...$handIds]];
+        $hands = [1 => [$cardId, ...$handIds]] + $otherHands;
         foreach ($moodsByPlayer as $playerId => $ids) {
             $hands[$playerId] = [...($hands[$playerId] ?? []), ...$ids];
         }
@@ -6079,5 +6080,35 @@ final class BotPlayerServiceTest extends TestCase
         self::assertContains(3, $state->hand(1));
         self::assertContains(8, $state->hand(2));
         self::assertContains(17, $state->hand(3));
+    }
+
+    public function testPettinessTakesTheClosestRivalsTurnToProtectANarrowLead(): void
+    {
+        // The bot leads 8 to 4 (a lead of 4); player 2 has a card to play, player 3 has none. A junk white card pays.
+        $state = $this->removalState(1019, [1 => [56], 2 => [55]], [], [1014], [], [2 => [3]]);
+        self::assertSame(['hand_card_id' => 1014, 'target_player_id' => 2], $this->bot->buildChoicesForCard($state, 1019, 1));
+    }
+
+    public function testPettinessStaysBareWhenTheLeadIsSafeLostOrThereIsNothingToStopOrNothingCheapToPay(): void
+    {
+        // A lead of 10 doesn't need protecting.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1019, [1 => [56, 30], 2 => [55]], [], [1014], [], [2 => [3]]), 1019, 1));
+        // The bot is behind.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1019, [1 => [53], 2 => [56]], [], [1014], [], [2 => [3]]), 1019, 1));
+        // The rival has no cards in hand, so there is no turn to take.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1019, [1 => [56], 2 => [55]], [], [1014]), 1019, 1));
+        // The only card to discard is Apathy (4).
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1019, [1 => [56], 2 => [55]], [], [55], [], [2 => [3]]), 1019, 1));
+    }
+
+    public function testPettinessResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1019, [1 => [56], 2 => [55]], [], [1014], [], [2 => [3]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1019, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1019, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertContains(1014, $state->discardPile());
     }
 }

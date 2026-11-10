@@ -1581,6 +1581,54 @@ final class BotPlayerService
         return false;
     }
 
+    /** Pettiness is for protecting a lead a single play could close: the bot's lead has to be no more than this. */
+    private const PETTINESS_MAX_LEAD_TO_PROTECT = 4;
+
+    /** The most a card can be printed at for Pettiness to discard it -- a junk card, so the lost turn is the only real price. */
+    private const PETTINESS_MAX_DISCARD_VALUE = 1;
+
+    /**
+     * Pettiness ("you may discard a card from your hand; if you do, choose a player; that player can't play moods during their next turn"): the optional
+     * discard and player were never chosen. Taking a rival's turn only matters when that turn could change the round, and the bot has no way to see what a
+     * rival holds, so it applies a conservative rule: it uses Pettiness to protect a narrow lead. When the bot's group leads the round by at least 1 and
+     * no more than PETTINESS_MAX_LEAD_TO_PROTECT (roundLead(), Pettiness itself in play), it names the rival with the most points this round who still has
+     * cards in hand (an empty hand can't play anyway) and pays with the card it would miss least -- only if that is printed at no more than
+     * PETTINESS_MAX_DISCARD_VALUE and the discard doesn't feed an opponent (discardingFromHandHelpsAnOpponent()). Otherwise it stays blank.
+     *
+     * @return array{hand_card_id?: int, target_player_id?: int}
+     */
+    private function pettinessChoices(BoardState $state, int $pettinessCardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $pettinessCardId, $botGamePlayerId);
+        $lead = $this->roundLead($sim, $botGamePlayerId);
+        if ($lead < 1 || $lead > self::PETTINESS_MAX_LEAD_TO_PROTECT || $this->discardingFromHandHelpsAnOpponent($sim, $botGamePlayerId)) {
+            return [];
+        }
+
+        $discardCardId = null;
+        foreach ($sim->hand($botGamePlayerId) as $handCardId) {
+            if ($discardCardId === null || $this->draftPriorityRank($sim, $handCardId) < $this->draftPriorityRank($sim, $discardCardId)) {
+                $discardCardId = $handCardId;
+            }
+        }
+        if ($discardCardId === null || $this->baseValue($sim, $discardCardId) > self::PETTINESS_MAX_DISCARD_VALUE) {
+            return [];
+        }
+
+        $scores = (new RoundScorer())->score($sim);
+        $targetId = null;
+        foreach ($sim->activePlayerOrder() as $playerId) {
+            if ($playerId === $botGamePlayerId || $sim->isTeammate($botGamePlayerId, $playerId) || $sim->hand($playerId) === []) {
+                continue;
+            }
+            if ($targetId === null || ($scores[$playerId] ?? 0) > ($scores[$targetId] ?? 0)) {
+                $targetId = $playerId;
+            }
+        }
+
+        return $targetId !== null ? ['hand_card_id' => $discardCardId, 'target_player_id' => $targetId] : [];
+    }
+
     /**
      * Hostility ("you may put one of your black or green moods into the discard pile; if you do, put up to two moods, each with a value of 3 or less,
      * into the discard pile") and Worry (the same with a white or black mood returned to hand, and two moods valued 3 or less returned to their players'
@@ -2802,7 +2850,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness',
     ];
 
     /**
@@ -2924,6 +2972,10 @@ final class BotPlayerService
             $targetMoodIds = $this->pureRemovalTargetMoodIds($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'pettiness') {
+            return $this->pettinessChoices($state, $cardId, $botGamePlayerId);
         }
 
         if ($effectKey === 'worry') {
