@@ -9287,6 +9287,13 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Optimism, and answer the repeated effect's choices.** Optimism's optional "choose one of your other moods; its after-playing effect happens an additional
+  time" was never chosen -- and when the repeat's own choices were asked ('delegated_effect_choices', the same step Admiration uses), the bot left them empty
+  too, so a repeat would have run bare. `BotPlayerService::optimismChoices()` tries each of the bot's other moods with an after-playing effect: it works out
+  what it would choose playing that mood fresh, runs the effect with those choices on a copy of the board where it can (scored by `roundLead()`), and otherwise
+  values a repeat that hits the opponents' hands (Compulsion, Intimidation, Suspicion, Paranoia) at 2 and an extra-play grant at 1 when there's a card to use it on;
+  it names the best, if the score is at least 1. `chooseDecisionAnswer()` now takes the paused play's stored choices, which carry the repeated mood, and answers
+  the repeat the way it would a fresh play (`GameService` passes them in).
 - **Bots use Corruption, and now see its double win.** Neither option ("cycle up to two pile cards to the bottom of the deck and draw that many", or "the round's
   winner wins two rounds") was ever chosen. `BotPlayerService::corruptionChoices()` takes the double win when its group leads the round and the double would decide
   the game (it needs exactly two more round wins; a lead of 3 is required if a rival is also within two wins), or when the lead is at least 5 and no rival is that

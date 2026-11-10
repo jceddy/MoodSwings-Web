@@ -745,10 +745,24 @@ final class BotPlayerService
      *     all.
      * @param array<int, int> $roundWinsNeededToWinGameByPlayerId game_player_id => round wins still needed (empty = unknown); only Instability's
      *     two decisions use it, to tell when the usual choice would lose the game
+     * @param array<string, mixed> $invocationChoices the paused play's stored choices; only the 'delegated_effect_choices' decision reads them (to learn
+     *     which mood Optimism/Admiration is repeating)
      * @return array<string, mixed>
      */
-    public function chooseDecisionAnswer(BoardState $state, array $field, int $botGamePlayerId, string $decisionType = '', ?int $sourceCardId = null, array $roundWinsNeededToWinGameByPlayerId = []): array
+    public function chooseDecisionAnswer(BoardState $state, array $field, int $botGamePlayerId, string $decisionType = '', ?int $sourceCardId = null, array $roundWinsNeededToWinGameByPlayerId = [], array $invocationChoices = []): array
     {
+        // Optimism/Admiration repeat another mood's after-playing effect and then ask for that effect's own choices ('delegated_effect_choices', a
+        // nested field the generic resolver never fills). The repeated mood rides in the paused play's marked choices ('__delegate_source'); the bot
+        // answers exactly as if it were playing that mood fresh, like duplicityRepeatChoices() does for Duplicity.
+        if ($decisionType === 'delegated_effect_choices' && isset($invocationChoices['__delegate_source'])) {
+            $repeatedCardId = (int) $invocationChoices['__delegate_source'];
+            if ($state->isInPlay($repeatedCardId) || $state->isInDiscardPile($repeatedCardId)) {
+                $repeatChoices = $this->buildChoicesForCard($state, $repeatedCardId, $botGamePlayerId, null, $roundWinsNeededToWinGameByPlayerId);
+
+                return $repeatChoices === null || $repeatChoices === [] ? [] : [$field['key'] => $repeatChoices];
+            }
+        }
+
         // chaos_010 (issue #405 follow-up) is Disillusionment's own chaos
         // analog -- identical printed text, identical field shape (an
         // optional 'mode' color pick) -- so it reuses the exact same
@@ -1640,6 +1654,65 @@ final class BotPlayerService
         }
 
         return 1;
+    }
+
+    /** Effects whose repeat is worth having for the hand they take from or empty out, which the round lead can't show (Compulsion, Intimidation, Suspicion, Paranoia). */
+    private const HAND_PRESSURE_EFFECT_KEYS = ['compulsion', 'intimidation', 'suspicion', 'paranoia'];
+
+    /**
+     * Optimism ("you may choose one of your other moods; that mood's after-playing effect happens an additional time"): the optional choice was never made,
+     * and when the repeat's own choices came up the bot left them empty too. The bot tries each of its own other moods that has an after-playing effect: it
+     * works out what it would choose playing that mood fresh (buildChoicesForCard() -- an effect with fields and nothing worth choosing is skipped), runs the
+     * effect with those choices on a copy of the board where it can (a plain effect: the round lead, roundLead(), is the score), and otherwise values it by
+     * kind -- a repeat that hits the opponents' hands (HAND_PRESSURE_EFFECT_KEYS) counts 2, an extra-play grant counts 1 when there is a card in hand to
+     * use it on, since those don't show in the lead. It names the mood with the best score, if that is at least 1.
+     *
+     * @return array{target_mood_id?: int}
+     */
+    private function optimismChoices(BoardState $state, int $optimismCardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame, array $roundWinsNeededToWinGameByPlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $optimismCardId, $botGamePlayerId);
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+
+        $best = null;
+        $bestScore = 0;
+        foreach ($sim->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $row = $sim->catalogRow($sim->effectiveCardId($mood->cardId));
+            if ($mood->cardId === $optimismCardId || !$row['hasAfterPlaying'] || $row['effectKey'] === 'optimism') {
+                continue;
+            }
+
+            $repeatChoices = $this->buildChoicesForCard($sim, $mood->cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
+            if ($repeatChoices === null || ($repeatChoices === [] && CardChoiceSchema::afterPlayingFields($row['effectKey']) !== [])) {
+                continue;
+            }
+
+            $score = 0;
+            $effect = $this->simulationRegistry->has($row['effectKey']) ? $this->simulationRegistry->for($row['effectKey']) : null;
+            if ($effect !== null && !($effect instanceof \MoodSwings\Rules\RequiresOpponentDecision) && !($effect instanceof \MoodSwings\Rules\DelegatesAfterPlaying)) {
+                $after = clone $sim;
+                try {
+                    $effect->afterPlaying($after, $mood->cardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices($repeatChoices));
+                    $score = $this->roundLead($after, $botGamePlayerId) - $baseline;
+                } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+                    continue;
+                }
+            }
+            if (in_array($row['effectKey'], self::HAND_PRESSURE_EFFECT_KEYS, true)) {
+                $score += 2;
+            }
+            if (in_array($row['effectKey'], self::EXTRA_PLAY_GRANTING_EFFECT_KEYS, true) && $sim->hand($botGamePlayerId) !== []) {
+                $score += 1;
+            }
+
+            if ($score > $bestScore) {
+                $bestScore = $score;
+                $best = $mood->cardId;
+            }
+        }
+
+        return $best !== null ? ['target_mood_id' => $best] : [];
     }
 
     /** Corruption's double win is a gamble on winning the round; without a game-deciding reason the bot wants at least this lead before taking it. */
@@ -3069,7 +3142,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness', 'instability', 'shrewdness', 'arrogance', 'corruption',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness', 'instability', 'shrewdness', 'arrogance', 'corruption', 'optimism',
     ];
 
     /**
@@ -3197,6 +3270,10 @@ final class BotPlayerService
             $pair = $this->instabilityCandidateMoodIds($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGameByPlayerId);
 
             return $pair !== [] ? ['candidate_mood_ids' => $pair] : [];
+        }
+
+        if ($effectKey === 'optimism') {
+            return $this->optimismChoices($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
         }
 
         if ($effectKey === 'corruption') {

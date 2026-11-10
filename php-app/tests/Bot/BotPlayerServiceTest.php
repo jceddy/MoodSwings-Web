@@ -5533,6 +5533,7 @@ final class BotPlayerServiceTest extends TestCase
             1018 => $this->row('red', 'common', 2, null, 'vindictiveness', false, false, true),
             1019 => $this->row('black', 'uncommon', 2, null, 'pettiness', false, false, true),
             1020 => $this->row('green', 'rare', 3, null, 'shrewdness', false, false, true),
+            1021 => $this->row('blue', 'rare', 2, null, 'optimism', false, false, true),
         ];
         $hands = [1 => [$cardId, ...$handIds]] + $otherHands;
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -6247,5 +6248,37 @@ final class BotPlayerServiceTest extends TestCase
         $choices = $this->bot->buildChoicesForCard($state, 60, 1);
         (new \MoodSwings\Rules\MoodPlayService($registry))->playMood($state, 1, 60, new \MoodSwings\Rules\PlayerChoices($choices));
         self::assertTrue($state->awardsExtraWinThisRound());
+    }
+
+    public function testOptimismRepeatsTheMoodWhoseEffectWillDoTheMost(): void
+    {
+        // Courage's repeat would discard the opponent's Betrayal (6); Apathy has no after-playing effect.
+        $state = $this->removalState(1021, [1 => [7, 55], 2 => [56]]);
+        self::assertSame(['target_mood_id' => 7], $this->bot->buildChoicesForCard($state, 1021, 1));
+    }
+
+    public function testOptimismStaysBareWhenNoRepeatWouldDoAnything(): void
+    {
+        // Nothing of the bot's own has an after-playing effect.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1021, [1 => [55], 2 => [56]]), 1021, 1));
+        // Courage has nothing to hit (Apathy is only 4).
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1021, [1 => [7], 2 => [55]]), 1021, 1));
+    }
+
+    public function testTheBotAnswersTheRepeatedEffectsOwnChoicesInTheRealGame(): void
+    {
+        $state = $this->removalState(1021, [1 => [7], 2 => [56]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1021, 1);
+        $plays = new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build());
+        $result = $plays->playMood($state, 1, 1021, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        $request = $result->pendingDecisions[0];
+        self::assertSame('delegated_effect_choices', $request->decisionType);
+        $answer = $this->bot->chooseDecisionAnswer($state, $request->field, 1, $request->decisionType, 1021, [], $result->invocationChoices->toArray());
+        self::assertSame(['delegate_choices' => ['target_mood_ids' => [56]]], $answer);
+
+        $plays->resolvePendingDecisions($state, 1021, 1, new \MoodSwings\Rules\PlayerChoices($choices), $result->invocationChoices, $result->invocationSeq, ['delegate_choices' => new \MoodSwings\Rules\PlayerChoices($answer)], $result->duplicityEligibleSources);
+        self::assertFalse($state->isInPlay(56), 'the repeated Courage discarded the opponent\'s Betrayal');
     }
 }
