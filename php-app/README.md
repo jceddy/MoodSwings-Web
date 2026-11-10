@@ -9287,6 +9287,59 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Infatuation's sacrifice.** The optional "put two of your other moods into the discard pile; if you do, this mood's value becomes 9" was never
+  named. `BotPlayerService::infatuationDiscardMoodIds()` tries every pair of the bot's own other moods on a copy of the board, running the card's own rule code
+  (which also applies the 9), and uses the pair that raises `roundLead()` the most -- at least 1 over playing Infatuation as it is. Moods with lasting value
+  (Validation, Duplicity, Hope, Grace, ...) are never in the pair.
+- **Bots use Wariness's gift.** Wariness's optional "give a card from your hand to another player; if you do, play an additional mood" was never made.
+  `BotPlayerService::warinessChoices()` does it when two or more blue/black moods are in play (Wariness is green, so it doesn't count), the hand holds at
+  least two other cards, and the extra play pays for the card: it predicts that play with its own `chooseAction()`, gives the card it would miss least, and
+  requires the round lead (`roundLead()`) to rise by at least 1 with the extra card played. The recipient is a teammate if there is one, otherwise the opponent
+  furthest behind this round -- and an opponent only ever gets a card printed at 2 or less.
+- **Bots use Fear to replay a mood and as a sacrifice.** Fear's optional "put another of your moods into your hand" was never chosen, and Fear was only
+  played when a mood-counting or blue-caring card sat in hand. `BotPlayerService::fearReplayMoodId()` now plays Fear for real on a copy of the board (via
+  `MoodPlayService`) with each of the bot's moods returned in turn, lets the bot make its own follow-up play, and compares `roundLead()` with Fear played
+  bare: a mood is bounced only when replaying it (a removal or steal effect, say) comes out strictly ahead, which also makes Fear worth playing. Fear is
+  also worth playing as the cheapest sacrifice (`fearIsTheCheapestSacrifice()`): a card in hand needs a mood to put in the discard pile (Envy,
+  Self-Loathing, Bravado, Angst, Vindictiveness) and the bot has no mood of its own worth 1 or less to give up. `chooseAction()` now works out each card's
+  priority once instead of on every comparison, since some predictions simulate whole plays.
+- **Bots use Levity's bottom-deck.** The extra play comes either way; the optional "put this mood on the bottom of the deck and draw a card" was never
+  chosen, so Levity (printed at 0) stayed on the board for nothing. `BotPlayerService::levityBottomsItself()` runs the card's rule code both ways on a copy of
+  the board and bottoms it unless staying would leave the round lead (`roundLead()`) higher (a mood-count bonus, an opponent's Envy, ...). It never does so with
+  an empty deck, where Levity would be the card drawn back and could be cycled for nothing.
+- **Bots use the discard-for-an-extra-play cards.** Angst ("put one of your blue or red moods into the discard pile; if you do, play an additional mood
+  from the discard pile") and Bravado (any other mood of yours; an additional mood from anywhere) left their optional discard blank, so both were bare moods.
+  `BotPlayerService::extraPlayTradeMoodId()` tries each eligible mood of the bot's on a copy of the board: the mood goes to the pile, the bot's own
+  `chooseAction()` picks what it would play next (from the pile for Angst, so the discarded mood is itself a candidate; from its hand for Bravado), that card
+  joins the board, and `roundLead()` is compared with leaving things alone. It discards the mood with the biggest gain of at least 1; extra-play and other
+  lasting moods (Validation, Duplicity, Hope, Grace, ...) are never given up. Abilities the follow-up play would trigger aren't counted.
+- **Bots use the mass-effect cards.** Rage, Wrath and Reckoning (discard), Repentance (suppress) and Chagrin, Hesitation and Disorientation (bounce) are
+  optional sweeps the bot never opted into. `BotPlayerService::massEffectChoices()` tries each candidate answer (the plain yes; Hesitation's "all" or a
+  single red/green opponent mood; every value on the board for Disorientation and Repentance; Reckoning with each player keeping their best mood) on a copy
+  of the board with the card in play, running the card's own `afterPlaying()`, and scores it with `roundLead()`. It uses the best one only if it beats
+  leaving the board alone -- by 1+ for a discard or suppression, 2+ for a bounce, since the owner can replay a bounced mood.
+- **Bots use the conditional-removal cards.** Disdain, Indignation, Distrust and Vigilance ("if there are two or more X and/or Y moods, you may remove one of
+  them") left their optional target blank. `BotPlayerService::conditionalRemovalTargetMoodId()` checks the two-moods condition on a copy of the board with the
+  played card in play, then names the best opponent mood of those colors (never its own): Shock's pick for the discard cards (Indignation's 4-or-less cap
+  respected), a bounce of a mood worth 3+ for Distrust, and `suppressionTargetPriority()`'s best target for Vigilance (never Hope/Grace or a zero-value mood).
+- **Bots use the pure-removal cards.** Courage (a mood valued 5+ into the discard pile), Spite (an even value), Anxiety (an odd value into its owner's hand)
+  and Malevolence (odd or even printed number) all pick "up to two players, one mood each" through an optional field the bot never filled. They now share
+  Shock's pick (`BotPlayerService::opponentRemovalTargetMoodIds()`): each non-teammate opponent's best qualifying mood, the two best across different
+  opponents, an opponent's Validation first unless that loses the game. Anxiety's bounce skips Validation priority and moods valued under 3, and Malevolence
+  names whichever parity removes more value. Targets are judged on a copy of the board with the played card already in play, since the effect re-checks each
+  target's value when it resolves.
+- **Bots use the discard-pile loot cards.** Reminiscence, Remorse, Reverie (and Reverie's while-in-play reaction) and Warmth all hand the player a free card
+  from the discard pile through an optional field the bot never filled. `BotPlayerService::discardPileLootCardId()` now names the best pile card
+  (`draftPriorityRank()`, excluding the card being played and anything the same play already took), which also denies it to opponents; it stays blank when
+  the pile is empty or the bot owns a mood that depends on the pile's size (Sadness, Wonder, Possessiveness). Warmth is only used when, with Warmth in play,
+  the bot would have two red or white moods. Brooding and Rapport's second loot are not covered.
+- **Bots use Longing's discard-and-pick-up.** Both fields are optional, so the bot always played Longing as a bare mood -- which in a real game (export of
+  game 572) made it pass twice rather than play any card, because every play shrank its hand and switched off Composure's 6 ("more cards in your hand
+  than each other player"). `BotPlayerService::longingChoices()` now discards the card it would least miss (lowest `draftPriorityRank()`) and takes back the
+  best two cards from the pile plus that card, so Longing nets a card and the hand stays the size it was. It holds back when there is no other card to
+  discard or nothing else in the pile, with a Sadness/Wonder-family mood in play (as Nostalgia's pick-up does), and when the discard would help an opponent
+  (an opponent's Opportunism takes the card; an opponent's Schadenfreude turns on once any opponent has discarded). In that game the bot's own Longing
+  choices score a lead of +7 and +4 where passing scored +4 and +1.
 - **Bots choose Impartiality's and Discernment's parity.** Both used to take the generic resolver's first option ('odd') whatever the board looked like.
   `impartialityParity()` scores the board with every other odd, then every other even, mood suppressed (Impartiality hits the bot's own moods too)
   through `RoundScorer` on copies and picks the parity that leaves the bot's group furthest ahead (`roundLead()`), tie to odd. `discernmentChoices()` counts
