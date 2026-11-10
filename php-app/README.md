@@ -9287,6 +9287,11 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Rumination to replay a mood.** Rumination ("at the start of each of your turns, you may put one of your moods into your hand") was always declined at the
+  turn-start prompt. Bouncing a mood is how the bot replays one whose after-playing effect is worth having again, using the turn's own play on it -- the idea behind
+  Fear's replay. `BotPlayerService::ruminationMoodId()` plays the turn out on a copy of the board for each of its moods (returned to hand, the bot's own
+  `chooseAction()` making the turn's play through `MoodPlayService`) and compares `roundLead()` with the best play without a bounce; it bounces only when strictly
+  ahead, and leaves lasting-value moods alone. If the turn can't be played out on the copy it declines. Wastefulness is the one turn-start prompt still declined.
 - **Bots use Martyrdom's sacrifice.** Martyrdom ("at the start of each of your turns, you may put one of your other moods into the discard pile; if you do, each
   opponent discards a card from their hand") was always declined at the turn-start prompt. `BotPlayerService::martyrdomSacrificeMoodId()` only uses it when the
   sacrifice is free: a mood worth nothing right now (a spent Fear, a suppressed mood) that isn't a lasting-value card (Validation, Duplicity, Exhilaration, Hope,

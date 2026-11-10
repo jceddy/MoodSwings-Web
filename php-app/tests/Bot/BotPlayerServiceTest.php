@@ -5541,6 +5541,7 @@ final class BotPlayerServiceTest extends TestCase
             1026 => $this->row('white', 'uncommon', 3, null, 'encouragement', false, true, true),
             1027 => $this->row('black', 'uncommon', 0, null, 'brooding', false, true, false),
             1028 => $this->row('black', 'rare', 1, null, 'martyrdom', false, true, false),
+            1029 => $this->row('blue', 'rare', 1, null, 'rumination', false, true, false),
         ];
         $hands = [1 => [$cardId, ...$handIds]] + $otherHands;
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -6531,5 +6532,41 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertFalse($state->isInPlay(38));
         self::assertSame('discard_card_id_2', $requests[0]->key, 'the opponent is asked what to discard');
+    }
+
+    /** The bot's turn with Rumination in play, own moods, a hand and the opponent's moods. */
+    private function ruminationState(array $ownMoods, array $hand, array $opponentMoods): BoardState
+    {
+        $state = $this->removalState(1029, [1 => $ownMoods, 2 => $opponentMoods], [], $hand);
+        $state->moveHandToInPlay(1, 1029);
+        $state->startTurn(1);
+
+        return $state;
+    }
+
+    public function testRuminationReturnsAMoodWhoseEffectIsWorthPlayingAgain(): void
+    {
+        $field = ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false];
+
+        // Courage is out and an opponent's Betrayal (6) has appeared since: bounce it and play it again to discard Betrayal.
+        $state = $this->ruminationState([7], [], [56]);
+        self::assertSame(['target_mood_id' => 7], $this->bot->chooseDecisionAnswer($state, $field, 1, 'turn_start_trigger', 1029));
+
+        // Nothing for Courage to hit.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->ruminationState([7], [], [55]), $field, 1, 'turn_start_trigger', 1029));
+        // A better card is waiting in hand: this turn's play goes to it, and the bounced Courage would just sit there.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->ruminationState([7], [56], [30]), $field, 1, 'turn_start_trigger', 1029));
+    }
+
+    public function testRuminationsAnswerResolvesInTheRealGame(): void
+    {
+        $state = $this->ruminationState([7], [], [56]);
+        $field = ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false];
+        $answer = $this->bot->chooseDecisionAnswer($state, $field, 1, 'turn_start_trigger', 1029);
+
+        DefaultEffectRegistry::build()->for('rumination')->applyTurnStart($state, 1029, 1, ['target_mood_id' => new \MoodSwings\Rules\PlayerChoices($answer)]);
+
+        self::assertContains(7, $state->hand(1));
+        self::assertFalse($state->isInPlay(7));
     }
 }

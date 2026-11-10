@@ -888,7 +888,7 @@ final class BotPlayerService
 
         // "At the start of each of your turns" moods (TurnStartEffect) whose optional choice is free or
         // plainly worth taking -- the generic resolver below never fills an optional field. Anything not
-        // listed (Rumination, Wastefulness) is left declined, the conservative default.
+        // listed (Wastefulness) is left declined, the conservative default.
         if ($decisionType === 'turn_start_trigger' && $sourceCardId !== null && $state->isInPlay($sourceCardId)) {
             $effectKey = $state->catalogRow($state->effectiveCardId($sourceCardId))['effectKey'];
             if ($effectKey === 'covetousness' && isset($field['candidate_card_ids'])) {
@@ -901,6 +901,11 @@ final class BotPlayerService
                 }
 
                 return $best === null ? [] : [$field['key'] => $best];
+            }
+            if ($effectKey === 'rumination' && $field['key'] === 'target_mood_id') {
+                $moodId = $this->ruminationMoodId($state, $botGamePlayerId, $roundWinsNeededToWinGameByPlayerId);
+
+                return $moodId === null ? [] : [$field['key'] => $moodId];
             }
             if ($effectKey === 'martyrdom' && $field['key'] === 'sacrifice_mood_id') {
                 $sacrificeId = $this->martyrdomSacrificeMoodId($state, $sourceCardId, $botGamePlayerId, array_map('intval', $field['candidate_card_ids'] ?? []));
@@ -1763,6 +1768,83 @@ final class BotPlayerService
         }
 
         return $best !== null ? ['target_mood_id' => $best] : [];
+    }
+
+    /**
+     * Rumination ("at the start of each of your turns, you may put one of your moods into your hand"): always declined before. Bouncing a mood is how the
+     * bot replays one whose after-playing effect is worth having again (a removal or steal effect, say), using this turn's own play on it -- the same idea
+     * as Fear's replay (fearReplayMoodId()). For each of its moods it plays the turn out on a copy of the board: the mood returns to hand, the bot's own
+     * chooseAction() makes the turn's play from the hand (MoodPlayService), and the round lead (roundLead()) is compared with making the best play
+     * without a bounce. It bounces a mood only when that comes out strictly ahead, so a mood isn't put in hand for a play that turns out to be some other
+     * card. Lasting-value moods (PROTECTED_EFFECT_KEYS, Hope, Grace, Stubbornness, Melancholy) are left alone. If the turn can't be played out on the copy the
+     * answer is no bounce.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     */
+    private function ruminationMoodId(BoardState $state, int $botGamePlayerId, array $roundWinsNeededToWinGameByPlayerId): ?int
+    {
+        if ($this->predictingFear) {
+            return null;
+        }
+
+        $untouchable = [...self::PROTECTED_EFFECT_KEYS, 'hope', 'grace', 'stubbornness', 'melancholy'];
+        $candidates = [];
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            if (!in_array($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'], [...$untouchable, 'rumination'], true)) {
+                $candidates[] = $mood->cardId;
+            }
+        }
+        if ($candidates === []) {
+            return null;
+        }
+
+        $this->predictingFear = true;
+        try {
+            $best = $this->ruminationOutcomeLead($state, $botGamePlayerId, null, $roundWinsNeededToWinGameByPlayerId);
+            if ($best === null) {
+                return null;
+            }
+
+            $bestMoodId = null;
+            foreach ($candidates as $moodId) {
+                $lead = $this->ruminationOutcomeLead($state, $botGamePlayerId, $moodId, $roundWinsNeededToWinGameByPlayerId);
+                if ($lead !== null && $lead > $best) {
+                    $bestMoodId = $moodId;
+                    $best = $lead;
+                }
+            }
+
+            return $bestMoodId;
+        } finally {
+            $this->predictingFear = false;
+        }
+    }
+
+    /**
+     * The bot's round lead after this turn's play, with $returnedMoodId (if any) put into its hand first; null if the play can't be made on the copy.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     */
+    private function ruminationOutcomeLead(BoardState $state, int $botGamePlayerId, ?int $returnedMoodId, array $roundWinsNeededToWinGameByPlayerId): ?int
+    {
+        $sim = clone $state;
+        if ($sim->currentPlayerId() !== $botGamePlayerId) {
+            $sim->startTurn($botGamePlayerId);
+        }
+        $plays = new \MoodSwings\Rules\MoodPlayService($this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build());
+        try {
+            if ($returnedMoodId !== null) {
+                $sim->moveInPlayToHand($returnedMoodId);
+            }
+            $next = $this->chooseAction($sim, $sim->hand($botGamePlayerId), $botGamePlayerId, null, $roundWinsNeededToWinGameByPlayerId);
+            if ($next !== null) {
+                $plays->playMood($sim, $botGamePlayerId, $next['card_id'], new \MoodSwings\Rules\PlayerChoices($next['choices']));
+            }
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return $this->roundLead($sim, $botGamePlayerId);
     }
 
     /**
