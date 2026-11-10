@@ -9287,6 +9287,11 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Faith's suppression.** The optional "discard a green or blue card from your hand; if you do, suppress any mood, for as long as you have this
+  mood" was never used. `BotPlayerService::faithChoices()` pays with the green/blue card it would miss least and tries each opponent mood on a copy of the
+  board (never Hope/Grace or a mood already worth nothing), running the card's own rule code; it takes the target that raises `roundLead()` the most, if that
+  gain beats the discarded card's printed value by at least 1. It holds back when the discard would feed an opponent (an opponent's Opportunism, or an
+  unaware Schadenfreude) -- the check Longing already used, now shared as `discardingFromHandHelpsAnOpponent()`.
 - **Bots use the give-a-card-for-value gifts.** Condescension ("give a card from your hand to another player; if you do, this mood's value becomes 6") and
   Fascination (a blue or black card, revealed and given; 7) left the optional gift blank. `BotPlayerService::cardGiftForValueChoices()` gives away the card it
   would miss least (lowest `draftPriorityRank()`, among blue/black for Fascination) to `cardGiftRecipient()`'s pick (a teammate if there is one, otherwise the

@@ -1561,6 +1561,81 @@ final class BotPlayerService
     }
 
     /**
+     * Whether discarding a card from hand would feed an opponent: an opponent's Opportunism takes the discarded card, and an opponent's Schadenfreude turns
+     * on once any player has discarded from hand this round (so it only matters if the bot hasn't already).
+     */
+    private function discardingFromHandHelpsAnOpponent(BoardState $state, int $botGamePlayerId): bool
+    {
+        $alreadyDiscardedThisRound = in_array($botGamePlayerId, $state->playersWhoDiscardedFromHandThisRound(), true);
+        foreach ($state->activePlayerOrder() as $opponentId) {
+            if ($opponentId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $opponentId)) {
+                continue;
+            }
+            if ($state->playerHasMoodInPlay($opponentId, 'opportunism')
+                || (!$alreadyDiscardedThisRound && $state->playerHasMoodInPlay($opponentId, 'schadenfreude'))
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Faith ("you may discard a green or blue card from your hand; if you do, suppress any mood, for as long as you have this mood"): the optional
+     * discard and target were never named. The bot pays with the green/blue card it would miss least (the lowest draftPriorityRank()) and tries each
+     * opponent mood it could suppress (never Hope/Grace, which can't be hurt by it, or one already worth nothing) on a copy of the board, running the
+     * card's own rule code. It takes the target that raises the round lead (roundLead()) the most, and only if that gain beats the discarded card's
+     * printed value by at least 1. It holds back when the discard would feed an opponent (discardingFromHandHelpsAnOpponent()).
+     *
+     * @return array{discard_card_id?: int, target_mood_id?: int}
+     */
+    private function faithChoices(BoardState $state, int $faithCardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $faithCardId, $botGamePlayerId);
+        $hand = array_values(array_filter(
+            $sim->hand($botGamePlayerId),
+            fn (int $handCardId): bool => in_array($sim->colorOf($handCardId), ['green', 'blue'], true),
+        ));
+        if ($hand === [] || $this->discardingFromHandHelpsAnOpponent($sim, $botGamePlayerId)) {
+            return [];
+        }
+
+        $discardCardId = $hand[0];
+        foreach ($hand as $handCardId) {
+            if ($this->draftPriorityRank($sim, $handCardId) < $this->draftPriorityRank($sim, $discardCardId)) {
+                $discardCardId = $handCardId;
+            }
+        }
+
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+        $bestTargetId = null;
+        $bestGain = 0;
+        foreach ($this->nonTeammateOpponentMoodIds($sim, $botGamePlayerId) as $moodId) {
+            if ($sim->valueOf($moodId) <= 0 || $this->suppressionTargetPriority($sim, $moodId) === PHP_INT_MIN) {
+                continue;
+            }
+
+            $after = clone $sim;
+            try {
+                $this->simulationRegistry->for('faith')->afterPlaying($after, $faithCardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['discard_card_id' => $discardCardId, 'target_mood_id' => $moodId]));
+            } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+                continue;
+            }
+            $gain = $this->roundLead($after, $botGamePlayerId) - $baseline;
+            if ($gain > $bestGain) {
+                $bestGain = $gain;
+                $bestTargetId = $moodId;
+            }
+        }
+
+        return $bestTargetId !== null && $bestGain >= $this->baseValue($sim, $discardCardId) + 1
+            ? ['discard_card_id' => $discardCardId, 'target_mood_id' => $bestTargetId]
+            : [];
+    }
+
+    /**
      * Longing ("you may discard a card from your hand; if you do, put up to two cards from the discard pile into your hand"): the optional
      * discard-and-pick-up was never filled, so a bot played Longing as a bare mood. It nets a card -- one goes out, up to two come back, and the
      * discarded card is itself in the pile, so the bot is never worse off in cards -- and, as seen in a real game, the extra card matters for hand-size
@@ -1587,16 +1662,8 @@ final class BotPlayerService
                 return [];
             }
         }
-        $alreadyDiscardedThisRound = in_array($botGamePlayerId, $state->playersWhoDiscardedFromHandThisRound(), true);
-        foreach ($state->activePlayerOrder() as $opponentId) {
-            if ($opponentId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $opponentId)) {
-                continue;
-            }
-            if ($state->playerHasMoodInPlay($opponentId, 'opportunism')
-                || (!$alreadyDiscardedThisRound && $state->playerHasMoodInPlay($opponentId, 'schadenfreude'))
-            ) {
-                return [];
-            }
+        if ($this->discardingFromHandHelpsAnOpponent($state, $botGamePlayerId)) {
+            return [];
         }
 
         usort($otherHandCardIds, fn (int $a, int $b): int => $this->draftPriorityRank($state, $a) <=> $this->draftPriorityRank($state, $b));
@@ -2548,7 +2615,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith',
     ];
 
     /**
@@ -2670,6 +2737,10 @@ final class BotPlayerService
             $targetMoodIds = $this->pureRemovalTargetMoodIds($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'faith') {
+            return $this->faithChoices($state, $cardId, $botGamePlayerId);
         }
 
         if ($effectKey === 'condescension' || $effectKey === 'fascination') {

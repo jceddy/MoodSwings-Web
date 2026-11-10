@@ -5515,6 +5515,7 @@ final class BotPlayerServiceTest extends TestCase
             1014 => $this->row('white', 'common', 0, null, 'apathy', false, false, false),
             1015 => $this->row('green', 'uncommon', 3, 7, 'fascination', false, false, true),
             1016 => $this->row('blue', 'common', 0, null, 'apathy', false, false, false),
+            1017 => $this->row('black', 'rare', 0, null, 'opportunism', false, false, true),
         ];
         $hands = [1 => [$cardId, ...$handIds]];
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -5926,5 +5927,34 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame(7, $state->valueOf(1015));
         self::assertContains(1016, $state->hand(3));
+    }
+
+    public function testFaithDiscardsAWeakGreenOrBlueCardToSuppressTheStrongestOpponentMood(): void
+    {
+        // A worthless blue card (0) pays for suppressing Betrayal (6) over Apathy (4).
+        $state = $this->removalState(12, [2 => [55, 56]], [], [1016]);
+        self::assertSame(['discard_card_id' => 1016, 'target_mood_id' => 56], $this->bot->buildChoicesForCard($state, 12, 1));
+    }
+
+    public function testFaithStaysBareWhenTheCostBeatsTheGainOrFeedsAnOpponent(): void
+    {
+        // No green or blue card to discard.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(12, [2 => [56]], [], [1014]), 12, 1));
+        // Avoidance (blue, 3) is the only card to discard and Dignity (3) the only target: 3 doesn't beat 3 + 1.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(12, [2 => [8]], [], [29]), 12, 1));
+        // An opponent's Opportunism would take the discarded card.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(12, [2 => [56, 1017]], [], [1016]), 12, 1));
+    }
+
+    public function testFaithsSuppressionResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(12, [2 => [55, 56]], [], [1016]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 12, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 12, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertSame(0, $state->valueOf(56));
+        self::assertContains(1016, $state->discardPile());
     }
 }
