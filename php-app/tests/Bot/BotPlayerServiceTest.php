@@ -5496,7 +5496,7 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([26, 76], $action['choices']['target_mood_ids']);
     }
     /** @param array<int, int[]> $moodsByPlayer */
-    private function removalState(int $cardId, array $moodsByPlayer, array $pileIds = []): BoardState
+    private function removalState(int $cardId, array $moodsByPlayer, array $pileIds = [], array $handIds = []): BoardState
     {
         $catalog = $this->sampleCatalog() + [
             1001 => $this->row('black', 'mythic', 2, null, 'malevolence', false, false, true),
@@ -5509,7 +5509,7 @@ final class BotPlayerServiceTest extends TestCase
             1008 => $this->row('blue', 'common', 1, null, 'chagrin', false, false, true),
             1009 => $this->row('black', 'common', 2, null, 'reckoning', false, false, true),
         ];
-        $hands = [1 => [$cardId]];
+        $hands = [1 => [$cardId, ...$handIds]];
         foreach ($moodsByPlayer as $playerId => $ids) {
             $hands[$playerId] = [...($hands[$playerId] ?? []), ...$ids];
         }
@@ -5722,5 +5722,32 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertFalse($state->isInPlay(29));
         self::assertContains(29, $state->discardPile());
+    }
+
+    public function testBravadoDiscardsAMoodOnlyToPlayABetterCardFromHand(): void
+    {
+        // Courage (1) goes to the pile so Betrayal (6) can be played from hand as the extra play.
+        $state = $this->removalState(84, [1 => [7]], [], [56]);
+        self::assertSame(['discard_mood_id' => 7], $this->bot->buildChoicesForCard($state, 84, 1));
+
+        // The card in hand is worth less than the mood it would cost: nothing to gain.
+        $state = $this->removalState(84, [1 => [56]], [], [7]);
+        self::assertSame([], $this->bot->buildChoicesForCard($state, 84, 1));
+
+        // No other mood to give up, or nothing left in hand to play.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(84, [], [], [56]), 84, 1));
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(84, [1 => [7]]), 84, 1));
+    }
+
+    public function testBravadosDiscardResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(84, [1 => [7]], [], [56]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 84, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 84, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertFalse($state->isInPlay(7));
+        self::assertContains(7, $state->discardPile());
     }
 }
