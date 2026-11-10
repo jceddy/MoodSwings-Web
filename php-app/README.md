@@ -9287,6 +9287,13 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Corruption, and now see its double win.** Neither option ("cycle up to two pile cards to the bottom of the deck and draw that many", or "the round's
+  winner wins two rounds") was ever chosen. `BotPlayerService::corruptionChoices()` takes the double win when its group leads the round and the double would decide
+  the game (it needs exactly two more round wins; a lead of 3 is required if a rival is also within two wins), or when the lead is at least 5 and no rival is that
+  close. Otherwise it cycles the two best pile cards (the loot cards' free draw), unless the pile is empty or a mood depends on its size. Separately, the bot's
+  "how many round wins does this round award" prediction (used by Shock, Rationalization, the Validation-removal check and others) only looked for a per-mood
+  `awardsExtraWin` tag, which only Chaos's variant sets -- real Corruption sets the board's own marker -- so it never noticed a Corruption in force. It now
+  goes through `predictedRoundWinsAwarded()`, which checks both.
 - **Bots use Arrogance's steal.** The optional "choose an opponent; they choose one of their white or blue moods and it becomes yours" was never named, though it
   costs the bot nothing. The opponent decides which mood they give up, so `BotPlayerService::arroganceTargetPlayerId()` judges each opponent by their best
   answer: it moves each of their white/blue moods to the bot on a copy of the board and scores it with `roundLead()`, taking the worst of those. It names the

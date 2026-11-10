@@ -958,13 +958,7 @@ final class BotPlayerService
             return $candidateMoodIds[0];
         }
 
-        $predictedRoundWinsAwarded = 1;
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
-                $predictedRoundWinsAwarded = 2;
-                break;
-            }
-        }
+        $predictedRoundWinsAwarded = $this->predictedRoundWinsAwarded($state);
 
         $options = [];
         foreach ($candidateMoodIds as $moodId) {
@@ -1628,6 +1622,74 @@ final class BotPlayerService
         }
 
         return $best;
+    }
+
+    /**
+     * How many round wins the winner of the round in progress will be awarded: 2 when Corruption's double win is in force (the board's own marker, or the
+     * per-mood 'awardsExtraWin' tag the Chaos variant of it uses), otherwise 1.
+     */
+    private function predictedRoundWinsAwarded(BoardState $state): int
+    {
+        if ($state->awardsExtraWinThisRound()) {
+            return 2;
+        }
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
+                return 2;
+            }
+        }
+
+        return 1;
+    }
+
+    /** Corruption's double win is a gamble on winning the round; without a game-deciding reason the bot wants at least this lead before taking it. */
+    private const CORRUPTION_MIN_LEAD_FOR_DOUBLE_WIN = 5;
+
+    /** The lead the bot wants for a game-deciding double win when a rival is also within two round wins of the game, which makes losing the round costly. */
+    private const CORRUPTION_MIN_LEAD_WHEN_RIVAL_IS_CLOSE = 3;
+
+    /**
+     * Corruption ("you may choose one: put up to two cards from the discard pile on the bottom of the deck, then draw that many; or the winner of the
+     * current round wins two rounds instead of one"): neither option was ever chosen. Doubling is for a round the bot is winning: it takes it when its group
+     * is in the lead and the double would decide the game (it needs exactly two more round wins -- one more is already enough on its own), needing a lead
+     * of CORRUPTION_MIN_LEAD_WHEN_RIVAL_IS_CLOSE if a rival also needs two or fewer, or otherwise when the lead is at least
+     * CORRUPTION_MIN_LEAD_FOR_DOUBLE_WIN and no rival is that close to the game (a round the rival steals would be worth two to them). Round-win counts
+     * come from $roundWinsNeededToWinGame and $roundWinsNeededToWinGameByPlayerId (unknown means no game-deciding case and no rival danger). Everything
+     * else cycles: the bot puts the two best pile cards on the bottom of the deck (the same free draw as the loot cards, and it denies them to opponents),
+     * unless the pile is empty or a mood depends on its size (discardPileLootCardId()). Leaving it blank otherwise.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     * @return array{mode?: string, discard_card_ids?: int[]}
+     */
+    private function corruptionChoices(BoardState $state, int $corruptionCardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame, array $roundWinsNeededToWinGameByPlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $corruptionCardId, $botGamePlayerId);
+        $lead = $this->roundLead($sim, $botGamePlayerId);
+
+        $rivalIsClose = false;
+        [, $rivalTotals] = $this->projectedGroupTotals($sim, $botGamePlayerId);
+        foreach (array_keys($rivalTotals) as $groupKey) {
+            $needed = $roundWinsNeededToWinGameByPlayerId[$groupKey] ?? null;
+            if ($needed !== null && $needed <= 2) {
+                $rivalIsClose = true;
+            }
+        }
+
+        $decidesTheGame = $roundWinsNeededToWinGame === 2 && $lead >= ($rivalIsClose ? self::CORRUPTION_MIN_LEAD_WHEN_RIVAL_IS_CLOSE : 1);
+        if (!$state->awardsExtraWinThisRound() && ($decidesTheGame || (!$rivalIsClose && $lead >= self::CORRUPTION_MIN_LEAD_FOR_DOUBLE_WIN))) {
+            return ['mode' => 'double_win'];
+        }
+
+        $pile = $state->discardPile();
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            if (in_array($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'], self::DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS, true)) {
+                return [];
+            }
+        }
+        $pile = array_values(array_diff($pile, [$corruptionCardId]));
+        usort($pile, fn (int $a, int $b): int => $this->draftPriorityRank($state, $b) <=> $this->draftPriorityRank($state, $a));
+
+        return $pile === [] ? [] : ['mode' => 'cycle', 'discard_card_ids' => array_slice($pile, 0, 2)];
     }
 
     /**
@@ -3007,7 +3069,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness', 'instability', 'shrewdness', 'arrogance',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness', 'instability', 'shrewdness', 'arrogance', 'corruption',
     ];
 
     /**
@@ -3135,6 +3197,10 @@ final class BotPlayerService
             $pair = $this->instabilityCandidateMoodIds($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGameByPlayerId);
 
             return $pair !== [] ? ['candidate_mood_ids' => $pair] : [];
+        }
+
+        if ($effectKey === 'corruption') {
+            return $this->corruptionChoices($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
         }
 
         if ($effectKey === 'arrogance') {
@@ -3665,13 +3731,7 @@ final class BotPlayerService
             return false;
         }
 
-        $predictedRoundWinsAwarded = 1;
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
-                $predictedRoundWinsAwarded = 2;
-                break;
-            }
-        }
+        $predictedRoundWinsAwarded = $this->predictedRoundWinsAwarded($state);
         if ($roundWinsNeededToWinGame > $predictedRoundWinsAwarded) {
             return false;
         }
@@ -3723,13 +3783,7 @@ final class BotPlayerService
             return false;
         }
 
-        $predictedRoundWinsAwarded = 1;
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
-                $predictedRoundWinsAwarded = 2;
-                break;
-            }
-        }
+        $predictedRoundWinsAwarded = $this->predictedRoundWinsAwarded($state);
 
         $scores = (new RoundScorer())->score($state);
         $activeIds = $state->activePlayerOrder();
@@ -4818,13 +4872,7 @@ final class BotPlayerService
             return false;
         }
 
-        $predictedRoundWinsAwarded = 1;
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
-                $predictedRoundWinsAwarded = 2;
-                break;
-            }
-        }
+        $predictedRoundWinsAwarded = $this->predictedRoundWinsAwarded($state);
 
         [$myValidation, , $rivalTotalsValidation] = $this->panicProjectedTotals($state, $removalCardId, $botGamePlayerId, $validationFirstTargetIds);
         [$myValueBased, , $rivalTotalsValueBased] = $this->panicProjectedTotals($state, $removalCardId, $botGamePlayerId, $valueBasedTargetIds);
@@ -5618,13 +5666,7 @@ final class BotPlayerService
             return true;
         }
 
-        $predictedRoundWinsAwarded = 1;
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
-                $predictedRoundWinsAwarded = 2;
-                break;
-            }
-        }
+        $predictedRoundWinsAwarded = $this->predictedRoundWinsAwarded($state);
 
         [$myWithout, $rivalWithout, $rivalTotalsWithout] = $this->panicProjectedTotals($state, $panicCardId, $botGamePlayerId, []);
         [$myWith, $rivalWith, $rivalTotalsWith] = $this->panicProjectedTotals($state, $panicCardId, $botGamePlayerId, [$targetMoodId]);
@@ -6227,13 +6269,7 @@ final class BotPlayerService
             return false;
         }
 
-        $predictedRoundWinsAwarded = 1;
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
-                $predictedRoundWinsAwarded = 2;
-                break;
-            }
-        }
+        $predictedRoundWinsAwarded = $this->predictedRoundWinsAwarded($state);
         if ($roundWinsNeededToWinGame > $predictedRoundWinsAwarded) {
             return false;
         }

@@ -1279,6 +1279,20 @@ final class BotPlayerServiceTest extends TestCase
         self::assertTrue($this->bot->hasGoodReasonToPlayNow($state, 101, 1, [101], roundWinsNeededToWinGame: 2));
     }
 
+    /**
+     * The same game-deciding check, with the double win in force the way Corruption really sets it (the board's own marker, not a per-mood tag): without
+     * it the bot would think winning the round is worth one win and judge a 2-wins-needed game as not decided by it.
+     */
+    public function testChooseActionPlaysShockForPointsWithTheBoardsDoubleWinMarker(): void
+    {
+        $state = $this->boardState(hands: [1 => [101, 60], 2 => [31]]);
+        $state->moveHandToInPlay(2, 31);
+        $state->moveHandToInPlay(1, 60);
+        $state->markAwardsExtraWinThisRound(60, 1);
+
+        self::assertTrue($this->bot->hasGoodReasonToPlayNow($state, 101, 1, [101], roundWinsNeededToWinGame: 2));
+    }
+
     // -- Exhilaration (reported live: don't sacrifice Bliss to it) ---------
 
     public function testChooseActionAvoidsSacrificingBlissWhenAnotherMoodIsAvailable(): void
@@ -6191,5 +6205,47 @@ final class BotPlayerServiceTest extends TestCase
         $result = (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 82, new \MoodSwings\Rules\PlayerChoices($choices));
 
         self::assertNotEmpty($result->pendingDecisions, 'the opponent is asked which of their moods to give up');
+    }
+
+    public function testCorruptionCyclesTheTwoBestPileCardsWhenDoublingIsNotWorthTheRisk(): void
+    {
+        $state = $this->removalState(60, [1 => [7], 2 => [55]], [3, 56, 55]);
+        self::assertSame(['mode' => 'cycle', 'discard_card_ids' => [56, 55]], $this->bot->buildChoicesForCard($state, 60, 1));
+
+        // Nothing in the pile, nothing to cycle.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(60, [1 => [7], 2 => [55]]), 60, 1));
+        // A mood that grows with the pile (Sadness) keeps the pile as it is.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(60, [1 => [74], 2 => [55]], [56]), 60, 1));
+    }
+
+    public function testCorruptionDoublesTheWinOnlyWhenTheBotIsClearlyWinningOrItDecidesTheGame(): void
+    {
+        // A lead of 14 with no rival near the game.
+        $state = $this->removalState(60, [1 => [56, 30], 2 => [55]], [3]);
+        self::assertSame(['mode' => 'double_win'], $this->bot->buildChoicesForCard($state, 60, 1));
+
+        // Two round wins from the game and ahead by 4: the double decides it.
+        $state = $this->removalState(60, [1 => [56], 2 => [55]], [3]);
+        self::assertSame(['mode' => 'double_win'], $this->bot->buildChoicesForCard($state, 60, 1, 2, [2 => 3]));
+
+        // Same, but player 2 is also two wins from the game and the lead is only 2: too risky, so it cycles.
+        $state = $this->removalState(60, [1 => [55], 2 => [5]], [3]);
+        self::assertSame(['mode' => 'cycle', 'discard_card_ids' => [3]], $this->bot->buildChoicesForCard($state, 60, 1, 2, [2 => 2]));
+    }
+
+    public function testCorruptionsChoicesResolveInTheRealGame(): void
+    {
+        $registry = DefaultEffectRegistry::build();
+        $state = $this->removalState(60, [1 => [7], 2 => [55]], [56, 55], [], [3, 5]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 60, 1);
+        (new \MoodSwings\Rules\MoodPlayService($registry))->playMood($state, 1, 60, new \MoodSwings\Rules\PlayerChoices($choices));
+        self::assertCount(2, $state->hand(1), 'two cards are drawn for the two cycled');
+
+        $state = $this->removalState(60, [1 => [56, 30], 2 => [55]], [3]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 60, 1);
+        (new \MoodSwings\Rules\MoodPlayService($registry))->playMood($state, 1, 60, new \MoodSwings\Rules\PlayerChoices($choices));
+        self::assertTrue($state->awardsExtraWinThisRound());
     }
 }
