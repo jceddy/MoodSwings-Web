@@ -9287,6 +9287,10 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Levity's bottom-deck.** The extra play comes either way; the optional "put this mood on the bottom of the deck and draw a card" was never
+  chosen, so Levity (printed at 0) stayed on the board for nothing. `BotPlayerService::levityBottomsItself()` runs the card's rule code both ways on a copy of
+  the board and bottoms it unless staying would leave the round lead (`roundLead()`) higher (a mood-count bonus, an opponent's Envy, ...). It never does so with
+  an empty deck, where Levity would be the card drawn back and could be cycled for nothing.
 - **Bots use the discard-for-an-extra-play cards.** Angst ("put one of your blue or red moods into the discard pile; if you do, play an additional mood
   from the discard pile") and Bravado (any other mood of yours; an additional mood from anywhere) left their optional discard blank, so both were bare moods.
   `BotPlayerService::extraPlayTradeMoodId()` tries each eligible mood of the bot's on a copy of the board: the mood goes to the pile, the bot's own

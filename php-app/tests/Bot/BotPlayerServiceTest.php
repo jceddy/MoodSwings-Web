@@ -5496,7 +5496,7 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([26, 76], $action['choices']['target_mood_ids']);
     }
     /** @param array<int, int[]> $moodsByPlayer */
-    private function removalState(int $cardId, array $moodsByPlayer, array $pileIds = [], array $handIds = []): BoardState
+    private function removalState(int $cardId, array $moodsByPlayer, array $pileIds = [], array $handIds = [], array $deckIds = []): BoardState
     {
         $catalog = $this->sampleCatalog() + [
             1001 => $this->row('black', 'mythic', 2, null, 'malevolence', false, false, true),
@@ -5508,12 +5508,13 @@ final class BotPlayerServiceTest extends TestCase
             1007 => $this->row('red', 'common', 0, null, 'wrath', false, false, true),
             1008 => $this->row('blue', 'common', 1, null, 'chagrin', false, false, true),
             1009 => $this->row('black', 'common', 2, null, 'reckoning', false, false, true),
+            1010 => $this->row('white', 'common', 0, null, 'levity', false, false, true),
         ];
         $hands = [1 => [$cardId, ...$handIds]];
         foreach ($moodsByPlayer as $playerId => $ids) {
             $hands[$playerId] = [...($hands[$playerId] ?? []), ...$ids];
         }
-        $state = new BoardState($catalog, DefaultEffectRegistry::build(), [1, 2, 3], $hands, [], $pileIds);
+        $state = new BoardState($catalog, DefaultEffectRegistry::build(), [1, 2, 3], $hands, $deckIds, $pileIds);
         foreach ($moodsByPlayer as $playerId => $ids) {
             foreach ($ids as $id) {
                 $state->moveHandToInPlay($playerId, $id);
@@ -5749,5 +5750,27 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertFalse($state->isInPlay(7));
         self::assertContains(7, $state->discardPile());
+    }
+
+    public function testLevityTurnsItselfIntoAFreeCardUnlessTheDeckIsEmpty(): void
+    {
+        $state = $this->removalState(1010, [], [], [], [3]);
+        self::assertSame(['bottom_deck_self' => true], $this->bot->buildChoicesForCard($state, 1010, 1));
+
+        // With nothing else in the deck Levity would just draw itself back.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1010, []), 1010, 1));
+    }
+
+    public function testLevityBottomedOutInTheRealGameKeepsTheHandAndGrantsAnExtraPlay(): void
+    {
+        $state = $this->removalState(1010, [], [], [55], [3]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1010, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1010, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertFalse($state->isInPlay(1010));
+        self::assertCount(2, $state->hand(1), 'Apathy plus the drawn card');
+        self::assertContains(3, $state->hand(1));
     }
 }

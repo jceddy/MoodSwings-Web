@@ -2546,7 +2546,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity',
     ];
 
     /**
@@ -2668,6 +2668,10 @@ final class BotPlayerService
             $targetMoodIds = $this->pureRemovalTargetMoodIds($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'levity') {
+            return $this->levityBottomsItself($state, $cardId, $botGamePlayerId) ? ['bottom_deck_self' => true] : [];
         }
 
         if ($effectKey === 'angst' || $effectKey === 'bravado') {
@@ -4961,6 +4965,27 @@ final class BotPlayerService
         }
 
         return $simulated;
+    }
+
+    /**
+     * Levity ("you may put this mood on the bottom of the deck; if you do, draw a card. You may play an additional mood this turn"): the extra play comes
+     * either way, so the choice is whether Levity stays on the board or becomes a free card. It is printed at 0, so staying only matters for what its
+     * presence does to the score (a mood-count bonus for the bot, an opponent's Envy, and so on). The bot runs the card's own rule code both ways on a copy
+     * of the board and bottoms it unless that leaves the round lead (roundLead()) lower. It never does so with an empty deck: Levity would be the only card
+     * there to draw, so it would come straight back to hand and the bot could cycle it for nothing.
+     */
+    private function levityBottomsItself(BoardState $state, int $levityCardId, int $botGamePlayerId): bool
+    {
+        if ($state->deck($botGamePlayerId) === []) {
+            return false;
+        }
+
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+        $stays = $this->withCardInPlay($state, $levityCardId, $botGamePlayerId);
+        $leaves = clone $stays;
+        $this->simulationRegistry->for('levity')->afterPlaying($leaves, $levityCardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['bottom_deck_self' => true]));
+
+        return $this->roundLead($leaves, $botGamePlayerId) >= $this->roundLead($stays, $botGamePlayerId);
     }
 
     /** Set while extraPlayTradeMoodId() is predicting the bot's follow-up play, so that play can't start another prediction of its own. */
