@@ -2548,7 +2548,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation',
     ];
 
     /**
@@ -2670,6 +2670,12 @@ final class BotPlayerService
             $targetMoodIds = $this->pureRemovalTargetMoodIds($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'infatuation') {
+            $pair = $this->infatuationDiscardMoodIds($state, $cardId, $botGamePlayerId);
+
+            return $pair !== [] ? ['discard_mood_ids' => $pair] : [];
         }
 
         if ($effectKey === 'wariness') {
@@ -3571,6 +3577,49 @@ final class BotPlayerService
         }
 
         return true;
+    }
+
+    /**
+     * Infatuation ("you may put two of your other moods into the discard pile; if you do, this mood's value becomes 9"): the optional pair was never
+     * named, so it stayed at its printed value. Two moods of the bot's own are a steep price, so it tries every pair of them on a copy of the board,
+     * running the card's own rule code (which also applies the 9), and takes the pair that raises the round lead (roundLead()) the most, if by at least 1
+     * over playing Infatuation as it is. Moods with lasting value (PROTECTED_EFFECT_KEYS, Hope, Grace, Stubbornness, Melancholy) are never in the pair.
+     *
+     * @return int[] the two mood ids, or [] to leave Infatuation alone
+     */
+    private function infatuationDiscardMoodIds(BoardState $state, int $infatuationCardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $infatuationCardId, $botGamePlayerId);
+        $untouchable = [...self::PROTECTED_EFFECT_KEYS, 'hope', 'grace', 'stubbornness', 'melancholy'];
+        $candidates = [];
+        foreach ($sim->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $effectKey = $sim->catalogRow($sim->effectiveCardId($mood->cardId))['effectKey'];
+            if ($mood->cardId !== $infatuationCardId && !in_array($effectKey, $untouchable, true)) {
+                $candidates[] = $mood->cardId;
+            }
+        }
+
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+        $bestLead = $this->roundLead($sim, $botGamePlayerId);
+        $best = [];
+        for ($i = 0; $i < count($candidates); $i++) {
+            for ($j = $i + 1; $j < count($candidates); $j++) {
+                $pair = [$candidates[$i], $candidates[$j]];
+                $after = clone $sim;
+                try {
+                    $this->simulationRegistry->for('infatuation')->afterPlaying($after, $infatuationCardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['discard_mood_ids' => $pair]));
+                } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+                    continue;
+                }
+                $lead = $this->roundLead($after, $botGamePlayerId);
+                if ($lead > $bestLead) {
+                    $bestLead = $lead;
+                    $best = $pair;
+                }
+            }
+        }
+
+        return $best;
     }
 
     /** The most a card can be printed at for the bot to give it to an opponent as Wariness's price; a teammate may be given anything. */

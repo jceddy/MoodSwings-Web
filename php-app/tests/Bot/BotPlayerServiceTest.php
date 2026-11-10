@@ -5510,6 +5510,7 @@ final class BotPlayerServiceTest extends TestCase
             1009 => $this->row('black', 'common', 2, null, 'reckoning', false, false, true),
             1010 => $this->row('white', 'common', 0, null, 'levity', false, false, true),
             1011 => $this->row('green', 'common', 4, null, 'wariness', false, false, true),
+            1012 => $this->row('red', 'rare', 3, 6, 'infatuation', false, false, true),
         ];
         $hands = [1 => [$cardId, ...$handIds]];
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -5841,5 +5842,31 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertContains(7, $state->hand(3));
         self::assertNotContains(7, $state->hand(1));
+    }
+
+    public function testInfatuationDiscardsTheTwoCheapestMoodsOnlyWhenTheNineMoreThanPaysForThem(): void
+    {
+        // Courage (1) and Charity (1) are the cheap pair; Betrayal (6) stays. 9 + 6 beats 3 + 6 + 1 + 1.
+        $state = $this->removalState(1012, [1 => [56, 7, 3]]);
+        $choices = $this->bot->buildChoicesForCard($state, 1012, 1);
+        self::assertEqualsCanonicalizing([7, 3], $choices['discard_mood_ids']);
+
+        // Two 4-point moods are worth more than the nine's extra six: leave it alone.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1012, [1 => [55, 5]]), 1012, 1));
+        // Fewer than two other moods.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1012, [1 => [7]]), 1012, 1));
+    }
+
+    public function testInfatuationsDiscardResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1012, [1 => [56, 7, 3]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1012, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1012, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertSame(9, $state->valueOf(1012));
+        self::assertFalse($state->isInPlay(7));
+        self::assertFalse($state->isInPlay(3));
     }
 }

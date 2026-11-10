@@ -9287,6 +9287,10 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Infatuation's sacrifice.** The optional "put two of your other moods into the discard pile; if you do, this mood's value becomes 9" was never
+  named. `BotPlayerService::infatuationDiscardMoodIds()` tries every pair of the bot's own other moods on a copy of the board, running the card's own rule code
+  (which also applies the 9), and uses the pair that raises `roundLead()` the most -- at least 1 over playing Infatuation as it is. Moods with lasting value
+  (Validation, Duplicity, Hope, Grace, ...) are never in the pair.
 - **Bots use Wariness's gift.** Wariness's optional "give a card from your hand to another player; if you do, play an additional mood" was never made.
   `BotPlayerService::warinessChoices()` does it when two or more blue/black moods are in play (Wariness is green, so it doesn't count), the hand holds at
   least two other cards, and the extra play pays for the card: it predicts that play with its own `chooseAction()`, gives the card it would miss least, and
