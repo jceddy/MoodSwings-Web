@@ -1491,6 +1491,63 @@ final class BotPlayerService
     }
 
     /**
+     * Impartiality ("choose odd or even; suppress all other moods with a number of the chosen type in their top right corners until the end
+     * of this round"): suppression hits EVERY other mood of that parity, the bot's own included, so the bot scores both choices -- the board
+     * with every other odd mood suppressed, and with every other even one suppressed -- through the real RoundScorer on copies of the board,
+     * and picks the parity that leaves its group furthest ahead of the best rival (roundLead()). A tie falls to 'odd', the schema's first option.
+     */
+    private function impartialityParity(BoardState $state, int $impartialityCardId, int $botGamePlayerId): string
+    {
+        $best = null;
+        $bestLead = null;
+        foreach (['odd', 'even'] as $parity) {
+            $simulated = clone $state;
+            foreach ($state->moodsInPlay() as $mood) {
+                if ($mood->cardId === $impartialityCardId) {
+                    continue;
+                }
+                if (($this->baseValue($state, $mood->cardId) % 2 === 1) === ($parity === 'odd')) {
+                    $simulated->suppress($mood->cardId, 'end_of_round', $impartialityCardId);
+                }
+            }
+            $lead = $this->roundLead($simulated, $botGamePlayerId);
+            if ($bestLead === null || $lead > $bestLead) {
+                $best = $parity;
+                $bestLead = $lead;
+            }
+        }
+
+        return $best;
+    }
+
+    /**
+     * Discernment ("choose odd or even; you may reveal any number of cards from your hand with a number of the chosen type in their top right
+     * corners and put them on the bottom of the deck, then draw that many cards"): cycling swaps a card for a random one, so it is worth doing
+     * only to cards the bot would gladly lose -- the same "genuinely replaceable" test as Zeal (a printed number of RATIONALIZATION_LOW_VALUE_HAND_AVERAGE
+     * or less AND a draft priority of ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD or less). The bot picks whichever parity has more such cards in its hand
+     * (Discernment itself, still in hand, never counts), reveals all of them, and falls back to 'odd' with nothing to reveal when neither has any.
+     *
+     * @return array{parity: string, reveal_card_ids?: int[]}
+     */
+    private function discernmentChoices(BoardState $state, int $discernmentCardId, int $botGamePlayerId): array
+    {
+        $replaceable = ['odd' => [], 'even' => []];
+        foreach ($state->hand($botGamePlayerId) as $handCardId) {
+            if ($handCardId === $discernmentCardId) {
+                continue;
+            }
+            $row = $state->catalogRow($state->effectiveCardId($handCardId));
+            if ($row['baseValue'] <= self::RATIONALIZATION_LOW_VALUE_HAND_AVERAGE && $row['draftPriorityScore'] <= self::ZEAL_LOW_DRAFT_PRIORITY_THRESHOLD) {
+                $replaceable[$row['baseValue'] % 2 === 1 ? 'odd' : 'even'][] = $handCardId;
+            }
+        }
+
+        $parity = count($replaceable['even']) > count($replaceable['odd']) ? 'even' : 'odd';
+
+        return $replaceable[$parity] === [] ? ['parity' => $parity] : ['parity' => $parity, 'reveal_card_ids' => $replaceable[$parity]];
+    }
+
+    /**
      * Orderliness ("choose odd numbers or even numbers; each of your other moods with a number of that type in its top right
      * corner has its value increased by 1"): the bot picks whichever type is the most common among the printed numbers of its
      * other moods in play, so the most moods get the +1. A tie -- including no other moods yet -- is broken the same way by the
@@ -2366,7 +2423,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment',
     ];
 
     /**
@@ -2598,6 +2655,14 @@ final class BotPlayerService
 
         if ($effectKey === 'orderliness') {
             return ['parity' => $this->orderlinessParity($state, $cardId, $botGamePlayerId)];
+        }
+
+        if ($effectKey === 'impartiality') {
+            return ['parity' => $this->impartialityParity($state, $cardId, $botGamePlayerId)];
+        }
+
+        if ($effectKey === 'discernment') {
+            return $this->discernmentChoices($state, $cardId, $botGamePlayerId);
         }
 
         if ($effectKey === 'belligerence') {

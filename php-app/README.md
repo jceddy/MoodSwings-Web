@@ -9287,6 +9287,11 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots choose Impartiality's and Discernment's parity.** Both used to take the generic resolver's first option ('odd') whatever the board looked like.
+  `impartialityParity()` scores the board with every other odd, then every other even, mood suppressed (Impartiality hits the bot's own moods too)
+  through `RoundScorer` on copies and picks the parity that leaves the bot's group furthest ahead (`roundLead()`), tie to odd. `discernmentChoices()` counts
+  the "genuinely replaceable" cards in hand (printed number <= 2 and draft priority <= 2, the Zeal thresholds -- most of this set sits at draft priority
+  1, so the printed number is what really decides), picks the parity with more of them and reveals all of those; with none it just answers odd.
 - **Bots use Scorn's while-in-play reaction.** `BotPlayerService::buildChoicesForCard()` adds `scorn_suppress_target` to a play whenever the bot has a
   Scorn in play and an opponent's mood shares the played card's color (its color once in play, so Imagination is honoured; found on a copy of the
   board). The target is the best by `suppressionTargetPriority()` -- never a Hope/Grace, never a mood worth 0 -- and Creativity is skipped, since
