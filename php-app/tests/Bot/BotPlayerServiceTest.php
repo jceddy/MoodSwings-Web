@@ -5537,6 +5537,7 @@ final class BotPlayerServiceTest extends TestCase
             1022 => $this->row('blue', 'rare', 1, null, 'admiration', false, false, true),
             1023 => $this->row('white', 'rare', 2, null, 'rapport', false, false, true),
             1024 => $this->row('blue', 'uncommon', 1, null, 'doubt', false, false, true),
+            1025 => $this->row('blue', 'uncommon', 2, null, 'yearning', false, false, true),
         ];
         $hands = [1 => [$cardId, ...$handIds]] + $otherHands;
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -6385,5 +6386,36 @@ final class BotPlayerServiceTest extends TestCase
         self::assertNotContains(5, $state->hand(1));
         self::assertSame(['white'], $state->effectState(1024, 'bannedColors'));
         self::assertCount(4, $state->hand(1), 'one card went to the bottom and one was drawn');
+    }
+
+    public function testYearningTradesTheWorstHandCardForABetterPileCard(): void
+    {
+        // Yearning (blue) and the opponent's Fury (red) make the two blue/red moods. Courage goes; Intimidation (tier 40) comes back.
+        $state = $this->removalState(1025, [2 => [91]], [67, 55], [7]);
+        self::assertSame(['hand_card_id' => 7, 'discard_card_id' => 67], $this->bot->buildChoicesForCard($state, 1025, 1));
+    }
+
+    public function testYearningStaysBareWithoutTheConditionAnImprovementOrAnEmptyPile(): void
+    {
+        // Only Yearning itself is blue or red.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1025, [2 => [56]], [67], [7]), 1025, 1));
+        // The best pile card (Apathy) is no better than the worst hand card (Compulsion).
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1025, [2 => [91]], [55], [86]), 1025, 1));
+        // Empty pile.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1025, [2 => [91]], [], [7]), 1025, 1));
+        // An opponent's Opportunism would take the discarded card.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1025, [2 => [91, 1017]], [67], [7]), 1025, 1));
+    }
+
+    public function testYearningsTradeResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1025, [2 => [91]], [67, 55], [7]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1025, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1025, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertSame([67], $state->hand(1));
+        self::assertContains(7, $state->discardPile());
     }
 }

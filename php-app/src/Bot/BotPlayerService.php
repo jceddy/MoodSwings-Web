@@ -1673,6 +1673,43 @@ final class BotPlayerService
         return 1;
     }
 
+    /**
+     * Yearning ("if there are two or more blue and/or red moods, you may discard a card from your hand; if you do, put a card from the discard pile into your
+     * hand"): the optional discard and pick-up were never made. With the condition met (checked with Yearning itself in play), the bot trades its worst
+     * hand card (the lowest draftPriorityRank()) for the best card already in the pile -- the discarded card isn't a candidate, taking it back would do
+     * nothing -- but only when the pile card is strictly better, so the hand improves and the best pile card is also kept from an opponent's recursion. It
+     * holds back when the discard would feed an opponent (discardingFromHandHelpsAnOpponent()), and with an empty pile or an empty hand.
+     *
+     * @return array{hand_card_id?: int, discard_card_id?: int}
+     */
+    private function yearningChoices(BoardState $state, int $yearningCardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $yearningCardId, $botGamePlayerId);
+        if (\MoodSwings\Rules\Effects\Custom\CustomEffectSupport::countMoodsOfColors($sim, ['blue', 'red']) < 2
+            || $this->discardingFromHandHelpsAnOpponent($sim, $botGamePlayerId)
+        ) {
+            return [];
+        }
+
+        $worstHandCardId = null;
+        foreach ($sim->hand($botGamePlayerId) as $handCardId) {
+            if ($worstHandCardId === null || $this->draftPriorityRank($sim, $handCardId) < $this->draftPriorityRank($sim, $worstHandCardId)) {
+                $worstHandCardId = $handCardId;
+            }
+        }
+        $bestPileCardId = null;
+        foreach ($sim->discardPile() as $pileCardId) {
+            if ($bestPileCardId === null || $this->draftPriorityRank($sim, $pileCardId) > $this->draftPriorityRank($sim, $bestPileCardId)) {
+                $bestPileCardId = $pileCardId;
+            }
+        }
+        if ($worstHandCardId === null || $bestPileCardId === null || $this->draftPriorityRank($sim, $bestPileCardId) <= $this->draftPriorityRank($sim, $worstHandCardId)) {
+            return [];
+        }
+
+        return ['hand_card_id' => $worstHandCardId, 'discard_card_id' => $bestPileCardId];
+    }
+
     /** Doubt bans the colors it reveals for everyone: the bot reveals cards from at most this many colors, so its random draws and its own hand stay mostly playable. */
     private const DOUBT_MAX_BANNED_COLORS = 2;
 
@@ -3242,7 +3279,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness', 'instability', 'shrewdness', 'arrogance', 'corruption', 'optimism', 'admiration', 'doubt',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness', 'instability', 'shrewdness', 'arrogance', 'corruption', 'optimism', 'admiration', 'doubt', 'yearning',
     ];
 
     /**
@@ -3370,6 +3407,10 @@ final class BotPlayerService
             $pair = $this->instabilityCandidateMoodIds($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGameByPlayerId);
 
             return $pair !== [] ? ['candidate_mood_ids' => $pair] : [];
+        }
+
+        if ($effectKey === 'yearning') {
+            return $this->yearningChoices($state, $cardId, $botGamePlayerId);
         }
 
         if ($effectKey === 'doubt') {

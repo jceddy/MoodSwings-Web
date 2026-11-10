@@ -9287,6 +9287,10 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Yearning's trade.** The optional "discard a card from your hand; if you do, put a card from the discard pile into your hand" (with two or more
+  blue/red moods in play) was never made. `BotPlayerService::yearningChoices()`, with the condition checked with Yearning itself in play, trades the worst hand card
+  (lowest `draftPriorityRank()`) for the best card already in the pile -- never the card it is discarding -- but only when the pile card is strictly better, and
+  holds back when the discard would feed an opponent (`discardingFromHandHelpsAnOpponent()`) or the pile or hand is empty.
 - **Bots use Doubt's reveal.** Doubt ("reveal any number of cards from your hand, put them on the bottom of the deck and draw that many; next round nobody can play
   a mood sharing a color with a revealed card") is Zeal's cycle for several cards at once, with the cost that every revealed color is banned for everyone -- the
   bot's own hand included. `BotPlayerService::doubtChoices()` reveals only weak cards (draft tier 2 or lower, the bar Zeal and Rapport use), never one whose color a
