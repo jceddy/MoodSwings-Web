@@ -1630,6 +1630,44 @@ final class BotPlayerService
         return $best;
     }
 
+    /**
+     * Arrogance ("you may choose an opponent; they choose one of their white or blue moods and it becomes yours, until this mood is no longer in play"):
+     * the optional opponent was never named, so the steal never happened -- and it costs the bot nothing. The opponent decides which mood they part with,
+     * so the bot judges each opponent by their best answer: it moves each of their white/blue moods to the bot on a copy of the board, scores the board by
+     * round lead (roundLead()), and takes the worst of those scores. It names the opponent with the best worst case, if that beats not using Arrogance by at
+     * least 1. Teammates are never asked, and an opponent with no white or blue mood is skipped (nothing would happen).
+     */
+    private function arroganceTargetPlayerId(BoardState $state, int $arroganceCardId, int $botGamePlayerId): ?int
+    {
+        $sim = $this->withCardInPlay($state, $arroganceCardId, $botGamePlayerId);
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+        $best = null;
+        $bestGain = 0;
+        foreach ($sim->activePlayerOrder() as $opponentId) {
+            if ($opponentId === $botGamePlayerId || $sim->isTeammate($botGamePlayerId, $opponentId)) {
+                continue;
+            }
+
+            $worstLead = null;
+            foreach ($sim->moodsOwnedBy($opponentId) as $mood) {
+                if (!in_array($sim->colorOf($mood->cardId), ['white', 'blue'], true)) {
+                    continue;
+                }
+                $after = clone $sim;
+                $after->giveInPlayToPlayer($mood->cardId, $botGamePlayerId);
+                $lead = $this->roundLead($after, $botGamePlayerId);
+                $worstLead = $worstLead === null ? $lead : min($worstLead, $lead);
+            }
+
+            if ($worstLead !== null && $worstLead - $baseline > $bestGain) {
+                $bestGain = $worstLead - $baseline;
+                $best = $opponentId;
+            }
+        }
+
+        return $best;
+    }
+
     /** The most points per swap the bot gives up to take an opponent's snowballing mood with Shrewdness (the own mood's value minus the one it receives). */
     private const SHREWDNESS_MAX_SNOWBALL_PREMIUM = 2;
 
@@ -2969,7 +3007,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness', 'instability', 'shrewdness',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness', 'instability', 'shrewdness', 'arrogance',
     ];
 
     /**
@@ -3097,6 +3135,12 @@ final class BotPlayerService
             $pair = $this->instabilityCandidateMoodIds($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGameByPlayerId);
 
             return $pair !== [] ? ['candidate_mood_ids' => $pair] : [];
+        }
+
+        if ($effectKey === 'arrogance') {
+            $opponentId = $this->arroganceTargetPlayerId($state, $cardId, $botGamePlayerId);
+
+            return $opponentId !== null ? ['opponent_player_id' => $opponentId] : [];
         }
 
         if ($effectKey === 'shrewdness') {

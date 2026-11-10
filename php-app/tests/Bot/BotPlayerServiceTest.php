@@ -6166,4 +6166,30 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(1, $state->ownerOf(26));
         self::assertSame(2, $state->ownerOf(7));
     }
+
+    public function testArroganceTargetsTheOpponentWhoseWorstGiveUpStillHelps(): void
+    {
+        // Player 2 has a white Courage (1) and a blue Bashfulness (6): they'd give up Courage, and even that is a gain. Player 3 has only a black mood.
+        $state = $this->removalState(82, [2 => [7, 30], 3 => [56]]);
+        self::assertSame(['opponent_player_id' => 2], $this->bot->buildChoicesForCard($state, 82, 1));
+    }
+
+    public function testArroganceStaysBareWithoutAWhiteOrBlueMoodWorthTaking(): void
+    {
+        // Only black moods.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(82, [2 => [56]]), 82, 1));
+        // The only white mood is worth nothing.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(82, [2 => [1014]]), 82, 1));
+    }
+
+    public function testArrogancesChoiceIsAcceptedByTheRealGame(): void
+    {
+        $state = $this->removalState(82, [2 => [7, 30]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 82, 1);
+
+        $result = (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 82, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertNotEmpty($result->pendingDecisions, 'the opponent is asked which of their moods to give up');
+    }
 }

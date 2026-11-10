@@ -9287,6 +9287,10 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Arrogance's steal.** The optional "choose an opponent; they choose one of their white or blue moods and it becomes yours" was never named, though it
+  costs the bot nothing. The opponent decides which mood they give up, so `BotPlayerService::arroganceTargetPlayerId()` judges each opponent by their best
+  answer: it moves each of their white/blue moods to the bot on a copy of the board and scores it with `roundLead()`, taking the worst of those. It names the
+  opponent with the best worst case, if that beats not using Arrogance by at least 1; teammates and opponents with no white/blue mood are skipped.
 - **Bots use Shrewdness's swap.** The optional pair ("one of your other moods and an opponent's mood worth no more; swap them") was never named. Because the
   mood it takes can't be worth more than the one it gives, a swap can't win points outright -- each point of difference costs the round lead two (one lost,
   one handed over) -- unless values depend on who owns a mood. `BotPlayerService::shrewdnessChoices()` tries every pair on a copy of the board with the card's
