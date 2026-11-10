@@ -888,7 +888,7 @@ final class BotPlayerService
 
         // "At the start of each of your turns" moods (TurnStartEffect) whose optional choice is free or
         // plainly worth taking -- the generic resolver below never fills an optional field. Anything not
-        // listed (Brooding, Martyrdom, Rumination, Wastefulness) is left declined, the conservative default.
+        // listed is left declined, the conservative default.
         if ($decisionType === 'turn_start_trigger' && $sourceCardId !== null && $state->isInPlay($sourceCardId)) {
             $effectKey = $state->catalogRow($state->effectiveCardId($sourceCardId))['effectKey'];
             if ($effectKey === 'covetousness' && isset($field['candidate_card_ids'])) {
@@ -901,6 +901,29 @@ final class BotPlayerService
                 }
 
                 return $best === null ? [] : [$field['key'] => $best];
+            }
+            if ($effectKey === 'wastefulness' && $field['key'] === 'discard_top_card') {
+                return $this->wastefulnessMillsTheDeck($state, $botGamePlayerId) ? [$field['key'] => true] : [];
+            }
+            if ($effectKey === 'rumination' && $field['key'] === 'target_mood_id') {
+                $moodId = $this->ruminationMoodId($state, $botGamePlayerId, $roundWinsNeededToWinGameByPlayerId);
+
+                return $moodId === null ? [] : [$field['key'] => $moodId];
+            }
+            if ($effectKey === 'martyrdom' && $field['key'] === 'sacrifice_mood_id') {
+                $sacrificeId = $this->martyrdomSacrificeMoodId($state, $sourceCardId, $botGamePlayerId, array_map('intval', $field['candidate_card_ids'] ?? []));
+
+                return $sacrificeId === null ? [] : [$field['key'] => $sacrificeId];
+            }
+            if ($effectKey === 'brooding' && $field['key'] === 'take_card_id') {
+                $takeCardId = $this->broodingTakeCardId($state, $botGamePlayerId);
+
+                return $takeCardId === null ? [] : [$field['key'] => $takeCardId];
+            }
+            if ($effectKey === 'brooding' && $field['key'] === 'discard_hand_card_id') {
+                $discardCardId = $this->broodingDiscardCardId($state, $botGamePlayerId);
+
+                return $discardCardId === null ? [] : [$field['key'] => $discardCardId];
             }
             if ($effectKey === 'vitality' && $field['key'] === 'color') {
                 // The color the bot has the most moods of (each gets +2).
@@ -1748,6 +1771,211 @@ final class BotPlayerService
         }
 
         return $best !== null ? ['target_mood_id' => $best] : [];
+    }
+
+    /** Wastefulness only mills while the deck still has at least this many cards, so it never runs the deck dry. */
+    private const WASTEFULNESS_MIN_DECK_SIZE = 3;
+
+    /** How much a mood that grows with the discard pile gains, roughly, from one more card in it: Sadness's +2 a card, Wonder's chance of one, Possessiveness's jump. */
+    private const PILE_GROWTH_BENEFIT = ['sadness' => 2, 'wonder' => 1, 'possessiveness' => 3];
+
+    /** Possessiveness needs this many cards in the pile; once the pile has them, another card adds nothing for it. */
+    private const POSSESSIVENESS_PILE_THRESHOLD = 5;
+
+    /**
+     * Wastefulness ("at the start of each of your turns, you may put the top card of the deck into the discard pile"): always declined before. A fuller pile
+     * is worth something only to a mood that grows with it (PILE_GROWTH_BENEFIT: Sadness, Wonder, Possessiveness, whose bonus stops at
+     * POSSESSIVENESS_PILE_THRESHOLD cards), and it helps whoever owns one -- so the bot mills when its own side's moods of that kind would gain more than the
+     * opponents' would, counted without looking at the card on top (it isn't known to the bot). It never mills a deck of fewer than
+     * WASTEFULNESS_MIN_DECK_SIZE cards.
+     */
+    private function wastefulnessMillsTheDeck(BoardState $state, int $botGamePlayerId): bool
+    {
+        if (count($state->deck($botGamePlayerId)) < self::WASTEFULNESS_MIN_DECK_SIZE) {
+            return false;
+        }
+
+        $pileSize = count($state->discardPile());
+        $ours = 0;
+        $theirs = 0;
+        foreach ($state->moodsInPlay() as $mood) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            $benefit = self::PILE_GROWTH_BENEFIT[$effectKey] ?? 0;
+            if ($effectKey === 'possessiveness' && $pileSize >= self::POSSESSIVENESS_PILE_THRESHOLD) {
+                $benefit = 0;
+            }
+            if ($mood->ownerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $mood->ownerId)) {
+                $ours += $benefit;
+            } else {
+                $theirs += $benefit;
+            }
+        }
+
+        return $ours > $theirs;
+    }
+
+    /**
+     * Rumination ("at the start of each of your turns, you may put one of your moods into your hand"): always declined before. Bouncing a mood is how the
+     * bot replays one whose after-playing effect is worth having again (a removal or steal effect, say), using this turn's own play on it -- the same idea
+     * as Fear's replay (fearReplayMoodId()). For each of its moods it plays the turn out on a copy of the board: the mood returns to hand, the bot's own
+     * chooseAction() makes the turn's play from the hand (MoodPlayService), and the round lead (roundLead()) is compared with making the best play
+     * without a bounce. It bounces a mood only when that comes out strictly ahead, so a mood isn't put in hand for a play that turns out to be some other
+     * card. Lasting-value moods (PROTECTED_EFFECT_KEYS, Hope, Grace, Stubbornness, Melancholy) are left alone. If the turn can't be played out on the copy the
+     * answer is no bounce.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     */
+    private function ruminationMoodId(BoardState $state, int $botGamePlayerId, array $roundWinsNeededToWinGameByPlayerId): ?int
+    {
+        if ($this->predictingFear) {
+            return null;
+        }
+
+        $untouchable = [...self::PROTECTED_EFFECT_KEYS, 'hope', 'grace', 'stubbornness', 'melancholy'];
+        $candidates = [];
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            if (!in_array($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'], [...$untouchable, 'rumination'], true)) {
+                $candidates[] = $mood->cardId;
+            }
+        }
+        if ($candidates === []) {
+            return null;
+        }
+
+        $this->predictingFear = true;
+        try {
+            $best = $this->ruminationOutcomeLead($state, $botGamePlayerId, null, $roundWinsNeededToWinGameByPlayerId);
+            if ($best === null) {
+                return null;
+            }
+
+            $bestMoodId = null;
+            foreach ($candidates as $moodId) {
+                $lead = $this->ruminationOutcomeLead($state, $botGamePlayerId, $moodId, $roundWinsNeededToWinGameByPlayerId);
+                if ($lead !== null && $lead > $best) {
+                    $bestMoodId = $moodId;
+                    $best = $lead;
+                }
+            }
+
+            return $bestMoodId;
+        } finally {
+            $this->predictingFear = false;
+        }
+    }
+
+    /**
+     * The bot's round lead after this turn's play, with $returnedMoodId (if any) put into its hand first; null if the play can't be made on the copy.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     */
+    private function ruminationOutcomeLead(BoardState $state, int $botGamePlayerId, ?int $returnedMoodId, array $roundWinsNeededToWinGameByPlayerId): ?int
+    {
+        $sim = clone $state;
+        if ($sim->currentPlayerId() !== $botGamePlayerId) {
+            $sim->startTurn($botGamePlayerId);
+        }
+        $plays = new \MoodSwings\Rules\MoodPlayService($this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build());
+        try {
+            if ($returnedMoodId !== null) {
+                $sim->moveInPlayToHand($returnedMoodId);
+            }
+            $next = $this->chooseAction($sim, $sim->hand($botGamePlayerId), $botGamePlayerId, null, $roundWinsNeededToWinGameByPlayerId);
+            if ($next !== null) {
+                $plays->playMood($sim, $botGamePlayerId, $next['card_id'], new \MoodSwings\Rules\PlayerChoices($next['choices']));
+            }
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return $this->roundLead($sim, $botGamePlayerId);
+    }
+
+    /**
+     * Martyrdom ("at the start of each of your turns, you may put one of your other moods into the discard pile; if you do, each opponent discards a card
+     * from their hand"): always declined before. An opponent's discard is worth something (every card is a possible play, and hands are short late in a
+     * round), but a sacrifice costs the bot a mood, so it only pays when the mood is free: one worth nothing right now (valueOf() of 0 -- a spent Fear, a
+     * suppressed mood) that isn't a lasting-value card (PROTECTED_EFFECT_KEYS, Hope, Grace, Stubbornness, Melancholy), and whose removal leaves the round
+     * lead (roundLead()) no lower (mood-count bonuses can make even a 0 matter). It needs an opponent with a card in hand, or nothing would be discarded.
+     * With several qualifying moods it gives up the one that leaves the best lead.
+     *
+     * @param int[] $candidateMoodIds
+     */
+    private function martyrdomSacrificeMoodId(BoardState $state, int $martyrdomCardId, int $botGamePlayerId, array $candidateMoodIds): ?int
+    {
+        $anOpponentHasCards = false;
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId !== $botGamePlayerId && !$state->isTeammate($botGamePlayerId, $playerId) && $state->hand($playerId) !== []) {
+                $anOpponentHasCards = true;
+            }
+        }
+        if (!$anOpponentHasCards) {
+            return null;
+        }
+
+        $untouchable = [...self::PROTECTED_EFFECT_KEYS, 'hope', 'grace', 'stubbornness', 'melancholy'];
+        $baseline = $this->roundLead($state, $botGamePlayerId);
+        $best = null;
+        $bestLead = $baseline - 1;
+        foreach ($candidateMoodIds as $moodId) {
+            if ($moodId === $martyrdomCardId || !$state->isInPlay($moodId) || $state->valueOf($moodId) !== 0
+                || in_array($state->catalogRow($state->effectiveCardId($moodId))['effectKey'], $untouchable, true)
+            ) {
+                continue;
+            }
+
+            $after = clone $state;
+            $after->moveInPlayToDiscard($moodId);
+            $lead = $this->roundLead($after, $botGamePlayerId);
+            if ($lead >= $baseline && $lead > $bestLead) {
+                $bestLead = $lead;
+                $best = $moodId;
+            }
+        }
+
+        return $best;
+    }
+
+    /**
+     * The hand card Brooding's discard gives up: the one the bot would miss least (the lowest draftPriorityRank()), never one of the lasting-value cards in
+     * PROTECTED_EFFECT_KEYS (Validation, Duplicity, Exhilaration, Hope, Grace), which are worth keeping whatever their printed value. Null with no such card.
+     */
+    private function broodingDiscardCardId(BoardState $state, int $botGamePlayerId): ?int
+    {
+        $worst = null;
+        foreach ($state->hand($botGamePlayerId) as $handCardId) {
+            if (in_array($state->catalogRow($state->effectiveCardId($handCardId))['effectKey'], self::PROTECTED_EFFECT_KEYS, true)) {
+                continue;
+            }
+            if ($worst === null || $this->draftPriorityRank($state, $handCardId) < $this->draftPriorityRank($state, $worst)) {
+                $worst = $handCardId;
+            }
+        }
+
+        return $worst;
+    }
+
+    /**
+     * Brooding ("at the start of each of your turns, you may put a card from the discard pile into your hand; if you do, discard a card from your hand"):
+     * the optional pick-up was always declined. It is a loot -- one card in, one out -- so the bot takes the best card in the pile when it is strictly better
+     * than the card it would then discard (broodingDiscardCardId()), improving the hand a little every turn. It holds back when the discard would feed an
+     * opponent (discardingFromHandHelpsAnOpponent()), and with an empty pile or nothing it could discard.
+     */
+    private function broodingTakeCardId(BoardState $state, int $botGamePlayerId): ?int
+    {
+        $worstHandCardId = $this->broodingDiscardCardId($state, $botGamePlayerId);
+        if ($worstHandCardId === null || $this->discardingFromHandHelpsAnOpponent($state, $botGamePlayerId)) {
+            return null;
+        }
+
+        $best = null;
+        foreach ($state->discardPile() as $pileCardId) {
+            if ($best === null || $this->draftPriorityRank($state, $pileCardId) > $this->draftPriorityRank($state, $best)) {
+                $best = $pileCardId;
+            }
+        }
+
+        return $best !== null && $this->draftPriorityRank($state, $best) > $this->draftPriorityRank($state, $worstHandCardId) ? $best : null;
     }
 
     /** Doubt bans the colors it reveals for everyone: the bot reveals cards from at most this many colors, so its random draws and its own hand stay mostly playable. */

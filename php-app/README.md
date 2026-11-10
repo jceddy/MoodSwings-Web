@@ -9287,6 +9287,24 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Wastefulness's mill.** Wastefulness ("at the start of each of your turns, you may put the top card of the deck into the discard pile") was always declined at the
+  turn-start prompt, which was the last of the turn-start moods the bots ignored. A fuller pile only helps a mood that grows with it, so
+  `BotPlayerService::wastefulnessMillsTheDeck()` mills when its own side's such moods (Sadness, Wonder, Possessiveness -- whose bonus stops at five cards) would gain
+  more than the opponents' would, counted without looking at the card on top, and never from a deck of fewer than three cards.
+- **Bots use Rumination to replay a mood.** Rumination ("at the start of each of your turns, you may put one of your moods into your hand") was always declined at the
+  turn-start prompt. Bouncing a mood is how the bot replays one whose after-playing effect is worth having again, using the turn's own play on it -- the idea behind
+  Fear's replay. `BotPlayerService::ruminationMoodId()` plays the turn out on a copy of the board for each of its moods (returned to hand, the bot's own
+  `chooseAction()` making the turn's play through `MoodPlayService`) and compares `roundLead()` with the best play without a bounce; it bounces only when strictly
+  ahead, and leaves lasting-value moods alone. If the turn can't be played out on the copy it declines. Wastefulness is the one turn-start prompt still declined.
+- **Bots use Martyrdom's sacrifice.** Martyrdom ("at the start of each of your turns, you may put one of your other moods into the discard pile; if you do, each
+  opponent discards a card from their hand") was always declined at the turn-start prompt. `BotPlayerService::martyrdomSacrificeMoodId()` only uses it when the
+  sacrifice is free: a mood worth nothing right now (a spent Fear, a suppressed mood) that isn't a lasting-value card (Validation, Duplicity, Exhilaration, Hope,
+  Grace, ...) and whose removal leaves `roundLead()` no lower, with at least one opponent holding a card. Rumination and Wastefulness are still declined.
+- **Bots use Brooding's loot.** Brooding ("at the start of each of your turns, you may put a card from the discard pile into your hand; if you do, discard a
+  card from your hand") was always declined at the turn-start prompt. `BotPlayerService::broodingTakeCardId()` takes the best card in the pile when it is strictly
+  better than the card it would then discard (`broodingDiscardCardId()`: the lowest `draftPriorityRank()` in hand, never a Validation/Duplicity/Exhilaration/Hope/Grace),
+  so the hand improves a little every turn. It holds back when the discard would feed an opponent (`discardingFromHandHelpsAnOpponent()`), and with an empty pile or
+  nothing it could discard. Martyrdom, Rumination and Wastefulness are still declined.
 - **Bots use Encouragement's dice boost.** The optional "choose a mood with dice in its lower left corner; it uses the dice total or its top right number, whichever is
   higher" was never chosen. `BotPlayerService::encouragementChoices()` only considers the bot's own and a teammate's moods (an opponent's would be a gift), runs the
   card's own rule code for each one with a printed dice value on a copy of the board, and names the one that gains the most `roundLead()`, if at least 1.

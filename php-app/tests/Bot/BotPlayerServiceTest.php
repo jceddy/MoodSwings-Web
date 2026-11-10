@@ -5539,6 +5539,11 @@ final class BotPlayerServiceTest extends TestCase
             1024 => $this->row('blue', 'uncommon', 1, null, 'doubt', false, false, true),
             1025 => $this->row('blue', 'uncommon', 2, null, 'yearning', false, false, true),
             1026 => $this->row('white', 'uncommon', 3, null, 'encouragement', false, true, true),
+            1027 => $this->row('black', 'uncommon', 0, null, 'brooding', false, true, false),
+            1028 => $this->row('black', 'rare', 1, null, 'martyrdom', false, true, false),
+            1029 => $this->row('blue', 'rare', 1, null, 'rumination', false, true, false),
+            1030 => $this->row('green', 'rare', 0, null, 'wastefulness', false, true, false),
+            1031 => $this->row('black', 'mythic', 0, null, 'sadness', false, true, false),
         ];
         $hands = [1 => [$cardId, ...$handIds]] + $otherHands;
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -6444,5 +6449,163 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame(6, $state->valueOf(33));
         self::assertLessThan(6, $before);
+    }
+
+    /** A state at the start of the bot's turn with Brooding already in play, a hand and a discard pile. */
+    private function broodingState(array $handIds, array $pileIds, array $opponentMoods = []): BoardState
+    {
+        $state = $this->removalState(1027, $opponentMoods, $pileIds, $handIds);
+        $state->moveHandToInPlay(1, 1027);
+
+        return $state;
+    }
+
+    public function testBroodingTakesTheBestPileCardOnlyWhenItBeatsTheCardItWouldDiscard(): void
+    {
+        $field = ['key' => 'take_card_id', 'type' => 'discard_card', 'required' => false];
+
+        // Intimidation (tier 40) beats Apathy (tier 1).
+        self::assertSame(['take_card_id' => 67], $this->bot->chooseDecisionAnswer($this->broodingState([55], [67, 7]), $field, 1, 'turn_start_trigger', 1027));
+        // Nothing in the pile beats the worst hand card.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->broodingState([55], [7]), $field, 1, 'turn_start_trigger', 1027));
+        // An empty hand has nothing to discard afterwards.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->broodingState([], [67]), $field, 1, 'turn_start_trigger', 1027));
+        // An opponent's Opportunism would take the discarded card.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->broodingState([55], [67], [2 => [1017]]), $field, 1, 'turn_start_trigger', 1027));
+    }
+
+    public function testBroodingsDiscardGivesUpTheWorstCardButKeepsProtectedOnes(): void
+    {
+        $field = ['key' => 'discard_hand_card_id', 'type' => 'hand_card', 'required' => true];
+
+        self::assertSame(['discard_hand_card_id' => 55], $this->bot->chooseDecisionAnswer($this->broodingState([67, 55], []), $field, 1, 'turn_start_trigger', 1027));
+        // Validation (26) is worth keeping whatever it is printed at, so Apathy goes even though Validation ranks lower.
+        self::assertSame(['discard_hand_card_id' => 55], $this->bot->chooseDecisionAnswer($this->broodingState([26, 55], []), $field, 1, 'turn_start_trigger', 1027));
+    }
+
+    public function testBroodingsTwoStepsResolveInTheRealGame(): void
+    {
+        $state = $this->broodingState([55], [67]);
+        $brooding = DefaultEffectRegistry::build()->for('brooding');
+        $take = ['key' => 'take_card_id', 'type' => 'discard_card', 'required' => false];
+        $takeAnswer = $this->bot->chooseDecisionAnswer($state, $take, 1, 'turn_start_trigger', 1027);
+
+        $followUps = $brooding->applyTurnStart($state, 1027, 1, ['take_card_id' => new \MoodSwings\Rules\PlayerChoices($takeAnswer)]);
+        self::assertSame('discard_hand_card_id', $followUps[0]->key);
+        $discardAnswer = $this->bot->chooseDecisionAnswer($state, $followUps[0]->field, 1, 'turn_start_trigger', 1027);
+        $brooding->applyTurnStart($state, 1027, 1, ['discard_hand_card_id' => new \MoodSwings\Rules\PlayerChoices($discardAnswer)]);
+
+        self::assertSame([67], $state->hand(1));
+        self::assertContains(55, $state->discardPile());
+    }
+
+    /** The bot's turn start with Martyrdom in play, own moods, and an opponent holding cards. */
+    private function martyrdomState(array $ownMoods, array $opponentHand = [55]): BoardState
+    {
+        $state = $this->removalState(1028, [1 => $ownMoods], [], [], [], [2 => $opponentHand]);
+        $state->moveHandToInPlay(1, 1028);
+
+        return $state;
+    }
+
+    public function testMartyrdomSacrificesAMoodWorthNothingAndNothingElse(): void
+    {
+        $field = static fn (array $candidates): array => ['key' => 'sacrifice_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'candidate_card_ids' => $candidates];
+
+        // A spent Fear (0) goes; Dignity (3) is never worth it.
+        $state = $this->martyrdomState([38, 8]);
+        self::assertSame(['sacrifice_mood_id' => 38], $this->bot->chooseDecisionAnswer($state, $field([38, 8]), 1, 'turn_start_trigger', 1028));
+        // Only a mood with points: decline.
+        $state = $this->martyrdomState([8]);
+        self::assertSame([], $this->bot->chooseDecisionAnswer($state, $field([8]), 1, 'turn_start_trigger', 1028));
+        // No opponent has a card to discard.
+        $state = $this->martyrdomState([38], []);
+        self::assertSame([], $this->bot->chooseDecisionAnswer($state, $field([38]), 1, 'turn_start_trigger', 1028));
+    }
+
+    public function testMartyrdomsTwoStepsResolveInTheRealGame(): void
+    {
+        $state = $this->martyrdomState([38, 8]);
+        $field = ['key' => 'sacrifice_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'candidate_card_ids' => [38, 8]];
+        $answer = $this->bot->chooseDecisionAnswer($state, $field, 1, 'turn_start_trigger', 1028);
+
+        $martyrdom = DefaultEffectRegistry::build()->for('martyrdom');
+        $requests = $martyrdom->applyTurnStart($state, 1028, 1, ['sacrifice_mood_id' => new \MoodSwings\Rules\PlayerChoices($answer)]);
+
+        self::assertFalse($state->isInPlay(38));
+        self::assertSame('discard_card_id_2', $requests[0]->key, 'the opponent is asked what to discard');
+    }
+
+    /** The bot's turn with Rumination in play, own moods, a hand and the opponent's moods. */
+    private function ruminationState(array $ownMoods, array $hand, array $opponentMoods): BoardState
+    {
+        $state = $this->removalState(1029, [1 => $ownMoods, 2 => $opponentMoods], [], $hand);
+        $state->moveHandToInPlay(1, 1029);
+        $state->startTurn(1);
+
+        return $state;
+    }
+
+    public function testRuminationReturnsAMoodWhoseEffectIsWorthPlayingAgain(): void
+    {
+        $field = ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false];
+
+        // Courage is out and an opponent's Betrayal (6) has appeared since: bounce it and play it again to discard Betrayal.
+        $state = $this->ruminationState([7], [], [56]);
+        self::assertSame(['target_mood_id' => 7], $this->bot->chooseDecisionAnswer($state, $field, 1, 'turn_start_trigger', 1029));
+
+        // Nothing for Courage to hit.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->ruminationState([7], [], [55]), $field, 1, 'turn_start_trigger', 1029));
+        // A better card is waiting in hand: this turn's play goes to it, and the bounced Courage would just sit there.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->ruminationState([7], [56], [30]), $field, 1, 'turn_start_trigger', 1029));
+    }
+
+    public function testRuminationsAnswerResolvesInTheRealGame(): void
+    {
+        $state = $this->ruminationState([7], [], [56]);
+        $field = ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false];
+        $answer = $this->bot->chooseDecisionAnswer($state, $field, 1, 'turn_start_trigger', 1029);
+
+        DefaultEffectRegistry::build()->for('rumination')->applyTurnStart($state, 1029, 1, ['target_mood_id' => new \MoodSwings\Rules\PlayerChoices($answer)]);
+
+        self::assertContains(7, $state->hand(1));
+        self::assertFalse($state->isInPlay(7));
+    }
+
+    /** The bot's turn with Wastefulness in play, own moods, and the opponent's moods. */
+    private function wastefulnessState(array $ownMoods, array $opponentMoods, array $deck = [3, 5, 7]): BoardState
+    {
+        $state = $this->removalState(1030, [1 => $ownMoods, 2 => $opponentMoods], [], [], $deck);
+        $state->moveHandToInPlay(1, 1030);
+
+        return $state;
+    }
+
+    public function testWastefulnessMillsOnlyWhenItHelpsTheBotsPileMoodsMoreThanTheOpponents(): void
+    {
+        $field = ['key' => 'discard_top_card', 'type' => 'bool', 'required' => false];
+
+        // Sadness (+2 a card in the pile) is the bot's.
+        self::assertSame(['discard_top_card' => true], $this->bot->chooseDecisionAnswer($this->wastefulnessState([74], [55]), $field, 1, 'turn_start_trigger', 1030));
+        // Both sides have one: no edge.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->wastefulnessState([74], [1031]), $field, 1, 'turn_start_trigger', 1030));
+        // Only the opponent has one.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->wastefulnessState([55], [1031]), $field, 1, 'turn_start_trigger', 1030));
+        // Nothing grows with the pile.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->wastefulnessState([55], [56]), $field, 1, 'turn_start_trigger', 1030));
+        // A nearly empty deck is left alone.
+        self::assertSame([], $this->bot->chooseDecisionAnswer($this->wastefulnessState([74], [55], [3, 5]), $field, 1, 'turn_start_trigger', 1030));
+    }
+
+    public function testWastefulnessMillResolvesInTheRealGame(): void
+    {
+        $state = $this->wastefulnessState([74], [55]);
+        $field = ['key' => 'discard_top_card', 'type' => 'bool', 'required' => false];
+        $answer = $this->bot->chooseDecisionAnswer($state, $field, 1, 'turn_start_trigger', 1030);
+
+        DefaultEffectRegistry::build()->for('wastefulness')->applyTurnStart($state, 1030, 1, ['discard_top_card' => new \MoodSwings\Rules\PlayerChoices($answer)]);
+
+        self::assertSame([3], $state->discardPile());
+        self::assertSame([5, 7], $state->deck(1));
     }
 }
