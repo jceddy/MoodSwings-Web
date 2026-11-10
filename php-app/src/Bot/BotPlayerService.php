@@ -1630,6 +1630,76 @@ final class BotPlayerService
         return $best;
     }
 
+    /** The most points per swap the bot gives up to take an opponent's snowballing mood with Shrewdness (the own mood's value minus the one it receives). */
+    private const SHREWDNESS_MAX_SNOWBALL_PREMIUM = 2;
+
+    /**
+     * Shrewdness ("you may choose one of your other moods and one of an opponent's moods with a value less than or equal to that mood's; if you do, you and
+     * that opponent swap them"): the optional pair was never named. Because the mood it takes can't be worth more than the one it gives, a swap can't win
+     * points outright (each point of difference costs the bot's round lead two: one lost, one handed over) -- unless values depend on who owns a mood. So the
+     * bot tries every pair of one of its own other moods and one opponent mood on a copy of the board, with the card's own rule code, and uses a pair when
+     * the round lead (roundLead()) rises by at least 1, or the mood it takes is a snowballing one (SNOWBALL_EFFECT_KEYS: Validation, Hope, Grace) and the
+     * mood it gives is worth no more than SHREWDNESS_MAX_SNOWBALL_PREMIUM more -- unless that would turn a round lead the bot has into none. It prefers the
+     * biggest gain, then a snowball target, then the cheapest swap. It never gives away one of its own lasting-value moods (PROTECTED_EFFECT_KEYS, Hope,
+     * Grace, Stubbornness, Melancholy), since the opponent would get to use it.
+     *
+     * @return array{own_mood_id?: int, opponent_mood_id?: int}
+     */
+    private function shrewdnessChoices(BoardState $state, int $cardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $cardId, $botGamePlayerId);
+        $untouchable = [...self::PROTECTED_EFFECT_KEYS, 'hope', 'grace', 'stubbornness', 'melancholy'];
+        $own = [];
+        foreach ($sim->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $effectKey = $sim->catalogRow($sim->effectiveCardId($mood->cardId))['effectKey'];
+            if ($mood->cardId !== $cardId && !in_array($effectKey, $untouchable, true)) {
+                $own[] = $mood->cardId;
+            }
+        }
+        $targets = $this->nonTeammateOpponentMoodIds($sim, $botGamePlayerId);
+        if ($own === [] || $targets === []) {
+            return [];
+        }
+
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+        $best = null;
+        foreach ($own as $ownId) {
+            foreach ($targets as $targetId) {
+                if ($sim->valueOf($targetId) > $sim->valueOf($ownId)) {
+                    continue;
+                }
+
+                $after = clone $sim;
+                try {
+                    $this->simulationRegistry->for('shrewdness')->afterPlaying($after, $cardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['own_mood_id' => $ownId, 'opponent_mood_id' => $targetId]));
+                } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+                    continue;
+                }
+
+                $afterLead = $this->roundLead($after, $botGamePlayerId);
+                $gain = $afterLead - $baseline;
+                $premium = $sim->valueOf($ownId) - $sim->valueOf($targetId);
+                $isSnowball = in_array($sim->catalogRow($sim->effectiveCardId($targetId))['effectKey'], self::SNOWBALL_EFFECT_KEYS, true);
+                $worthwhileSnowball = $isSnowball
+                    && $premium <= self::SHREWDNESS_MAX_SNOWBALL_PREMIUM
+                    && !($baseline > 0 && $afterLead <= 0);
+                if ($gain < 1 && !$worthwhileSnowball) {
+                    continue;
+                }
+
+                $candidate = ['gain' => $gain, 'snowball' => $isSnowball, 'cost' => $premium, 'own' => $ownId, 'target' => $targetId];
+                if ($best === null
+                    || [$candidate['gain'], $candidate['snowball'], -$candidate['cost']] > [$best['gain'], $best['snowball'], -$best['cost']]
+                ) {
+                    $best = $candidate;
+                }
+            }
+        }
+
+        return $best === null ? [] : ['own_mood_id' => $best['own'], 'opponent_mood_id' => $best['target']];
+    }
+
     /** Pettiness is for protecting a lead a single play could close: the bot's lead has to be no more than this. */
     private const PETTINESS_MAX_LEAD_TO_PROTECT = 4;
 
@@ -2899,7 +2969,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness', 'instability',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness', 'instability', 'shrewdness',
     ];
 
     /**
@@ -3027,6 +3097,10 @@ final class BotPlayerService
             $pair = $this->instabilityCandidateMoodIds($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGameByPlayerId);
 
             return $pair !== [] ? ['candidate_mood_ids' => $pair] : [];
+        }
+
+        if ($effectKey === 'shrewdness') {
+            return $this->shrewdnessChoices($state, $cardId, $botGamePlayerId);
         }
 
         if ($effectKey === 'pettiness') {

@@ -5518,6 +5518,7 @@ final class BotPlayerServiceTest extends TestCase
             1017 => $this->row('black', 'rare', 0, null, 'opportunism', false, false, true),
             1018 => $this->row('red', 'common', 2, null, 'vindictiveness', false, false, true),
             1019 => $this->row('black', 'uncommon', 2, null, 'pettiness', false, false, true),
+            1020 => $this->row('green', 'rare', 3, null, 'shrewdness', false, false, true),
         ];
         $hands = [1 => [$cardId, ...$handIds]] + $otherHands;
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -6137,5 +6138,32 @@ final class BotPlayerServiceTest extends TestCase
         $result = (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 96, new \MoodSwings\Rules\PlayerChoices($choices));
 
         self::assertNotEmpty($result->pendingDecisions, 'the opponent is asked which of the two moods to give up');
+    }
+
+    public function testShrewdnessSwapsACheapMoodForAnOpponentsValidation(): void
+    {
+        // Courage (1) for Validation (1) costs nothing in points, and Validation keeps handing its owner extra plays.
+        $state = $this->removalState(1020, [1 => [7, 8], 2 => [26]]);
+        self::assertSame(['own_mood_id' => 7, 'opponent_mood_id' => 26], $this->bot->buildChoicesForCard($state, 1020, 1));
+    }
+
+    public function testShrewdnessStaysBareWithoutASnowballTargetOrWhenTheSwapCostsTooMuch(): void
+    {
+        // A plain 4-point mood for the bot's 6: the bot only loses.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1020, [1 => [56], 2 => [55]]), 1020, 1));
+        // Giving up Betrayal (6) for a 1-point Validation is too steep.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1020, [1 => [56], 2 => [26]]), 1020, 1));
+    }
+
+    public function testShrewdnessSwapResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1020, [1 => [7, 8], 2 => [26]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1020, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1020, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertSame(1, $state->ownerOf(26));
+        self::assertSame(2, $state->ownerOf(7));
     }
 }

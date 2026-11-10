@@ -9287,6 +9287,11 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Shrewdness's swap.** The optional pair ("one of your other moods and an opponent's mood worth no more; swap them") was never named. Because the
+  mood it takes can't be worth more than the one it gives, a swap can't win points outright -- each point of difference costs the round lead two (one lost,
+  one handed over) -- unless values depend on who owns a mood. `BotPlayerService::shrewdnessChoices()` tries every pair on a copy of the board with the card's
+  own rule code and uses one when `roundLead()` rises by at least 1, or when the mood it takes is an opponent's snowballing Validation/Hope/Grace and the mood
+  it gives is worth no more than 2 more -- unless that would turn a lead the bot has into none. It never gives away its own lasting-value moods.
 - **Bots use Instability's swap.** The optional pair ("choose two moods from the same opponent; they give you one, then you give them one of yours") was never
   named. The opponent decides which of the two they part with, so `BotPlayerService::instabilityCandidateMoodIds()` judges each pair of one opponent's moods
   by its worse outcome: it moves each of the two to the bot on a copy of the board, has the bot give back whatever its own `instabilityMoodToGive()` would
