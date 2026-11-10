@@ -2546,7 +2546,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance',
     ];
 
     /**
@@ -2668,6 +2668,10 @@ final class BotPlayerService
             $targetMoodIds = $this->pureRemovalTargetMoodIds($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if (isset(self::MASS_EFFECT_ACTIONS[$effectKey])) {
+            return $this->massEffectChoices($effectKey, $state, $cardId, $botGamePlayerId);
         }
 
         if (isset(self::CONDITIONAL_REMOVAL[$effectKey])) {
@@ -4949,6 +4953,112 @@ final class BotPlayerService
         }
 
         return $simulated;
+    }
+
+    /** Whether a mass effect removes moods for good ('discard', 'suppress') or only sends them back to be replayed ('hand'), which is worth less. */
+    private const MASS_EFFECT_ACTIONS = [
+        'rage' => 'discard',
+        'wrath' => 'discard',
+        'reckoning' => 'discard',
+        'repentance' => 'suppress',
+        'chagrin' => 'hand',
+        'hesitation' => 'hand',
+        'disorientation' => 'hand',
+    ];
+
+    /** The round-lead gain a bounce must beat: a one-point gain is undone by the owner replaying the mood. */
+    private const MASS_BOUNCE_MIN_LEAD_GAIN = 2;
+
+    private ?\MoodSwings\Rules\EffectRegistry $simulationRegistry = null;
+
+    /**
+     * The "you may ... all other moods ..." cards -- Rage, Wrath, Reckoning (discard), Repentance (suppress), Chagrin, Hesitation and Disorientation
+     * (bounce) -- are optional and sweep the whole board, so whether they pay off depends entirely on what is in play. The bot tries each candidate
+     * answer on a copy of the board with the card already in play, running the card's own rule code (afterPlaying()), and scores the board with
+     * roundLead() -- the bot's group's round score minus the best rival's, as Belligerence's opt-in does. It uses the best answer only if it beats
+     * leaving the board alone: by at least 1 point for a discard or suppression, and MASS_BOUNCE_MIN_LEAD_GAIN for a bounce. Candidates are the plain yes
+     * (Rage, Wrath, Chagrin), Hesitation's "all" or a single red/green opponent mood, each value on the board for Disorientation and Repentance, and
+     * Reckoning where every player keeps their highest-value mood (how the bots answer it).
+     *
+     * @return array<string, mixed>
+     */
+    private function massEffectChoices(string $effectKey, BoardState $state, int $cardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $cardId, $botGamePlayerId);
+        $otherValues = [];
+        foreach ($sim->moodsInPlay() as $mood) {
+            if ($mood->cardId !== $cardId) {
+                $otherValues[$sim->valueOf($mood->cardId)] = true;
+            }
+        }
+        if ($otherValues === []) {
+            return [];
+        }
+
+        $candidates = match ($effectKey) {
+            'rage' => [['discard_qualifying_moods' => true]],
+            'wrath' => [['discard_all_other_moods' => true]],
+            'chagrin' => [['return_qualifying_moods' => true]],
+            'reckoning' => [['reckon' => true]],
+            'hesitation' => [
+                ['mode' => 'all'],
+                ...array_map(
+                    fn (int $moodId): array => ['mode' => 'single', 'target_mood_id' => $moodId],
+                    array_values(array_filter(
+                        $this->nonTeammateOpponentMoodIds($sim, $botGamePlayerId),
+                        fn (int $moodId): bool => in_array($sim->colorOf($moodId), ['red', 'green'], true),
+                    )),
+                ),
+            ],
+            default => array_map(fn (int $value): array => ['value' => $value], array_keys($otherValues)),
+        };
+
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+        $needed = $baseline + (self::MASS_EFFECT_ACTIONS[$effectKey] === 'hand' ? self::MASS_BOUNCE_MIN_LEAD_GAIN : 1);
+        $best = null;
+        $bestLead = $needed - 1;
+        foreach ($candidates as $candidate) {
+            $after = clone $sim;
+            try {
+                if ($effectKey === 'reckoning') {
+                    $this->applyReckoning($after);
+                } else {
+                    $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+                    $this->simulationRegistry->for($effectKey)->afterPlaying($after, $cardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices($candidate));
+                }
+            } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+                continue;
+            }
+            $lead = $this->roundLead($after, $botGamePlayerId);
+            if ($lead > $bestLead) {
+                $best = $candidate;
+                $bestLead = $lead;
+            }
+        }
+
+        return $best ?? [];
+    }
+
+    /** Reckoning's outcome as the bots play it: every player keeps their highest-value mood and every other mood in play is discarded. */
+    private function applyReckoning(BoardState $sim): void
+    {
+        $kept = [];
+        foreach ($sim->activePlayerOrder() as $ownerId) {
+            $best = null;
+            foreach ($sim->moodsOwnedBy($ownerId) as $mood) {
+                if ($best === null || $sim->valueOf($mood->cardId) > $sim->valueOf($best)) {
+                    $best = $mood->cardId;
+                }
+            }
+            if ($best !== null) {
+                $kept[] = $best;
+            }
+        }
+        foreach ($sim->moodsInPlay() as $mood) {
+            if (!in_array($mood->cardId, $kept, true)) {
+                $sim->moveInPlayToDiscard($mood->cardId);
+            }
+        }
     }
 
     /**

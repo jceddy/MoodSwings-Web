@@ -9287,6 +9287,11 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use the mass-effect cards.** Rage, Wrath and Reckoning (discard), Repentance (suppress) and Chagrin, Hesitation and Disorientation (bounce) are
+  optional sweeps the bot never opted into. `BotPlayerService::massEffectChoices()` tries each candidate answer (the plain yes; Hesitation's "all" or a
+  single red/green opponent mood; every value on the board for Disorientation and Repentance; Reckoning with each player keeping their best mood) on a copy
+  of the board with the card in play, running the card's own `afterPlaying()`, and scores it with `roundLead()`. It uses the best one only if it beats
+  leaving the board alone -- by 1+ for a discard or suppression, 2+ for a bounce, since the owner can replay a bounced mood.
 - **Bots use the conditional-removal cards.** Disdain, Indignation, Distrust and Vigilance ("if there are two or more X and/or Y moods, you may remove one of
   them") left their optional target blank. `BotPlayerService::conditionalRemovalTargetMoodId()` checks the two-moods condition on a copy of the board with the
   played card in play, then names the best opponent mood of those colors (never its own): Shock's pick for the discard cards (Indignation's 4-or-less cap

@@ -5504,6 +5504,10 @@ final class BotPlayerServiceTest extends TestCase
             1003 => $this->row('blue', 'common', 2, null, 'indignation', false, false, true),
             1004 => $this->row('red', 'common', 2, null, 'distrust', false, false, true),
             1005 => $this->row('black', 'common', 2, null, 'vigilance', false, false, true),
+            1006 => $this->row('red', 'common', 2, null, 'rage', false, false, true),
+            1007 => $this->row('red', 'common', 0, null, 'wrath', false, false, true),
+            1008 => $this->row('blue', 'common', 1, null, 'chagrin', false, false, true),
+            1009 => $this->row('black', 'common', 2, null, 'reckoning', false, false, true),
         ];
         $hands = [1 => [$cardId]];
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -5612,6 +5616,83 @@ final class BotPlayerServiceTest extends TestCase
 
             $target = $choices['target_mood_id'];
             self::assertTrue(!$state->isInPlay($target) || $state->valueOf($target) === 0, "card {$cardId}'s target should be gone or suppressed");
+        }
+    }
+
+    public function testRageAndWrathSweepTheBoardOnlyWhenThatPutsTheBotAhead(): void
+    {
+        // The opponent's three small moods (5 points) are what Rage clears; the bot's own Apathy (4) stays.
+        $state = $this->removalState(1006, [1 => [55], 2 => [7, 3, 8]]);
+        self::assertSame(['discard_qualifying_moods' => true], $this->bot->buildChoicesForCard($state, 1006, 1));
+
+        // Here the small moods are the bot's own, against one big opposing mood: Rage would only hurt.
+        $state = $this->removalState(1006, [1 => [7, 3, 8], 2 => [55]]);
+        self::assertSame([], $this->bot->buildChoicesForCard($state, 1006, 1));
+
+        // Wrath wipes everything else: worth it when behind, not when ahead.
+        $state = $this->removalState(1007, [1 => [55], 2 => [56, 30]]);
+        self::assertSame(['discard_all_other_moods' => true], $this->bot->buildChoicesForCard($state, 1007, 1));
+        $state = $this->removalState(1007, [1 => [56, 30], 2 => [55]]);
+        self::assertSame([], $this->bot->buildChoicesForCard($state, 1007, 1));
+    }
+
+    public function testChagrinAndReckoningAreUsedWhenTheyBeatTheBoardAsItStands(): void
+    {
+        // Two 6-valued opposing moods go back to hand; the bot only has a 1.
+        $state = $this->removalState(1008, [1 => [7], 2 => [56, 30]]);
+        self::assertSame(['return_qualifying_moods' => true], $this->bot->buildChoicesForCard($state, 1008, 1));
+        // Nothing worth 4 or more is out there: no point.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1008, [1 => [7], 2 => [3]]), 1008, 1));
+
+        // Reckoning: everyone keeps their best mood, so an opponent holding four middling moods drops to one.
+        $state = $this->removalState(1009, [1 => [56], 2 => [8, 3, 7, 5]]);
+        self::assertSame(['reckon' => true], $this->bot->buildChoicesForCard($state, 1009, 1));
+        // With a lone mood each, it changes nothing for the lead and stays off.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1009, [1 => [56], 2 => [8]]), 1009, 1));
+    }
+
+    public function testHesitationDisorientationAndRepentanceNameTheRightAnswer(): void
+    {
+        // Hesitation (blue): the opponent's red moods (Fury 4, Bravado 3) all go home.
+        $state = $this->removalState(41, [2 => [91, 84]]);
+        self::assertSame(['mode' => 'all'], $this->bot->buildChoicesForCard($state, 41, 1));
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(41, [2 => [55]]), 41, 1));
+
+        // Disorientation and Repentance pick the value two big opposing moods share (both 6).
+        $state = $this->removalState(35, [1 => [53], 2 => [56, 30]]);
+        self::assertSame(['value' => 6], $this->bot->buildChoicesForCard($state, 35, 1));
+        $state = $this->removalState(23, [1 => [53], 2 => [56, 30]]);
+        self::assertSame(['value' => 6], $this->bot->buildChoicesForCard($state, 23, 1));
+        // Only the bot's own mood is out there: suppressing it would be pure loss.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(23, [1 => [56]]), 23, 1));
+    }
+
+    public function testTheMassEffectChoicesResolveInTheRealGame(): void
+    {
+        $registry = DefaultEffectRegistry::build();
+        $cases = [
+            [1006, [1 => [55], 2 => [7, 3, 8]]],
+            [1007, [1 => [55], 2 => [56, 30]]],
+            [1008, [1 => [7], 2 => [56, 30]]],
+            [1009, [1 => [56], 2 => [8, 3, 7, 5]]],
+            [41, [2 => [91, 84]]],
+            [35, [1 => [53], 2 => [56, 30]]],
+            [23, [1 => [53], 2 => [56, 30]]],
+        ];
+        foreach ($cases as [$cardId, $moods]) {
+            $state = $this->removalState($cardId, $moods);
+            $state->startTurn(1);
+            $choices = $this->bot->buildChoicesForCard($state, $cardId, 1);
+            self::assertNotSame([], $choices, "card {$cardId}");
+            $scoring = static fn (BoardState $board): int => count(array_filter($board->moodsOwnedBy(2), fn ($mood) => $board->valueOf($mood->cardId) > 0));
+            $before = $scoring($state);
+
+            (new \MoodSwings\Rules\MoodPlayService($registry))->playMood($state, 1, $cardId, new \MoodSwings\Rules\PlayerChoices($choices));
+
+            // Reckoning waits on every player's answer, so it only gets as far as asking.
+            if ($cardId !== 1009) {
+                self::assertLessThan($before, $scoring($state), "card {$cardId} should take down an opponent mood");
+            }
         }
     }
 }
