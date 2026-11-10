@@ -5540,6 +5540,7 @@ final class BotPlayerServiceTest extends TestCase
             1025 => $this->row('blue', 'uncommon', 2, null, 'yearning', false, false, true),
             1026 => $this->row('white', 'uncommon', 3, null, 'encouragement', false, true, true),
             1027 => $this->row('black', 'uncommon', 0, null, 'brooding', false, true, false),
+            1028 => $this->row('black', 'rare', 1, null, 'martyrdom', false, true, false),
         ];
         $hands = [1 => [$cardId, ...$handIds]] + $otherHands;
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -6493,5 +6494,42 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame([67], $state->hand(1));
         self::assertContains(55, $state->discardPile());
+    }
+
+    /** The bot's turn start with Martyrdom in play, own moods, and an opponent holding cards. */
+    private function martyrdomState(array $ownMoods, array $opponentHand = [55]): BoardState
+    {
+        $state = $this->removalState(1028, [1 => $ownMoods], [], [], [], [2 => $opponentHand]);
+        $state->moveHandToInPlay(1, 1028);
+
+        return $state;
+    }
+
+    public function testMartyrdomSacrificesAMoodWorthNothingAndNothingElse(): void
+    {
+        $field = static fn (array $candidates): array => ['key' => 'sacrifice_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'candidate_card_ids' => $candidates];
+
+        // A spent Fear (0) goes; Dignity (3) is never worth it.
+        $state = $this->martyrdomState([38, 8]);
+        self::assertSame(['sacrifice_mood_id' => 38], $this->bot->chooseDecisionAnswer($state, $field([38, 8]), 1, 'turn_start_trigger', 1028));
+        // Only a mood with points: decline.
+        $state = $this->martyrdomState([8]);
+        self::assertSame([], $this->bot->chooseDecisionAnswer($state, $field([8]), 1, 'turn_start_trigger', 1028));
+        // No opponent has a card to discard.
+        $state = $this->martyrdomState([38], []);
+        self::assertSame([], $this->bot->chooseDecisionAnswer($state, $field([38]), 1, 'turn_start_trigger', 1028));
+    }
+
+    public function testMartyrdomsTwoStepsResolveInTheRealGame(): void
+    {
+        $state = $this->martyrdomState([38, 8]);
+        $field = ['key' => 'sacrifice_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'candidate_card_ids' => [38, 8]];
+        $answer = $this->bot->chooseDecisionAnswer($state, $field, 1, 'turn_start_trigger', 1028);
+
+        $martyrdom = DefaultEffectRegistry::build()->for('martyrdom');
+        $requests = $martyrdom->applyTurnStart($state, 1028, 1, ['sacrifice_mood_id' => new \MoodSwings\Rules\PlayerChoices($answer)]);
+
+        self::assertFalse($state->isInPlay(38));
+        self::assertSame('discard_card_id_2', $requests[0]->key, 'the opponent is asked what to discard');
     }
 }

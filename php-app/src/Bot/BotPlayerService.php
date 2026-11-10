@@ -888,7 +888,7 @@ final class BotPlayerService
 
         // "At the start of each of your turns" moods (TurnStartEffect) whose optional choice is free or
         // plainly worth taking -- the generic resolver below never fills an optional field. Anything not
-        // listed (Martyrdom, Rumination, Wastefulness) is left declined, the conservative default.
+        // listed (Rumination, Wastefulness) is left declined, the conservative default.
         if ($decisionType === 'turn_start_trigger' && $sourceCardId !== null && $state->isInPlay($sourceCardId)) {
             $effectKey = $state->catalogRow($state->effectiveCardId($sourceCardId))['effectKey'];
             if ($effectKey === 'covetousness' && isset($field['candidate_card_ids'])) {
@@ -901,6 +901,11 @@ final class BotPlayerService
                 }
 
                 return $best === null ? [] : [$field['key'] => $best];
+            }
+            if ($effectKey === 'martyrdom' && $field['key'] === 'sacrifice_mood_id') {
+                $sacrificeId = $this->martyrdomSacrificeMoodId($state, $sourceCardId, $botGamePlayerId, array_map('intval', $field['candidate_card_ids'] ?? []));
+
+                return $sacrificeId === null ? [] : [$field['key'] => $sacrificeId];
             }
             if ($effectKey === 'brooding' && $field['key'] === 'take_card_id') {
                 $takeCardId = $this->broodingTakeCardId($state, $botGamePlayerId);
@@ -1758,6 +1763,51 @@ final class BotPlayerService
         }
 
         return $best !== null ? ['target_mood_id' => $best] : [];
+    }
+
+    /**
+     * Martyrdom ("at the start of each of your turns, you may put one of your other moods into the discard pile; if you do, each opponent discards a card
+     * from their hand"): always declined before. An opponent's discard is worth something (every card is a possible play, and hands are short late in a
+     * round), but a sacrifice costs the bot a mood, so it only pays when the mood is free: one worth nothing right now (valueOf() of 0 -- a spent Fear, a
+     * suppressed mood) that isn't a lasting-value card (PROTECTED_EFFECT_KEYS, Hope, Grace, Stubbornness, Melancholy), and whose removal leaves the round
+     * lead (roundLead()) no lower (mood-count bonuses can make even a 0 matter). It needs an opponent with a card in hand, or nothing would be discarded.
+     * With several qualifying moods it gives up the one that leaves the best lead.
+     *
+     * @param int[] $candidateMoodIds
+     */
+    private function martyrdomSacrificeMoodId(BoardState $state, int $martyrdomCardId, int $botGamePlayerId, array $candidateMoodIds): ?int
+    {
+        $anOpponentHasCards = false;
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId !== $botGamePlayerId && !$state->isTeammate($botGamePlayerId, $playerId) && $state->hand($playerId) !== []) {
+                $anOpponentHasCards = true;
+            }
+        }
+        if (!$anOpponentHasCards) {
+            return null;
+        }
+
+        $untouchable = [...self::PROTECTED_EFFECT_KEYS, 'hope', 'grace', 'stubbornness', 'melancholy'];
+        $baseline = $this->roundLead($state, $botGamePlayerId);
+        $best = null;
+        $bestLead = $baseline - 1;
+        foreach ($candidateMoodIds as $moodId) {
+            if ($moodId === $martyrdomCardId || !$state->isInPlay($moodId) || $state->valueOf($moodId) !== 0
+                || in_array($state->catalogRow($state->effectiveCardId($moodId))['effectKey'], $untouchable, true)
+            ) {
+                continue;
+            }
+
+            $after = clone $state;
+            $after->moveInPlayToDiscard($moodId);
+            $lead = $this->roundLead($after, $botGamePlayerId);
+            if ($lead >= $baseline && $lead > $bestLead) {
+                $bestLead = $lead;
+                $best = $moodId;
+            }
+        }
+
+        return $best;
     }
 
     /**
