@@ -5538,6 +5538,7 @@ final class BotPlayerServiceTest extends TestCase
             1023 => $this->row('white', 'rare', 2, null, 'rapport', false, false, true),
             1024 => $this->row('blue', 'uncommon', 1, null, 'doubt', false, false, true),
             1025 => $this->row('blue', 'uncommon', 2, null, 'yearning', false, false, true),
+            1026 => $this->row('white', 'uncommon', 3, null, 'encouragement', false, true, true),
         ];
         $hands = [1 => [$cardId, ...$handIds]] + $otherHands;
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -6417,5 +6418,31 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame([67], $state->hand(1));
         self::assertContains(7, $state->discardPile());
+    }
+
+    public function testEncouragementBoostsTheBotsOwnMoodWithTheBiggestDiceGain(): void
+    {
+        // Curiosity (3, dice 6) gains 3 and Dignity (3, dice 5) gains 2; the opponent's Chivalry (3, dice 5) is never a candidate.
+        $state = $this->removalState(1026, [1 => [8, 33], 2 => [4]]);
+        self::assertSame(['target_mood_id' => 33], $this->bot->buildChoicesForCard($state, 1026, 1));
+    }
+
+    public function testEncouragementStaysBareWithoutAnOwnMoodThatGainsFromDice(): void
+    {
+        // Apathy has no dice value; Patience (5, dice 1) wouldn't change; the only dice mood out there is the opponent's.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1026, [1 => [55, 21], 2 => [4]]), 1026, 1));
+    }
+
+    public function testEncouragementsBoostResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1026, [1 => [33]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1026, 1);
+        $before = $state->valueOf(33);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1026, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertSame(6, $state->valueOf(33));
+        self::assertLessThan(6, $before);
     }
 }

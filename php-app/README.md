@@ -9287,6 +9287,9 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Encouragement's dice boost.** The optional "choose a mood with dice in its lower left corner; it uses the dice total or its top right number, whichever is
+  higher" was never chosen. `BotPlayerService::encouragementChoices()` only considers the bot's own and a teammate's moods (an opponent's would be a gift), runs the
+  card's own rule code for each one with a printed dice value on a copy of the board, and names the one that gains the most `roundLead()`, if at least 1.
 - **Bots use Yearning's trade.** The optional "discard a card from your hand; if you do, put a card from the discard pile into your hand" (with two or more
   blue/red moods in play) was never made. `BotPlayerService::yearningChoices()`, with the condition checked with Yearning itself in play, trades the worst hand card
   (lowest `draftPriorityRank()`) for the best card already in the pile -- never the card it is discarding -- but only when the pile card is strictly better, and

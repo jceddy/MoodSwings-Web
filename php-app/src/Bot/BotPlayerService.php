@@ -1710,6 +1710,46 @@ final class BotPlayerService
         return ['hand_card_id' => $worstHandCardId, 'discard_card_id' => $bestPileCardId];
     }
 
+    /**
+     * Encouragement ("you may choose a mood with dice in its lower left corner; while in play, the chosen mood uses the dice total or its top right
+     * number, whichever is higher, to determine its value"): the optional choice was never made. It can name anyone's mood, so the bot only considers its
+     * own and a teammate's -- never an opponent's, which would be a gift. For each such mood with a printed dice value it runs the card's own rule code on a
+     * copy of the board and scores by round lead (roundLead()); it names the mood that gains the most, if that is at least 1.
+     *
+     * @return array{target_mood_id?: int}
+     */
+    private function encouragementChoices(BoardState $state, int $encouragementCardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $encouragementCardId, $botGamePlayerId);
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+
+        $best = null;
+        $bestGain = 0;
+        foreach ($sim->moodsInPlay() as $mood) {
+            if ($mood->ownerId !== $botGamePlayerId && !$sim->isTeammate($botGamePlayerId, $mood->ownerId)) {
+                continue;
+            }
+            if ($sim->catalogRow($sim->effectiveCardId($mood->cardId))['altValue'] === null) {
+                continue;
+            }
+
+            $after = clone $sim;
+            try {
+                $this->simulationRegistry->for('encouragement')->afterPlaying($after, $encouragementCardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['target_mood_id' => $mood->cardId]));
+            } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+                continue;
+            }
+            $gain = $this->roundLead($after, $botGamePlayerId) - $baseline;
+            if ($gain > $bestGain) {
+                $bestGain = $gain;
+                $best = $mood->cardId;
+            }
+        }
+
+        return $best !== null ? ['target_mood_id' => $best] : [];
+    }
+
     /** Doubt bans the colors it reveals for everyone: the bot reveals cards from at most this many colors, so its random draws and its own hand stay mostly playable. */
     private const DOUBT_MAX_BANNED_COLORS = 2;
 
@@ -3279,7 +3319,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness', 'instability', 'shrewdness', 'arrogance', 'corruption', 'optimism', 'admiration', 'doubt', 'yearning',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility', 'worry', 'pettiness', 'instability', 'shrewdness', 'arrogance', 'corruption', 'optimism', 'admiration', 'doubt', 'yearning', 'encouragement',
     ];
 
     /**
@@ -3407,6 +3447,10 @@ final class BotPlayerService
             $pair = $this->instabilityCandidateMoodIds($state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGameByPlayerId);
 
             return $pair !== [] ? ['candidate_mood_ids' => $pair] : [];
+        }
+
+        if ($effectKey === 'encouragement') {
+            return $this->encouragementChoices($state, $cardId, $botGamePlayerId);
         }
 
         if ($effectKey === 'yearning') {
