@@ -6016,4 +6016,36 @@ final class BotPlayerServiceTest extends TestCase
         self::assertFalse($state->isInPlay(26));
         self::assertFalse($state->isInPlay(8));
     }
+
+    public function testHostilitySacrificesACheapBlackMoodToClearTwoSmallOpposingMoods(): void
+    {
+        // Ambition (black, 2) pays for Dignity (3) and Kindness (2) going to the pile.
+        $state = $this->removalState(94, [1 => [53], 2 => [8], 3 => [17]]);
+        $choices = $this->bot->buildChoicesForCard($state, 94, 1);
+        self::assertSame(53, $choices['discard_mood_id']);
+        self::assertEqualsCanonicalizing([8, 17], $choices['target_mood_ids']);
+    }
+
+    public function testHostilityStaysBareWithoutAnAffordableSacrificeOrWorthwhileTargets(): void
+    {
+        // No black or green mood of its own to give up.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(94, [1 => [8], 2 => [17]]), 94, 1));
+        // Apathy (black, 4) would cost more than the lone 1-point mood it clears.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(94, [1 => [55], 2 => [7]]), 94, 1));
+        // Only moods above 3 to aim at.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(94, [1 => [53], 2 => [56]]), 94, 1));
+    }
+
+    public function testHostilityResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(94, [1 => [53], 2 => [8], 3 => [17]]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 94, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 94, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        foreach ([53, 8, 17] as $gone) {
+            self::assertFalse($state->isInPlay($gone));
+        }
+    }
 }

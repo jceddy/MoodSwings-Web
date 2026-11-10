@@ -1581,6 +1581,60 @@ final class BotPlayerService
         return false;
     }
 
+    /**
+     * Hostility ("you may put one of your black or green moods into the discard pile; if you do, put up to two moods, each with a value of 3 or less, into
+     * the discard pile"): both parts were left blank. For each black or green mood of the bot's own that can be spared (never the lasting-value ones:
+     * PROTECTED_EFFECT_KEYS, Hope, Grace, Stubbornness, Melancholy), it works out the two best opponent moods worth 3 or less once that mood has left -- a
+     * snowballing one first (SNOWBALL_EFFECT_KEYS), then by value -- and runs the card's own rule code on a copy of the board. It takes the sacrifice with the
+     * biggest round-lead gain (roundLead()), if that gain is at least 1. It only ever removes opponents' moods, never its own or a teammate's.
+     *
+     * @return array{discard_mood_id?: int, target_mood_ids?: int[]}
+     */
+    private function hostilityChoices(BoardState $state, int $hostilityCardId, int $botGamePlayerId): array
+    {
+        $sim = $this->withCardInPlay($state, $hostilityCardId, $botGamePlayerId);
+        $untouchable = [...self::PROTECTED_EFFECT_KEYS, 'hope', 'grace', 'stubbornness', 'melancholy'];
+        $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
+
+        $baseline = $this->roundLead($sim, $botGamePlayerId);
+        $best = [];
+        $bestGain = 0;
+        foreach ($sim->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $effectKey = $sim->catalogRow($sim->effectiveCardId($mood->cardId))['effectKey'];
+            if (!in_array($sim->colorOf($mood->cardId), ['black', 'green'], true) || in_array($effectKey, $untouchable, true)) {
+                continue;
+            }
+
+            $withoutSacrifice = clone $sim;
+            $withoutSacrifice->moveInPlayToDiscard($mood->cardId);
+            $targetIds = array_values(array_filter(
+                $this->nonTeammateOpponentMoodIds($withoutSacrifice, $botGamePlayerId),
+                fn (int $moodId): bool => $withoutSacrifice->valueOf($moodId) <= 3,
+            ));
+            $isSnowball = fn (int $moodId): int => in_array($withoutSacrifice->catalogRow($withoutSacrifice->effectiveCardId($moodId))['effectKey'], self::SNOWBALL_EFFECT_KEYS, true) ? 1 : 0;
+            usort($targetIds, fn (int $a, int $b): int => [$isSnowball($b), $withoutSacrifice->valueOf($b)] <=> [$isSnowball($a), $withoutSacrifice->valueOf($a)]);
+            $targetIds = array_slice($targetIds, 0, 2);
+            if ($targetIds === []) {
+                continue;
+            }
+
+            $after = clone $sim;
+            try {
+                $this->simulationRegistry->for('hostility')->afterPlaying($after, $hostilityCardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['discard_mood_id' => $mood->cardId, 'target_mood_ids' => $targetIds]));
+            } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
+                continue;
+            }
+
+            $gain = $this->roundLead($after, $botGamePlayerId) - $baseline;
+            if ($gain > $bestGain) {
+                $bestGain = $gain;
+                $best = ['discard_mood_id' => $mood->cardId, 'target_mood_ids' => $targetIds];
+            }
+        }
+
+        return $best;
+    }
+
     /** The most the bot will pay (an own mood's value) to remove an opponent's snowballing mood with Vindictiveness. */
     private const VINDICTIVENESS_MAX_ENGINE_SACRIFICE_VALUE = 3;
 
@@ -2734,7 +2788,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination', 'faith', 'shame', 'vindictiveness', 'hostility',
     ];
 
     /**
@@ -2856,6 +2910,10 @@ final class BotPlayerService
             $targetMoodIds = $this->pureRemovalTargetMoodIds($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'hostility') {
+            return $this->hostilityChoices($state, $cardId, $botGamePlayerId);
         }
 
         if ($effectKey === 'vindictiveness') {
