@@ -1491,6 +1491,54 @@ final class BotPlayerService
     }
 
     /**
+     * Longing ("you may discard a card from your hand; if you do, put up to two cards from the discard pile into your hand"): the optional
+     * discard-and-pick-up was never filled, so a bot played Longing as a bare mood. It nets a card -- one goes out, up to two come back, and the
+     * discarded card is itself in the pile, so the bot is never worse off in cards -- and, as seen in a real game, the extra card matters for hand-size
+     * conditions like Composure ("more cards in your hand than each other player"), which a bare Longing would lose. So the bot discards the card it
+     * would least miss (the lowest draftPriorityRank()) and takes back the best two cards available, drawn from the pile plus that card.
+     *
+     * It holds back (an empty answer, a bare Longing) when there is no other card to discard or nothing else in the pile (the discarded card would just
+     * come back, for nothing but a "discarded this round" mark); when it has a Sadness/Wonder-family mood in play, whose value shrinks with the pile
+     * (the same rule Nostalgia's pick-up follows); and when discarding would help an opponent -- an opponent's Opportunism takes the discarded card, and an
+     * opponent's Schadenfreude turns on once any opponent has discarded this round.
+     *
+     * @return array{hand_card_id?: int, discard_card_ids?: int[]}
+     */
+    private function longingChoices(BoardState $state, int $longingCardId, int $botGamePlayerId): array
+    {
+        $otherHandCardIds = array_values(array_diff($state->hand($botGamePlayerId), [$longingCardId]));
+        $pileCardIds = array_values(array_diff($state->discardPile(), [$longingCardId]));
+        if ($otherHandCardIds === [] || $pileCardIds === []) {
+            return [];
+        }
+
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            if (in_array($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'], self::DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS, true)) {
+                return [];
+            }
+        }
+        $alreadyDiscardedThisRound = in_array($botGamePlayerId, $state->playersWhoDiscardedFromHandThisRound(), true);
+        foreach ($state->activePlayerOrder() as $opponentId) {
+            if ($opponentId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $opponentId)) {
+                continue;
+            }
+            if ($state->playerHasMoodInPlay($opponentId, 'opportunism')
+                || (!$alreadyDiscardedThisRound && $state->playerHasMoodInPlay($opponentId, 'schadenfreude'))
+            ) {
+                return [];
+            }
+        }
+
+        usort($otherHandCardIds, fn (int $a, int $b): int => $this->draftPriorityRank($state, $a) <=> $this->draftPriorityRank($state, $b));
+        $discardCardId = $otherHandCardIds[0];
+
+        $pool = [...$pileCardIds, $discardCardId];
+        usort($pool, fn (int $a, int $b): int => $this->draftPriorityRank($state, $b) <=> $this->draftPriorityRank($state, $a));
+
+        return ['hand_card_id' => $discardCardId, 'discard_card_ids' => array_slice($pool, 0, 2)];
+    }
+
+    /**
      * Impartiality ("choose odd or even; suppress all other moods with a number of the chosen type in their top right corners until the end
      * of this round"): suppression hits EVERY other mood of that parity, the bot's own included, so the bot scores both choices -- the board
      * with every other odd mood suppressed, and with every other even one suppressed -- through the real RoundScorer on copies of the board,
@@ -2423,7 +2471,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing',
     ];
 
     /**
@@ -2655,6 +2703,10 @@ final class BotPlayerService
 
         if ($effectKey === 'orderliness') {
             return ['parity' => $this->orderlinessParity($state, $cardId, $botGamePlayerId)];
+        }
+
+        if ($effectKey === 'longing') {
+            return $this->longingChoices($state, $cardId, $botGamePlayerId);
         }
 
         if ($effectKey === 'impartiality') {

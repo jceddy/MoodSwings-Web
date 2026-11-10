@@ -3759,6 +3759,58 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['parity' => 'odd'], $this->bot->buildChoicesForCard($state, 151, 1));
     }
 
+    // Longing: the bot discards the card it would least miss and takes back the best two cards available (the discarded one included),
+    // netting a card -- it used to leave both optional fields blank and play a bare mood.
+    private function longingState(array $handIds, array $pileIds, array $opponentMoodIds = [], array $botMoodIds = []): BoardState
+    {
+        $catalog = $this->sampleCatalog() + [
+            205 => $this->row('black', 'uncommon', 3, null, 'longing', false, false, true),
+            210 => $this->row('black', 'uncommon', 1, null, 'opportunism', false, true, false),
+        ];
+        $state = new BoardState($catalog, DefaultEffectRegistry::build(), [1, 2, 3], [1 => [205, ...$handIds, ...$botMoodIds], 2 => $opponentMoodIds], discard: $pileIds);
+        foreach ($botMoodIds as $id) {
+            $state->moveHandToInPlay(1, $id);
+        }
+        foreach ($opponentMoodIds as $id) {
+            $state->moveHandToInPlay(2, $id);
+        }
+
+        return $state;
+    }
+
+    public function testLongingDiscardsTheLeastMissedCardAndTakesBackTheBestTwo(): void
+    {
+        // Hand: Complacency (4), Charity (1). Pile: Apathy (4), Courage (1). Charity goes; the pool is Apathy, Courage, Charity.
+        $state = $this->longingState([5, 3], [55, 7]);
+
+        self::assertSame(['hand_card_id' => 3, 'discard_card_ids' => [55, 7]], $this->bot->buildChoicesForCard($state, 205, 1));
+    }
+
+    public function testLongingKeepsTheBotsHandSizeWhenPlayed(): void
+    {
+        $state = $this->longingState([5, 3], [55, 7]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 205, 1);
+        $before = count($state->hand(1)); // Longing, Complacency, Charity
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 205, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertSame($before, count($state->hand(1)), 'Longing leaves the hand as big as it found it: one played, one discarded, two taken back');
+    }
+
+    public function testLongingStaysBareWithNothingToDiscardOrNothingInThePile(): void
+    {
+        self::assertSame([], $this->bot->buildChoicesForCard($this->longingState([], [55, 7]), 205, 1)); // no other card to discard
+        self::assertSame([], $this->bot->buildChoicesForCard($this->longingState([5, 3], []), 205, 1)); // empty pile: the card would just come back
+    }
+
+    public function testLongingStaysBareWhenAnOpponentsOpportunismWouldTakeTheDiscard(): void
+    {
+        $state = $this->longingState([5, 3], [55, 7], opponentMoodIds: [210]);
+
+        self::assertSame([], $this->bot->buildChoicesForCard($state, 205, 1));
+    }
+
     public function testHauntingDiscardsTheHandCardsThatWouldBeGoodPlays(): void
     {
         $catalog = $this->sampleCatalog() + [

@@ -9287,6 +9287,13 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use Longing's discard-and-pick-up.** Both fields are optional, so the bot always played Longing as a bare mood -- which in a real game (export of
+  game 572) made it pass twice rather than play any card, because every play shrank its hand and switched off Composure's 6 ("more cards in your hand
+  than each other player"). `BotPlayerService::longingChoices()` now discards the card it would least miss (lowest `draftPriorityRank()`) and takes back the
+  best two cards from the pile plus that card, so Longing nets a card and the hand stays the size it was. It holds back when there is no other card to
+  discard or nothing else in the pile, with a Sadness/Wonder-family mood in play (as Nostalgia's pick-up does), and when the discard would help an opponent
+  (an opponent's Opportunism takes the card; an opponent's Schadenfreude turns on once any opponent has discarded). In that game the bot's own Longing
+  choices score a lead of +7 and +4 where passing scored +4 and +1.
 - **Bots choose Impartiality's and Discernment's parity.** Both used to take the generic resolver's first option ('odd') whatever the board looked like.
   `impartialityParity()` scores the board with every other odd, then every other even, mood suppressed (Impartiality hits the bot's own moods too)
   through `RoundScorer` on copies and picks the parity that leaves the bot's group furthest ahead (`roundLead()`), tie to odd. `discernmentChoices()` counts
