@@ -5513,6 +5513,8 @@ final class BotPlayerServiceTest extends TestCase
             1012 => $this->row('red', 'rare', 3, 6, 'infatuation', false, false, true),
             1013 => $this->row('black', 'common', 3, 6, 'condescension', false, false, true),
             1014 => $this->row('white', 'common', 0, null, 'apathy', false, false, false),
+            1015 => $this->row('green', 'uncommon', 3, 7, 'fascination', false, false, true),
+            1016 => $this->row('blue', 'common', 0, null, 'apathy', false, false, false),
         ];
         $hands = [1 => [$cardId, ...$handIds]];
         foreach ($moodsByPlayer as $playerId => $ids) {
@@ -5900,5 +5902,29 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame(6, $state->valueOf(1013));
         self::assertContains(7, $state->hand(3));
+    }
+
+    public function testFascinationGivesAWorthlessBlueOrBlackCardAndNothingElse(): void
+    {
+        // A 0-point blue card is the gift; the white 0-point card is the wrong color, so it stays.
+        $state = $this->removalState(1015, [2 => [55]], [], [1014, 1016]);
+        self::assertSame(['give_card_id' => 1016, 'recipient_player_id' => 3], $this->bot->buildChoicesForCard($state, 1015, 1));
+
+        // Only a white card in hand: nothing legal to reveal.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1015, [2 => [55]], [], [1014]), 1015, 1));
+        // A valuable black card (Apathy, 4) isn't worth giving an opponent.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1015, [2 => [55]], [], [55]), 1015, 1));
+    }
+
+    public function testFascinationsGiftResolvesInTheRealGame(): void
+    {
+        $state = $this->removalState(1015, [2 => [55]], [], [1016]);
+        $state->startTurn(1);
+        $choices = $this->bot->buildChoicesForCard($state, 1015, 1);
+
+        (new \MoodSwings\Rules\MoodPlayService(DefaultEffectRegistry::build()))->playMood($state, 1, 1015, new \MoodSwings\Rules\PlayerChoices($choices));
+
+        self::assertSame(7, $state->valueOf(1015));
+        self::assertContains(1016, $state->hand(3));
     }
 }

@@ -2548,7 +2548,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance', 'rage', 'wrath', 'chagrin', 'reckoning', 'hesitation', 'disorientation', 'repentance', 'angst', 'bravado', 'levity', 'fear', 'wariness', 'infatuation', 'condescension', 'fascination',
     ];
 
     /**
@@ -2672,8 +2672,8 @@ final class BotPlayerService
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
         }
 
-        if ($effectKey === 'condescension') {
-            return $this->condescensionChoices($state, $cardId, $botGamePlayerId);
+        if ($effectKey === 'condescension' || $effectKey === 'fascination') {
+            return $this->cardGiftForValueChoices($effectKey, $effectKey === 'fascination' ? ['blue', 'black'] : null, $state, $cardId, $botGamePlayerId);
         }
 
         if ($effectKey === 'infatuation') {
@@ -3652,19 +3652,24 @@ final class BotPlayerService
     }
 
     /**
-     * Condescension ("you may give a card from your hand to another player; if you do, this mood's value becomes 6"): the optional gift was never made, so
-     * it stayed at its printed 3. The bot gives away the card it would miss least (the lowest draftPriorityRank()) to cardGiftRecipient()'s pick, with the
-     * 6 worked out on a copy of the board by the card's own rule code. A gift to a teammate only has to raise the round lead (roundLead()) by at least 1. A
+     * Condescension ("you may give a card from your hand to another player; if you do, this mood's value becomes 6") and Fascination (the same, with a
+     * blue or black card revealed and given, and a 7): the optional gift was never made, so both stayed at their printed 3. The bot gives away the card it
+     * would miss least (the lowest draftPriorityRank(), among the right colors for Fascination) to cardGiftRecipient()'s pick, with the boosted value
+     * worked out on a copy of the board by the card's own rule code. A gift to a teammate only has to raise the round lead (roundLead()) by at least 1. A
      * gift to an opponent costs the bot that card's points and hands the opponent the same, so the lead gain has to beat twice the card's printed value --
-     * which in practice limits it to cards printed at 0 or 1. Left blank with an empty hand.
+     * which in practice limits it to cards printed at 0 or 1. Left blank when no card qualifies, e.g. an empty hand.
      *
+     * @param string[]|null $colors the colors the given card may have, or null for any
      * @return array{give_card_id?: int, recipient_player_id?: int}
      */
-    private function condescensionChoices(BoardState $state, int $cardId, int $botGamePlayerId): array
+    private function cardGiftForValueChoices(string $effectKey, ?array $colors, BoardState $state, int $cardId, int $botGamePlayerId): array
     {
         $sim = $this->withCardInPlay($state, $cardId, $botGamePlayerId);
-        $hand = $sim->hand($botGamePlayerId);
         [$recipientId, $isTeammate] = $this->cardGiftRecipient($sim, $botGamePlayerId);
+        $hand = array_values(array_filter(
+            $sim->hand($botGamePlayerId),
+            fn (int $handCardId): bool => $colors === null || in_array($sim->colorOf($handCardId), $colors, true),
+        ));
         if ($hand === [] || $recipientId === null) {
             return [];
         }
@@ -3679,7 +3684,7 @@ final class BotPlayerService
         $this->simulationRegistry ??= \MoodSwings\Rules\DefaultEffectRegistry::build();
         $after = clone $sim;
         try {
-            $this->simulationRegistry->for('condescension')->afterPlaying($after, $cardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['give_card_id' => $giftCardId, 'recipient_player_id' => $recipientId]));
+            $this->simulationRegistry->for($effectKey)->afterPlaying($after, $cardId, $botGamePlayerId, new \MoodSwings\Rules\PlayerChoices(['give_card_id' => $giftCardId, 'recipient_player_id' => $recipientId]));
         } catch (\MoodSwings\Rules\Exceptions\InvalidChoiceException) {
             return [];
         }
