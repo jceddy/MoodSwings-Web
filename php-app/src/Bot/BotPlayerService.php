@@ -2546,7 +2546,7 @@ final class BotPlayerService
         'pacifism', 'creativity', 'anger', 'denial', 'hate', 'conviction',
         'nostalgia', 'contempt', 'sneakiness', 'shock', 'exhilaration',
         'rejection', 'guilt', 'scorn', 'recklessness', 'thrill', 'panic',
-        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence',
+        'wonder', 'haunting', 'orderliness', 'belligerence', 'impartiality', 'discernment', 'longing', 'reminiscence', 'remorse', 'reverie', 'warmth', 'courage', 'spite', 'anxiety', 'malevolence', 'disdain', 'distrust', 'indignation', 'vigilance',
     ];
 
     /**
@@ -2668,6 +2668,12 @@ final class BotPlayerService
             $targetMoodIds = $this->pureRemovalTargetMoodIds($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if (isset(self::CONDITIONAL_REMOVAL[$effectKey])) {
+            $targetMoodId = $this->conditionalRemovalTargetMoodId($effectKey, $state, $cardId, $botGamePlayerId, $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
+
+            return $targetMoodId !== null ? ['target_mood_id' => $targetMoodId] : [];
         }
 
         if ($effectKey === 'malevolence') {
@@ -4946,16 +4952,68 @@ final class BotPlayerService
     }
 
     /**
-     * The lowest current value Anxiety bothers to bounce: sending a 1-value mood back just hands its owner a cheap replay (and its ability again), so
-     * only an odd mood worth at least this much is a worthwhile target.
+     * The "if there are two or more X and/or Y moods, you may ..." removal cards (PairedColorTargetEffect): effect key => the two colors, what happens
+     * to the target ('discard', 'hand' or 'suppress'), and an optional value cap on the target.
      */
-    private const ANXIETY_MIN_TARGET_VALUE = 3;
+    private const CONDITIONAL_REMOVAL = [
+        'disdain' => ['colors' => ['white', 'green'], 'action' => 'discard', 'maxValue' => null],
+        'indignation' => ['colors' => ['white', 'blue'], 'action' => 'discard', 'maxValue' => 4],
+        'distrust' => ['colors' => ['red', 'green'], 'action' => 'hand', 'maxValue' => null],
+        'vigilance' => ['colors' => ['black', 'red'], 'action' => 'suppress', 'maxValue' => null],
+    ];
+
+    /**
+     * Disdain, Indignation, Distrust and Vigilance each let the player remove one mood of their two colors -- but only once two or more moods of those
+     * colors are in play (the played card counts), and the optional field was never filled. The bot checks that condition on a copy of the board with the
+     * card already in play, then names the best non-teammate opponent mood of those colors (never its own): the same pick as Shock for the discard cards
+     * (highest value, an opponent's Validation first), a worthwhile bounce for Distrust (BOUNCE_MIN_TARGET_VALUE or more, no Validation priority), and for
+     * Vigilance the best suppression target (suppressionTargetPriority(), skipping Hope/Grace and anything already worth nothing). Null leaves it blank.
+     *
+     * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
+     */
+    private function conditionalRemovalTargetMoodId(string $effectKey, BoardState $state, int $cardId, int $botGamePlayerId, ?int $roundWinsNeededToWinGame, array $roundWinsNeededToWinGameByPlayerId): ?int
+    {
+        ['colors' => $colors, 'action' => $action, 'maxValue' => $maxValue] = self::CONDITIONAL_REMOVAL[$effectKey];
+        $sim = $this->withCardInPlay($state, $cardId, $botGamePlayerId);
+        if (\MoodSwings\Rules\Effects\Custom\CustomEffectSupport::countMoodsOfColors($sim, $colors) < 2) {
+            return null;
+        }
+
+        $qualifies = fn (int $moodId): bool => in_array($sim->colorOf($moodId), $colors, true)
+            && ($maxValue === null || $sim->valueOf($moodId) <= $maxValue)
+            && match ($action) {
+                'hand' => $sim->valueOf($moodId) >= self::BOUNCE_MIN_TARGET_VALUE,
+                'suppress' => $sim->valueOf($moodId) > 0 && $this->suppressionTargetPriority($sim, $moodId) > PHP_INT_MIN,
+                default => true,
+            };
+
+        if ($action === 'suppress') {
+            $best = null;
+            foreach ($this->nonTeammateOpponentMoodIds($sim, $botGamePlayerId) as $moodId) {
+                if ($qualifies($moodId) && ($best === null || $this->suppressionTargetPriority($sim, $moodId) > $this->suppressionTargetPriority($sim, $best))) {
+                    $best = $moodId;
+                }
+            }
+
+            return $best;
+        }
+
+        $picks = $this->opponentRemovalTargetMoodIds($sim, $botGamePlayerId, $cardId, $qualifies, $action === 'discard', $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);
+
+        return $picks[0] ?? null;
+    }
+
+    /**
+     * The lowest current value the bot bothers to bounce an opponent's mood for (Anxiety, Distrust): sending a 1-value mood back just hands its owner a
+     * cheap replay (and its ability again), so only a mood worth at least this much is a worthwhile target.
+     */
+    private const BOUNCE_MIN_TARGET_VALUE = 3;
 
     /**
      * Courage ("put a mood with a value of 5 or more into the discard pile"), Spite (an even value) and Anxiety (an odd value, into its owner's hand) all
      * choose up to two players and one qualifying mood each, but the field is optional so the bot left them bare. They now use the same pick as Shock
      * (opponentRemovalTargetMoodIds()): each opponent's best qualifying mood, the two best across different opponents. Anxiety's bounce skips an
-     * opponent's Validation priority and anything under ANXIETY_MIN_TARGET_VALUE. The bot never targets itself or a teammate.
+     * opponent's Validation priority and anything under BOUNCE_MIN_TARGET_VALUE. The bot never targets itself or a teammate.
      *
      * @param array<int, int> $roundWinsNeededToWinGameByPlayerId
      * @return int[]
@@ -4966,7 +5024,7 @@ final class BotPlayerService
         $qualifies = match ($effectKey) {
             'courage' => fn (int $moodId): bool => $state->valueOf($moodId) >= 5,
             'spite' => fn (int $moodId): bool => $state->valueOf($moodId) % 2 === 0,
-            default => fn (int $moodId): bool => $state->valueOf($moodId) % 2 !== 0 && $state->valueOf($moodId) >= self::ANXIETY_MIN_TARGET_VALUE,
+            default => fn (int $moodId): bool => $state->valueOf($moodId) % 2 !== 0 && $state->valueOf($moodId) >= self::BOUNCE_MIN_TARGET_VALUE,
         };
 
         return $this->opponentRemovalTargetMoodIds($state, $botGamePlayerId, $cardId, $qualifies, $effectKey !== 'anxiety', $roundWinsNeededToWinGame, $roundWinsNeededToWinGameByPlayerId);

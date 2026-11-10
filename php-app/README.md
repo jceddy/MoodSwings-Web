@@ -9287,6 +9287,10 @@ in custom sets is.
   yes/no the generic resolver never fills, so `BotPlayerService::belligerenceSwingsPointsInFavor()` decides: it scores the board through
   `RoundScorer` on a copy with those moods gone and opts in only if the bot's group's lead over the best rival group (`roundLead()`) goes up.
   Discarding only zero-point moods, or none at all, leaves it blank.
+- **Bots use the conditional-removal cards.** Disdain, Indignation, Distrust and Vigilance ("if there are two or more X and/or Y moods, you may remove one of
+  them") left their optional target blank. `BotPlayerService::conditionalRemovalTargetMoodId()` checks the two-moods condition on a copy of the board with the
+  played card in play, then names the best opponent mood of those colors (never its own): Shock's pick for the discard cards (Indignation's 4-or-less cap
+  respected), a bounce of a mood worth 3+ for Distrust, and `suppressionTargetPriority()`'s best target for Vigilance (never Hope/Grace or a zero-value mood).
 - **Bots use the pure-removal cards.** Courage (a mood valued 5+ into the discard pile), Spite (an even value), Anxiety (an odd value into its owner's hand)
   and Malevolence (odd or even printed number) all pick "up to two players, one mood each" through an optional field the bot never filled. They now share
   Shock's pick (`BotPlayerService::opponentRemovalTargetMoodIds()`): each non-teammate opponent's best qualifying mood, the two best across different

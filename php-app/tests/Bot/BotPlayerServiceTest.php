@@ -5498,7 +5498,13 @@ final class BotPlayerServiceTest extends TestCase
     /** @param array<int, int[]> $moodsByPlayer */
     private function removalState(int $cardId, array $moodsByPlayer): BoardState
     {
-        $catalog = $this->sampleCatalog() + [1001 => $this->row('black', 'mythic', 2, null, 'malevolence', false, false, true)];
+        $catalog = $this->sampleCatalog() + [
+            1001 => $this->row('black', 'mythic', 2, null, 'malevolence', false, false, true),
+            1002 => $this->row('white', 'common', 2, null, 'disdain', false, false, true),
+            1003 => $this->row('blue', 'common', 2, null, 'indignation', false, false, true),
+            1004 => $this->row('red', 'common', 2, null, 'distrust', false, false, true),
+            1005 => $this->row('black', 'common', 2, null, 'vigilance', false, false, true),
+        ];
         $hands = [1 => [$cardId]];
         foreach ($moodsByPlayer as $playerId => $ids) {
             $hands[$playerId] = [...($hands[$playerId] ?? []), ...$ids];
@@ -5563,6 +5569,49 @@ final class BotPlayerServiceTest extends TestCase
             (new \MoodSwings\Rules\MoodPlayService($registry))->playMood($state, 1, $cardId, new \MoodSwings\Rules\PlayerChoices($choices));
 
             self::assertLessThan($before + 1, count($state->moodsInPlay()), "card {$cardId} should remove or bounce at least one mood");
+        }
+    }
+
+    public function testDisdainAndIndignationRemoveTheBestOpponentMoodOfTheirColorsOnceTwoAreInPlay(): void
+    {
+        // Disdain itself is white, so Complacency (4) and Dignity (3) make three white moods; the bot's own Apathy is black, and Complacency is the better pick.
+        $state = $this->removalState(1002, [2 => [8], 3 => [5, 55]]);
+        self::assertSame(['target_mood_id' => 5], $this->bot->buildChoicesForCard($state, 1002, 1));
+
+        // Indignation (blue) needs another white or blue mood too, and only takes one valued 4 or less: Discipline (6) is out, Dignity (3) is in.
+        $state = $this->removalState(1003, [2 => [9, 8]]);
+        self::assertSame(['target_mood_id' => 8], $this->bot->buildChoicesForCard($state, 1003, 1));
+
+        // Alone among its colors, neither does anything.
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1002, [2 => [55]]), 1002, 1));
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1003, [2 => [55]]), 1003, 1));
+    }
+
+    public function testDistrustBouncesAWorthwhileOpponentMoodAndVigilanceSuppressesTheStrongestOne(): void
+    {
+        // Distrust is red: Fury (4) is the better bounce than Bravado (3); a black mood is the wrong color.
+        $state = $this->removalState(1004, [2 => [84, 55], 3 => [91]]);
+        self::assertSame(['target_mood_id' => 91], $this->bot->buildChoicesForCard($state, 1004, 1));
+
+        // Vigilance is black: Betrayal (6) over Apathy (4), and never the bot's own black mood.
+        $state = $this->removalState(1005, [1 => [53], 2 => [55], 3 => [56]]);
+        self::assertSame(['target_mood_id' => 56], $this->bot->buildChoicesForCard($state, 1005, 1));
+        self::assertSame([], $this->bot->buildChoicesForCard($this->removalState(1005, [2 => [8]]), 1005, 1));
+    }
+
+    public function testTheConditionalRemovalCardsResolveTheirChoicesInTheRealGame(): void
+    {
+        $registry = DefaultEffectRegistry::build();
+        foreach ([[1002, [2 => [8], 3 => [5]]], [1003, [2 => [8]]], [1004, [2 => [84], 3 => [91]]], [1005, [2 => [55], 3 => [56]]]] as [$cardId, $moods]) {
+            $state = $this->removalState($cardId, $moods);
+            $state->startTurn(1);
+            $choices = $this->bot->buildChoicesForCard($state, $cardId, 1);
+            self::assertArrayHasKey('target_mood_id', $choices, "card {$cardId}");
+
+            (new \MoodSwings\Rules\MoodPlayService($registry))->playMood($state, 1, $cardId, new \MoodSwings\Rules\PlayerChoices($choices));
+
+            $target = $choices['target_mood_id'];
+            self::assertTrue(!$state->isInPlay($target) || $state->valueOf($target) === 0, "card {$cardId}'s target should be gone or suppressed");
         }
     }
 }
