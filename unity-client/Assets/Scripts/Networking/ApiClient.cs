@@ -165,7 +165,9 @@ namespace MoodSwings.Networking
                 {
                     if (_sessionToken == sentToken)
                     {
-                        Diagnostic?.Invoke($"401 on {method} {path} with the current session -- signing out");
+                        Diagnostic?.Invoke(
+                            $"401 on {method} {path} with the current session ({sentToken.Length} characters) -- signing out. "
+                            + $"Response headers: {string.Join(", ", response.Headers.Keys)}");
                         ClearSession();
                         SessionExpired?.Invoke();
                     }
@@ -269,7 +271,9 @@ namespace MoodSwings.Networking
 
             if (path == "/login")
             {
-                Diagnostic?.Invoke($"Login set a session cookie ({value.Length} characters)");
+                // Everything after the token (expiry, path, flags) -- never the token itself.
+                var attributes = end < 0 ? string.Empty : setCookie.Substring(end);
+                Diagnostic?.Invoke($"Login set a session cookie ({value.Length} characters){attributes}");
             }
 
             _sessionToken = value;
