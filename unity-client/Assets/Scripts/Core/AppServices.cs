@@ -69,8 +69,11 @@ namespace MoodSwings.Core
             var config = new ApiConfig(
                 dev ? ApiConfig.DevSiteRoot : ApiConfig.ProdSiteRoot, $"MoodSwings/{Application.version} ({Application.platform})");
 
+            var api = new ApiClient(config, new UnityWebRequestTransport(), sessionStore);
+            api.Diagnostic = message => Debug.Log("[Api] " + message);
+
             Override(
-                new ApiClient(config, new UnityWebRequestTransport(), sessionStore),
+                api,
                 null,
                 sessionStore,
                 preferences);

@@ -47,6 +47,12 @@ namespace MoodSwings.Networking
         /// </summary>
         public event Action SessionExpired;
 
+        /// <summary>
+        /// Optional diagnostics sink (the app points it at the Unity log, so `adb logcat -s Unity` shows it). Gets one
+        /// line per rejected or session-changing response; never anything secret (no token values).
+        /// </summary>
+        public Action<string> Diagnostic { get; set; }
+
         public ApiConfig Config { get; }
 
         public bool HasSession => !string.IsNullOrEmpty(_sessionToken);
@@ -124,10 +130,13 @@ namespace MoodSwings.Networking
                 request.Headers["X-Timezone"] = timezone;
             }
 
-            var hadSession = HasSession;
+            // The token this request goes out with. Responses can arrive after the session has moved on (a new login,
+            // a sign-out), so what they say about "the session" only counts if it is still this one.
+            var sentToken = _sessionToken;
+            var hadSession = !string.IsNullOrEmpty(sentToken);
             if (hadSession)
             {
-                request.Headers["Cookie"] = $"{SessionCookieName}={_sessionToken}";
+                request.Headers["Cookie"] = $"{SessionCookieName}={sentToken}";
             }
 
             var response = await _transport.SendAsync(request, cancellationToken);
@@ -137,7 +146,7 @@ namespace MoodSwings.Networking
                 return ApiResult<T>.Fail(ApiFailureKind.Network, 0, response.NetworkError);
             }
 
-            CaptureSessionCookie(response);
+            CaptureSessionCookie(response, path, sentToken);
 
             var status = (int)response.StatusCode;
             var envelope = ParseEnvelope(response.Body);
@@ -154,8 +163,22 @@ namespace MoodSwings.Networking
                 // expired session, so only other routes count as one.
                 if (hadSession && path != "/login")
                 {
-                    ClearSession();
-                    SessionExpired?.Invoke();
+                    if (_sessionToken == sentToken)
+                    {
+                        Diagnostic?.Invoke($"401 on {method} {path} with the current session -- signing out");
+                        ClearSession();
+                        SessionExpired?.Invoke();
+                    }
+                    else
+                    {
+                        // A request sent before the session changed (e.g. one still in flight when the user logged
+                        // in again): its 401 says nothing about the new session.
+                        Diagnostic?.Invoke($"401 on {method} {path} was for an older session -- ignored");
+                    }
+                }
+                else if (!hadSession && path != "/login")
+                {
+                    Diagnostic?.Invoke($"401 on {method} {path}: no session cookie was sent");
                 }
 
                 return ApiResult<T>.Fail(ApiFailureKind.Unauthorized, status, envelope?.Message);
@@ -204,7 +227,7 @@ namespace MoodSwings.Networking
             }
         }
 
-        private void CaptureSessionCookie(HttpResponse response)
+        private void CaptureSessionCookie(HttpResponse response, string path, string sentToken)
         {
             // Set-Cookie looks like "session_token=<value>; expires=...;
             // path=/; secure; HttpOnly; SameSite=Lax". Only the name=value
@@ -223,6 +246,14 @@ namespace MoodSwings.Networking
                 return;
             }
 
+            // Only a login starts a session; any other response may only refresh or end the one it was sent with. A
+            // slow reply to an older request must not put its (older) token back over a newer login.
+            if (path != "/login" && sentToken != _sessionToken)
+            {
+                Diagnostic?.Invoke($"Ignored a session cookie on {path}: it was for an older session");
+                return;
+            }
+
             start += prefix.Length;
             var end = setCookie.IndexOf(';', start);
             var value = end < 0 ? setCookie.Substring(start) : setCookie.Substring(start, end - start);
@@ -231,8 +262,14 @@ namespace MoodSwings.Networking
             // empty value (PHP serializes it as "deleted").
             if (string.IsNullOrEmpty(value) || value == "deleted")
             {
+                Diagnostic?.Invoke($"The server cleared the session cookie on {path}");
                 ClearSession();
                 return;
+            }
+
+            if (path == "/login")
+            {
+                Diagnostic?.Invoke($"Login set a session cookie ({value.Length} characters)");
             }
 
             _sessionToken = value;
