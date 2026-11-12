@@ -123,6 +123,47 @@ namespace MoodSwings.Tests
         }
 
         [Test]
+        public void ALate401_ForAnOlderSession_DoesNotSignOutTheNewLogin()
+        {
+            _store.Save("old");
+            var transport = new HeldTransport();
+            var api = new ApiClient(new ApiConfig("https://example.test"), transport, _store);
+            var expired = false;
+            api.SessionExpired += () => expired = true;
+
+            var slow = api.GetAsync<ApiEnvelope>("/friends");          // goes out with "old"
+
+            // Meanwhile the user logs in again; only then does the old request's 401 arrive.
+            var login = api.LoginAsync("alice", "pw");
+            transport.Release(1, 200, LoginOk, "session_token=fresh; path=/");
+            login.GetAwaiter().GetResult();
+            transport.Release(0, 401, "{\"status\":\"error\",\"message\":\"Not authenticated\"}", null);
+
+            slow.GetAwaiter().GetResult();
+
+            Assert.IsFalse(expired);
+            Assert.IsTrue(api.HasSession);
+            Assert.AreEqual("fresh", _store.Load());
+        }
+
+        [Test]
+        public void ALateReply_ForAnOlderSession_DoesNotPutItsCookieBackOverTheNewLogin()
+        {
+            _store.Save("old");
+            var transport = new HeldTransport();
+            var api = new ApiClient(new ApiConfig("https://example.test"), transport, _store);
+
+            var slow = api.GetMeAsync();                                // goes out with "old"
+            var login = api.LoginAsync("alice", "pw");
+            transport.Release(1, 200, LoginOk, "session_token=fresh; path=/");
+            login.GetAwaiter().GetResult();
+            transport.Release(0, 200, LoginOk, "session_token=old; path=/");
+            slow.GetAwaiter().GetResult();
+
+            Assert.AreEqual("fresh", _store.Load());
+        }
+
+        [Test]
         public void Maintenance_IsReportedAndRaised()
         {
             string raisedWith = null;
@@ -262,6 +303,31 @@ namespace MoodSwings.Tests
             Assert.AreEqual("sent", result.Value.Message);
             Assert.AreEqual("https://example.test/app/resend-verification", _transport.LastRequest.Url);
             StringAssert.Contains("\"email\":\"a@example.com\"", _transport.LastRequest.Body);
+        }
+    }
+
+    /// <summary>Holds every request until the test releases it by position, to reorder replies.</summary>
+    internal sealed class HeldTransport : IHttpTransport
+    {
+        private readonly System.Collections.Generic.List<System.Threading.Tasks.TaskCompletionSource<HttpResponse>> _pending =
+            new System.Collections.Generic.List<System.Threading.Tasks.TaskCompletionSource<HttpResponse>>();
+
+        public System.Threading.Tasks.Task<HttpResponse> SendAsync(HttpRequest request, System.Threading.CancellationToken cancellationToken)
+        {
+            var source = new System.Threading.Tasks.TaskCompletionSource<HttpResponse>();
+            _pending.Add(source);
+            return source.Task;
+        }
+
+        public void Release(int index, long status, string body, string setCookie)
+        {
+            var response = new HttpResponse { StatusCode = status, Body = body };
+            if (setCookie != null)
+            {
+                response.Headers["Set-Cookie"] = setCookie;
+            }
+
+            _pending[index].SetResult(response);
         }
     }
 }
