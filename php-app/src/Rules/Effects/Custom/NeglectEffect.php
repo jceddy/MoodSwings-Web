@@ -11,7 +11,7 @@ use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\PendingDecisionRequest;
 
 /**
- * Neglect: "While in play -- Before scoring, each opponent with no cards in their hand puts one of their highest value
+ * Neglect: "While in play -- Before scoring, each opponent with one or fewer cards in their hand puts one of their highest value
  * moods into the discard pile." Fires when the round is about to be scored (BeforeScoringEffect), so the discarded moods
  * don't count. An opponent with a single highest value mood loses it automatically; one tied for highest chooses which of
  * the tied moods goes. Which opponents qualify is fixed when the trigger fires.
@@ -67,12 +67,12 @@ final class NeglectEffect extends AbstractMoodEffect implements BeforeScoringEff
         return [];
     }
 
-    /** @return int[] opponents with no cards in hand and a mood in play */
+    /** @return int[] opponents with one or fewer cards in hand and a mood in play */
     private function qualifyingOpponents(BoardState $state, int $playerId): array
     {
         return array_values(array_filter(
             CustomEffectSupport::opponentIds($state, $playerId),
-            static fn (int $opponentId): bool => $state->hand($opponentId) === [] && $state->moodsOwnedBy($opponentId) !== [],
+            static fn (int $opponentId): bool => count($state->hand($opponentId)) <= 1 && $state->moodsOwnedBy($opponentId) !== [],
         ));
     }
 

@@ -11,9 +11,11 @@ use MoodSwings\Rules\PlayerChoices;
 
 /**
  * Reverie: "After playing this mood -- You may put a card from the discard pile on the bottom of the deck. If you
- * do, draw a card. While in play -- Each time you play another mood, you may do this." The after-playing half is
- * Reminiscence's ('discard_card_id'); the while-in-play half reacts to the owner playing another mood
- * ('reverie_discard_card_id', riding with that play), and skips a card that has already left the discard pile.
+ * do, draw a card and you may play an additional mood this turn. While in play -- Each time you play another mood,
+ * you may put a card from the discard pile on the bottom of the deck. If you do, draw a card." The after-playing half
+ * is Reminiscence's ('discard_card_id') plus an extra play, granted only when a card was actually put on the bottom;
+ * the while-in-play half reacts to the owner playing another mood ('reverie_discard_card_id', riding with that play),
+ * draws only, and skips a card that has already left the discard pile.
  */
 final class ReverieEffect extends AbstractMoodEffect
 {
@@ -30,6 +32,7 @@ final class ReverieEffect extends AbstractMoodEffect
         }
 
         $this->cycle($state, $playerId, $discardCardId);
+        $state->grantExtraPlay(sourceCardId: $cardId);
     }
 
     public function reactToAnotherPlay(BoardState $state, int $reactorCardId, int $playedCardId, int $playerId, PlayerChoices $choices): void

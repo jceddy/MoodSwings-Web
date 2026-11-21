@@ -486,7 +486,7 @@ final class DefaultEffectRegistry
 
         $registry->register('confidence', new ConditionalExtraPlayEffect(restriction: ['type' => 'base_value_in', 'values' => [4, 5, 6]]));
         $registry->register('modesty', new ConditionalExtraPlayEffect(restriction: ['type' => 'base_value_in', 'values' => [0, 1, 2, 3]]));
-        $registry->register('thrift', new ConditionalExtraPlayEffect(restriction: ['type' => 'base_value_in', 'values' => [0, 1, 2, 3], 'source' => 'discard']));
+        $registry->register('thrift', new ConditionalExtraPlayEffect(restriction: ['type' => 'base_value_in', 'values' => [0, 1, 2], 'source' => 'discard']));
         $registry->register('desperation', new ConditionalExtraPlayEffect('own_hand_fewer_than_each_other'));
         $registry->register('camaraderie', new ConditionalExtraPlayEffect('color_pair', ['green', 'blue']));
         $registry->register('fervor', new ConditionalExtraPlayEffect('color_pair', ['black', 'green'], onUseEffectState: [
