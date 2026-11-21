@@ -9300,6 +9300,9 @@ in custom sets is.
   opponent discards a card from their hand") was always declined at the turn-start prompt. `BotPlayerService::martyrdomSacrificeMoodId()` only uses it when the
   sacrifice is free: a mood worth nothing right now (a spent Fear, a suppressed mood) that isn't a lasting-value card (Validation, Duplicity, Exhilaration, Hope,
   Grace, ...) and whose removal leaves `roundLead()` no lower, with at least one opponent holding a card. Rumination and Wastefulness are still declined.
+- **Bots lead with Reverie when it grants the extra play.** Reverie's after-playing loot now also grants an additional mood (migration 0571), so
+  `sortPriorityValue()` gives it the early-priority bonus -- and `EXTRA_PLAY_GRANTING_EFFECT_KEYS` lists it -- whenever there is a pile card for it to put away
+  (`discardPileLootCardId()`); with an empty pile it ranks on its printed value as before.
 - **Bots use Brooding's loot.** Brooding ("at the start of each of your turns, you may put a card from the discard pile into your hand; if you do, discard a
   card from your hand") was always declined at the turn-start prompt. `BotPlayerService::broodingTakeCardId()` takes the best card in the pile when it is strictly
   better than the card it would then discard (`broodingDiscardCardId()`: the lowest `draftPriorityRank()` in hand, never a Validation/Duplicity/Exhilaration/Hope/Grace),
@@ -9467,7 +9470,7 @@ in custom sets is.
   plays from the discard pile next turn -- they score points, or their effect has a mood/player/discard-pile target -- and
   keeps the rest.
 - **"Before scoring" (`BeforeScoringEffect`).** Neglect (reworked in migration 0523: worth 2, "before scoring, each opponent
-  with no cards in hand puts one of their *highest value* moods into the discard pile") is the one card that fires between the
+  with no cards in hand puts one of their *highest value* moods into the discard pile"; migration 0571 widened it to "one or fewer cards in their hand") is the one card that fires between the
   round's last play/pass and the scores being computed. `Rules/BeforeScoringEffect` mirrors `TurnStartEffect`
   (`beforeScoringRequests()` / `applyBeforeScoring()`), and `GameService::advanceScoringPhases()` now runs, in order,
   `runBeforeScoringTriggers()`, Enthusiasm/Passion's scoring decisions, then `finishScoringAndAdvance()`; it is re-entered after
@@ -9592,7 +9595,8 @@ in custom sets is.
     `reverie_discard_card_id` (discard-pile card to the bottom of the deck, then draw). `GameService::reactionFields()`
     adds the field to a hand card's choices only while the reactor is in play (Dominance only for a red card), and a
     choice whose card is already gone (a second Reflection sharing it) is skipped. Reverie's own after-playing half
-    is Reminiscence's. Bots never take these optional reactions.
+    is Reminiscence's, and (migration 0571) also grants an additional mood this turn when a card was actually put on the bottom;
+    the while-in-play reaction only loots and draws. Bots never take the Dominance and Reflection reactions.
 - **Draw and cycle (batch 11).** Rapport, Longing, Premonition and Resignation are all Zeal/Yearning-shaped, so
   no new engine hook -- but two of them draw and then need a pick from the *new* hand, which the play-time choice
   can't express, so they use the existing follow-up decision machinery (`RequiresOpponentDecision` with the acting

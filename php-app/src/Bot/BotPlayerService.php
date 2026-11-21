@@ -1543,7 +1543,8 @@ final class BotPlayerService
     }
 
     /**
-     * Reminiscence / Remorse / Reverie ("you may put a card from the discard pile on the bottom of the deck; if you do, draw a card"), and Reverie's
+     * Reminiscence / Remorse / Reverie ("you may put a card from the discard pile on the bottom of the deck; if you do, draw a card" -- and, for
+     * Reverie's after-playing half, "you may play an additional mood this turn"), and Reverie's
      * "each time you play another mood, you may do this": a free card -- one comes out of the pile, one is drawn -- so the bot always does it when it can.
      * The card it puts away is the best in the pile (draftPriorityRank()): it is gone for good, which keeps an opponent's Nostalgia/Longing/Warmth from
      * recovering it. It holds back when the pile is empty, and when a mood in play depends on the pile's size (DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS, the
@@ -2913,7 +2914,11 @@ final class BotPlayerService
         $priority = $this->baseValue($state, $cardId);
         if ($effectKey === 'hope') {
             $priority += self::HOPE_PRIORITY_BONUS;
-        } elseif (in_array($effectKey, self::EARLY_PRIORITY_EFFECT_KEYS, true)) {
+        } elseif (in_array($effectKey, self::EARLY_PRIORITY_EFFECT_KEYS, true)
+            // Reverie's loot ("put a card from the pile on the bottom of the deck; if you do, draw a card and you may play an additional mood") is an extra
+            // play only when there is a pile card to put away -- the same card the bot would name (discardPileLootCardId()).
+            || ($effectKey === 'reverie' && $this->discardPileLootCardId($state, $cardId, $botGamePlayerId, []) !== null)
+        ) {
             $priority += self::EARLY_PRIORITY_BONUS;
         }
         if ($effectKey === 'pacifism') {
@@ -3124,7 +3129,7 @@ final class BotPlayerService
     private const EXTRA_PLAY_GRANTING_EFFECT_KEYS = [
         'charity', 'duplicity', 'idealism', 'validation', 'ambition', 'bravado', 'fear', 'nostalgia',
         'gluttony', 'insecurity', 'angst', 'harmony', 'grief', 'thrill', 'benevolence', 'eagerness',
-        'friendliness', 'kindness', 'pride', 'hope', 'grace', 'stubbornness', 'joy',
+        'friendliness', 'kindness', 'pride', 'hope', 'grace', 'stubbornness', 'joy', 'reverie',
     ];
 
     /**

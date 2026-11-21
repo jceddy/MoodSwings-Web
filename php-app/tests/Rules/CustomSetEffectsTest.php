@@ -276,6 +276,17 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame([$this->id('Apathy')], $state->discardPile());
     }
 
+    public function testThriftNoLongerReachesAThreeInThePile(): void
+    {
+        // Dignity is printed at 3 in its top right corner: out of Thrift's 0-2 range (it used to be 0-3).
+        $state = $this->state([1 => ['Thrift']], discardNames: ['Dignity']);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Thrift');
+
+        $this->expectException(IllegalPlayException::class);
+        $this->play($state, 1, 'Dignity');
+    }
+
     public function testDesperationNeedsFewerCardsThanEveryOtherPlayer(): void
     {
         $state = $this->state([1 => ['Desperation'], 2 => ['Apathy'], 3 => ['Creativity']]);
@@ -2405,6 +2416,17 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame([], $state->discardPile());
         self::assertSame($this->ids('Creativity'), $state->hand(1), 'drew a card');
         self::assertSame($this->ids('Complacency'), array_slice($state->deck(), -1));
+        self::assertSame(1, $state->playsRemaining(), 'putting a card on the bottom also grants an additional mood this turn');
+    }
+
+    public function testReverieGrantsNoExtraPlayWithoutPuttingACardOnTheBottom(): void
+    {
+        $state = $this->state([1 => ['Reverie']], deckNames: ['Creativity'], discardNames: ['Complacency']);
+        $state->startTurn(1);
+        $this->play($state, 1, 'Reverie'); // declines the optional loot
+
+        self::assertSame(0, $state->playsRemaining());
+        self::assertSame($this->ids('Complacency'), $state->discardPile());
     }
 
     public function testReverieReactionCyclesADiscardCardWhenAnotherMoodIsPlayed(): void
@@ -2417,6 +2439,7 @@ final class CustomSetEffectsTest extends TestCase
         self::assertSame([], $state->discardPile());
         self::assertSame($this->ids('Complacency'), array_slice($state->deck(), -1), 'on the bottom of the deck');
         self::assertSame($this->ids('Creativity'), $state->hand(1), 'and a card drawn');
+        self::assertSame(0, $state->playsRemaining(), 'the while-in-play half only draws: no extra play');
     }
 
     // ---- Schadenfreude ----

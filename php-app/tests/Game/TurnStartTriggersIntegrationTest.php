@@ -380,12 +380,24 @@ final class TurnStartTriggersIntegrationTest extends TestCase
         $this->games->respondToDecision($this->gameId, $this->p1, ['discard_mood_id_' . $this->p1 => $low]);
     }
 
-    public function testNeglectIgnoresAnOpponentWhoStillHasCardsInHand(): void
+    public function testNeglectAlsoHitsAnOpponentWithASingleCardInHand(): void
+    {
+        $this->card('Neglect', 'in_play', $this->p2);
+        $mood = $this->card('Apathy', 'in_play', $this->p1);
+        $this->card('Courage', 'hand', $this->p1); // player 1 holds one card: "one or fewer" still qualifies
+
+        $this->games->pass($this->gameId, $this->p1);
+        $this->games->pass($this->gameId, $this->p2);
+
+        self::assertFalse($this->state()->isInPlay($mood));
+    }
+
+    public function testNeglectIgnoresAnOpponentWhoStillHasTwoCardsInHand(): void
     {
         $this->card('Neglect', 'in_play', $this->p2);
         $mood = $this->card('Apathy', 'in_play', $this->p1);
         $this->card('Courage', 'hand', $this->p1);
-        $this->card('Complacency', 'hand', $this->p2);
+        $this->card('Complacency', 'hand', $this->p1);
 
         $this->games->pass($this->gameId, $this->p1);
         $this->games->pass($this->gameId, $this->p2);

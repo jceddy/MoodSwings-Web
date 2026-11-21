@@ -6608,4 +6608,17 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([3], $state->discardPile());
         self::assertSame([5, 7], $state->deck(1));
     }
+
+    public function testReverieLeadsAsAnExtraPlayOnlyWhenThereIsAPileCardToPutAway(): void
+    {
+        // Reverie (2) would rank below Apathy (4) on printed value alone; with a pile card to loot it grants an extra play, so it goes first.
+        $state = $this->lootState([190, 55], [7]);
+        $action = $this->bot->chooseAction($state, [190, 55], 1);
+        self::assertSame(190, $action['card_id']);
+
+        // With an empty pile there is no extra play to get, and Apathy goes first as before.
+        $state = $this->lootState([190, 55], []);
+        $action = $this->bot->chooseAction($state, [190, 55], 1);
+        self::assertSame(55, $action['card_id']);
+    }
 }
